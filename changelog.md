@@ -1,5 +1,3 @@
----
-
 # v1.3 changes:
 - Added: Economy Update:
     - Earn the currency, Nerds, through hours spent studying (similar formula to XP gained) and as a bonus for level-ups and reaching higher mastery tiers in different subjects/skills. The currency is, for now, useless, but can be accumulated for planned future additions.
