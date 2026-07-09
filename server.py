@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StudyTracker v1.1.1 — Portable study tracking web app."""
+"""StudyTracker v1.2 — Portable study tracking web app."""
 import os, json, time, hashlib, shutil, math, uuid
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
