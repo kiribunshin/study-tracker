@@ -1,3 +1,13 @@
+---
+
+# v1.3 changes:
+- Added: Economy Update:
+    - Earn the currency, Nerds, through hours spent studying (similar formula to XP gained) and as a bonus for level-ups and reaching higher mastery tiers in different subjects/skills. The currency is, for now, useless, but can be accumulated for planned future additions.
+    - The difficulty of the study/work session has a positive correlation with Nerds earned: up to a 50% bonus in Nerds earned for the most difficult of work sessions!
+-  The timetable now displays break segments as well as work segments, this is meant to better visually communicate the real time spent working for any work session. All pre-saved study entries prior to this update will import as the classic single block in the timetable.
+
+---
+
 # v1.2 changes:
 - Added the control panel in code for easier debugging and feature optimization.
 - Added batch command slogan.
