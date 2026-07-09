@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>StudyTracker — Study Tracker v1.2</title>
+<title>StudyTracker — Study Tracker v1.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
@@ -11,8 +11,9 @@
 <body>
 <!-- Topbar -->
 <div class="topbar">
-  <div class="logo" onclick="navigate('dashboard')">StudyTracker<span class="logo-sub"> v1.2</span></div>
+  <div class="logo" onclick="navigate('dashboard')">StudyTracker<span class="logo-sub"> v1.3</span></div>
   <div id="topLevelBar" class="top-level-bar hidden" onclick="navigate('dashboard')" title="Your progression"></div>
+  <div id="nerdsBadge" class="nerds-badge hidden" onclick="navigate('dashboard')" title="Nerds — earned by studying, leveling up, and mastering subjects/skills"></div>
   <div id="miniTimerBadge" class="mini-timer-badge hidden" onclick="navigate('dashboard')" title="Go to your running timer"></div>
   <div class="nav-btns">
     <button class="nav-btn active" data-page="dashboard" onclick="navigate('dashboard')">Dashboard</button>

@@ -1,4 +1,4 @@
-/* StudyTracker v1.2 — Frontend */
+/* StudyTracker v1.3 — Frontend */
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -8,6 +8,7 @@ let gamification = null;   // cached /gamification response
 let gamificationError = null;
 let lastKnownLevel = null; // used to detect level-ups after XP-earning actions
 let lastKnownXp = null;
+let lastKnownNerds = null;
 let pendingSettingsScroll = null;
 let subjectListYearFilter = 'all';
 
@@ -180,6 +181,7 @@ async function loadGamification() {
     gamificationError = e?.message || 'Unable to load progression data';
   }
   updateTopLevelBar();
+  updateNerdsBadge();
   return checkIn;
 }
 
@@ -216,6 +218,20 @@ function updateTopLevelBar() {
     el('span', { text: streak }),
     el('span', { class: 'top-level-bar-next', text: nextTheme ? `Next: ${nextTheme.label} (Lv ${nextTheme.level}, ${remainingXp} XP away)` : 'All themes unlocked' })
   ]));
+}
+
+function updateNerdsBadge() {
+  const badge = $('#nerdsBadge');
+  if (!badge) return;
+  if (!gamification) {
+    badge.classList.add('hidden');
+    badge.innerHTML = '';
+    return;
+  }
+  badge.classList.remove('hidden');
+  badge.innerHTML = '';
+  badge.appendChild(el('span', { class: 'nerds-badge-icon', text: '🪙' }));
+  badge.appendChild(el('span', { class: 'nerds-badge-amount', text: Math.round(gamification.nerds || 0).toLocaleString() }));
 }
 
 function showDailyCheckInPopup(checkIn, g) {
@@ -265,10 +281,18 @@ async function maybeShowLevelUp(opts = {}) {
   if (!currentProfile) return;
   const previous = lastKnownLevel;
   const previousXp = lastKnownXp;
+  const previousNerds = lastKnownNerds;
   await loadGamification();
   if (!gamification) return;
   if (!opts.skipXpToast && previousXp !== null && gamification.xp > previousXp) {
     showXpToast(gamification.xp - previousXp, gamification.xp, gamification.level);
+  }
+  if (previousNerds !== null && gamification.nerds > previousNerds) {
+    const nerdsBadge = $('#nerdsBadge');
+    if (nerdsBadge) {
+      nerdsBadge.classList.add('nerds-gain-pulse');
+      setTimeout(() => nerdsBadge.classList.remove('nerds-gain-pulse'), UI_LEVELUP_BAR_PULSE_MS);
+    }
   }
   if (previous !== null && gamification.level > previous) {
     showLevelUpCelebration(gamification.level, previous);
@@ -280,6 +304,7 @@ async function maybeShowLevelUp(opts = {}) {
   }
   lastKnownLevel = gamification.level;
   lastKnownXp = gamification.xp;
+  lastKnownNerds = gamification.nerds;
 }
 
 function showXpToast(delta, totalXp, level) {
@@ -341,21 +366,23 @@ function showUndoToast(message) {
 }
 
 // Shown right when a timer/pomodoro session is saved, using the exact
-// xp_earned the backend computed for that specific record (rather than
-// the generic before/after gamification diff, which can also include
-// unrelated badge/mastery tier-up bonuses). Also answers "how much XP
-// per minute" directly, since the rate depends on difficulty.
-function showSessionXpToast(xpEarned, minutes, difficulty) {
+// xp_earned/nerds_earned the backend computed for that specific record
+// (rather than the generic before/after gamification diff, which can
+// also include unrelated badge/mastery tier-up bonuses). Also answers
+// "how much XP per minute" directly, since the rate depends on
+// difficulty.
+function showSessionXpToast(xpEarned, minutes, difficulty, nerdsEarned) {
   let container = $('#xpToastContainer');
   if (!container) {
     container = el('div', { id: 'xpToastContainer', class: 'xp-toast-container' });
     document.body.appendChild(container);
   }
   const rate = minutes > 0 ? (xpEarned / minutes) : 0;
+  const nerdsLine = nerdsEarned > 0 ? ` · +${nerdsEarned} 🪙` : '';
   const toast = el('div', { class: 'xp-toast' }, [
     el('div', { class: 'xp-toast-icon', text: '🎉' }),
     el('div', { class: 'xp-toast-body' }, [
-      el('div', { class: 'xp-toast-title', text: `Congrats! +${xpEarned} XP earned` }),
+      el('div', { class: 'xp-toast-title', text: `Congrats! +${xpEarned} XP earned${nerdsLine}` }),
       el('div', { class: 'xp-toast-subtitle', text: `${minutes} min at difficulty ${difficulty}/10 ≈ ${fmt(rate, 2)} XP/min` })
     ])
   ]);
@@ -604,13 +631,16 @@ async function switchProfile(name) {
   gamification = null;
   gamificationError = null;
   lastKnownLevel = null;
+  lastKnownNerds = null;
   updateTopLevelBar();
+  updateNerdsBadge();
   await loadConfig();
   try { await api(`/api/${currentProfile}/attendance/autofill`, { method: 'POST' }); } catch (e) { /* non-fatal */ }
   await loadData();
   await loadGamification();
   lastKnownLevel = gamification?.level ?? null;
   lastKnownXp = gamification?.xp ?? null;
+  lastKnownNerds = gamification?.nerds ?? null;
   render();
 }
 
@@ -789,8 +819,38 @@ const TS = {
   activeTimerId: null,
   pomo: null,                 // { config, sequence, idx, workMinutesDone, phaseEndsAt, currentPhaseMinutes }
   intervalId: null,
-  miniIntervalId: null        // ticks the topbar mini-badge independent of the widget's own mount lifecycle
+  miniIntervalId: null,       // ticks the topbar mini-badge independent of the widget's own mount lifecycle
+  // Wall-clock study/break segments for the CURRENT session, used to
+  // draw the Timetable as multiple linked blocks instead of one solid
+  // rectangle. Free timer: a 'study' segment while running, a 'break'
+  // segment while paused. Pomodoro: 'study' during work phases, 'break'
+  // during short/long breaks. Each entry is { type, start: Date, end:
+  // Date|null } — end is null while that segment is still open.
+  segments: []
 };
+
+// ── Session segment tracking (study/break blocks for the Timetable) ──
+function openSegment(type) {
+  TS.segments.push({ type, start: new Date(), end: null });
+}
+function closeOpenSegment() {
+  const open = TS.segments[TS.segments.length - 1];
+  if (open && !open.end) open.end = new Date();
+}
+function serializeSegments() {
+  // Convert to the shape the backend stores: HH:MM local wall-clock
+  // start/end, dropping any sub-minute noise (e.g. an instant
+  // pause/resume misclick) so the Timetable doesn't get cluttered with
+  // slivers too thin to be meaningful.
+  return TS.segments
+    .filter(s => s.end)
+    .map(s => ({
+      type: s.type,
+      start: `${String(s.start.getHours()).padStart(2, '0')}:${String(s.start.getMinutes()).padStart(2, '0')}`,
+      end: `${String(s.end.getHours()).padStart(2, '0')}:${String(s.end.getMinutes()).padStart(2, '0')}`
+    }))
+    .filter(s => s.start !== s.end);
+}
 
 // ── Mini timer badge (topbar) ──
 // Keeps a running/paused session visible in the topbar whenever the
@@ -911,6 +971,8 @@ function renderTimerWidget() {
     TS.accumulatedMs = 0;
     TS.segmentStart = Date.now();
     TS.running = true;
+    TS.segments = [];
+    openSegment('study');
     startBtn.classList.add('hidden');
     pauseBtn.classList.remove('hidden');
     stopBtn.classList.remove('hidden');
@@ -927,6 +989,8 @@ function renderTimerWidget() {
     TS.accumulatedMs += Date.now() - TS.segmentStart;
     TS.running = false;
     TS.segmentStart = null;
+    closeOpenSegment();
+    openSegment('break');
     clearInterval(TS.intervalId);
     TS.intervalId = null;
     pauseBtn.classList.add('hidden');
@@ -940,6 +1004,8 @@ function renderTimerWidget() {
     if (TS.running) return;
     TS.segmentStart = Date.now();
     TS.running = true;
+    closeOpenSegment();
+    openSegment('study');
     resumeBtn.classList.add('hidden');
     pauseBtn.classList.remove('hidden');
     statusDiv.textContent = `Running... (${TS.timerPlanned}min planned)`;
@@ -960,6 +1026,11 @@ function renderTimerWidget() {
       statusDiv.innerHTML = `<span style="color:var(--red)">Session wasn't tracked on the server — nothing to save.</span>`;
       return;
     }
+    // Snapshot segments now, synchronously, before any await — TS.segments
+    // only ever changes on the next user-triggered start/pause/resume,
+    // which can't happen mid-await in single-threaded JS, but capturing
+    // it up front keeps the intent explicit either way.
+    const sessionSegments = serializeSegments();
     if (actualMin <= 0) {
       // Nothing was actually studied (e.g. every phase was skipped
       // near-instantly) — close out the timer without fabricating a
@@ -979,7 +1050,7 @@ function renderTimerWidget() {
       const payload = {
         planned_minutes: TS.timerPlanned, actual_minutes: actualMin,
         difficulty: rating.difficulty, self_study_status: rating.status,
-        note: rating.note, auto_record: true
+        note: rating.note, auto_record: true, segments: sessionSegments
       };
       try {
         const resp = await api(`/api/${currentProfile}/timer/${TS.activeTimerId}/stop`, { method: 'POST', body: JSON.stringify(payload) });
@@ -988,12 +1059,13 @@ function renderTimerWidget() {
         await maybeShowLevelUp({ skipXpToast: true });
         render();
         if (resp && resp.xp_earned > 0) {
-          showSessionXpToast(resp.xp_earned, actualMin, rating.difficulty);
+          showSessionXpToast(resp.xp_earned, actualMin, rating.difficulty, resp.nerds_earned || 0);
         }
       } catch (e) {
         statusDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(e.message)}</span>`;
       }
       TS.activeTimerId = null;
+      TS.segments = [];
       stopMiniTimerTicker();
       setTimeout(() => { statusDiv.textContent = ''; }, UI_STATUS_MESSAGE_CLEAR_MS);
     });
@@ -1003,6 +1075,7 @@ function renderTimerWidget() {
     clearInterval(TS.intervalId);
     TS.intervalId = null;
     const actualMin = Math.max(0, Math.round(elapsedMs() / 60000));
+    closeOpenSegment();
     TS.running = false;
     TS.segmentStart = null;
     TS.accumulatedMs = 0;
@@ -1074,6 +1147,7 @@ function renderTimerWidget() {
     } catch (e) { alert('Could not start: ' + e.message); return; }
 
     TS.pomo = { config, sequence: phaseSequence(config), idx: 0, workMinutesDone: 0 };
+    TS.segments = [];
     [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = true);
     pomoStartBtn.classList.add('hidden');
     pomoStopBtn.classList.remove('hidden');
@@ -1089,6 +1163,12 @@ function renderTimerWidget() {
       TS.pomo.phaseEndsAt = Date.now() + minutes * 60000;
       TS.pomo.currentPhaseMinutes = minutes;
       playChime(step.phase === 'work' ? 660 : 440);
+      // Real phase transition (not just a UI resync on remount) — close
+      // whatever segment was open and start a new one matching this
+      // phase, so the Timetable can later draw work/break as separate
+      // blocks that still belong to the same session.
+      closeOpenSegment();
+      openSegment(step.phase === 'work' ? 'study' : 'break');
     }
     const icon = step.phase === 'work' ? '🍅' : (step.phase === 'long' ? '🌴' : '☕');
     const label = step.phase === 'work' ? `Work Block ${step.block}/${TS.pomo.config.blocks}` : (step.phase === 'long' ? 'Long Break' : 'Short Break');
@@ -1136,6 +1216,7 @@ function renderTimerWidget() {
     pomoStopBtn.classList.add('hidden');
     pomoSkipBtn.classList.add('hidden');
     [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = false);
+    closeOpenSegment();
     const workMin = Math.max(0, Math.round(TS.pomo.workMinutesDone));
     TS.pomo = null;
     await saveSession(workMin);
@@ -1149,6 +1230,7 @@ function renderTimerWidget() {
       const doneMin = Math.round((TS.pomo.currentPhaseMinutes * 60 - Math.max(0, (TS.pomo.phaseEndsAt - Date.now()) / 1000)) / 60);
       TS.pomo.workMinutesDone += Math.max(0, doneMin);
     }
+    closeOpenSegment();
     const workMin = Math.max(0, Math.round(TS.pomo.workMinutesDone));
     display.textContent = '00:00:00';
     phaseLabel.textContent = '';
@@ -1282,6 +1364,27 @@ function minutesToTime(mins) {
   mins = Math.max(0, Math.min(24 * 60 - 1, mins));
   const h = Math.floor(mins / 60), m = Math.round(mins % 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Describes a self-study record's FULL session for a Timetable block's
+// tooltip — used for every block belonging to that session (study or
+// break segment alike), so hovering any one piece reads like hovering
+// the whole functional unit rather than just that slice of it.
+function sessionTooltip(r, label) {
+  const segments = (r.segments || []).filter(s => s.start && s.end);
+  label = label || 'Self-Study';
+  if (!segments.length) {
+    return `${label} — ${r.status} (${r.minutes}min)`;
+  }
+  const studyBlocks = segments.filter(s => s.type === 'study');
+  const breakBlocks = segments.filter(s => s.type === 'break');
+  const overallStart = segments.reduce((min, s) => s.start < min ? s.start : min, segments[0].start);
+  const overallEnd = segments.reduce((max, s) => s.end > max ? s.end : max, segments[0].end);
+  const breakMin = breakBlocks.reduce((sum, s) => sum + Math.max(0, timeToMinutes(s.end) - timeToMinutes(s.start)), 0);
+  const parts = [`${label} — ${r.status}`, `${overallStart}–${overallEnd}`, `${r.minutes}min studied`];
+  if (breakMin > 0) parts.push(`${breakMin}min break (${breakBlocks.length} block${breakBlocks.length === 1 ? '' : 's'})`);
+  if (studyBlocks.length > 1) parts.push(`${studyBlocks.length} study blocks`);
+  return parts.join(' · ');
 }
 
 async function renderTimetable(c) {
@@ -1465,25 +1568,54 @@ async function renderTimetable(c) {
     // logged session appear to begin right now and run into the future.
     // Anchoring it as the END and working backward by the session's
     // duration is the correct read in both cases.
+    //
+    // Timer/Pomodoro sessions additionally carry `segments` — the
+    // actual wall-clock study/break sub-blocks recorded while the
+    // timer ran (see TS.segments in the timer widget). When present,
+    // each segment becomes its own timed block (study blocks styled
+    // normally, break blocks styled distinctly in amber), all sharing
+    // a `groupKey` of the record's id so hovering any one of them can
+    // highlight the whole session as a single functional unit even
+    // though they're drawn as separate rectangles. Manual entries (no
+    // segments) fall back to the single-block behavior as before.
     (d.self_study || []).forEach(r => {
       if (r.date !== dateStr) return;
-      const dur = Math.max(15, r.minutes || 30);
-      let endMin = 12 * 60 + 30; // fallback if no usable timestamp
-      const timePart = (r.created || '').split('T')[1];
-      if (timePart) {
-        const [hh, mm] = timePart.split(':').map(n => parseInt(n) || 0);
-        endMin = hh * 60 + mm;
-      }
-      const startMin = Math.max(0, endMin - dur);
       const subj = subjById[r.subject_id];
       const skill = skillById[r.skill_id];
       const label = subj ? subj.name : (skill ? skill.name : 'Self-Study');
-      timed.push({
-        start: startMin, end: Math.max(startMin + 15, endMin),
-        label: `📖 ${label}`, sub: r.status,
-        cls: 'selfstudy', color: subj?.color || skill?.color || null,
-        kind: 'selfstudy', ref: r
-      });
+      const segments = (r.segments || []).filter(s => s.start && s.end && timeToMinutes(s.end) > timeToMinutes(s.start));
+
+      if (segments.length) {
+        segments.forEach((seg, i) => {
+          const start = timeToMinutes(seg.start);
+          const end = timeToMinutes(seg.end);
+          const isBreak = seg.type === 'break';
+          timed.push({
+            start, end: Math.max(start + 10, end),
+            label: isBreak ? '☕ Break' : `📖 ${label}`,
+            sub: isBreak ? '' : r.status,
+            cls: isBreak ? 'break' : 'selfstudy',
+            color: isBreak ? null : (subj?.color || skill?.color || null),
+            kind: isBreak ? 'break' : 'selfstudy',
+            ref: r, groupKey: r.id, segmentIndex: i, sessionLabel: label
+          });
+        });
+      } else {
+        const dur = Math.max(15, r.minutes || 30);
+        let endMin = 12 * 60 + 30; // fallback if no usable timestamp
+        const timePart = (r.created || '').split('T')[1];
+        if (timePart) {
+          const [hh, mm] = timePart.split(':').map(n => parseInt(n) || 0);
+          endMin = hh * 60 + mm;
+        }
+        const startMin = Math.max(0, endMin - dur);
+        timed.push({
+          start: startMin, end: Math.max(startMin + 15, endMin),
+          label: `📖 ${label}`, sub: r.status,
+          cls: 'selfstudy', color: subj?.color || skill?.color || null,
+          kind: 'selfstudy', ref: r, groupKey: r.id, sessionLabel: label
+        });
+      }
     });
 
     // One-time events — only treated as all-day when there's genuinely no
@@ -1584,19 +1716,37 @@ async function renderTimetable(c) {
         const widthPct = 100 / laneCount;
         const leftPct = lane * widthPct;
         const style = `top:${top}px;height:${height}px;left:calc(${leftPct}% + 1px);width:calc(${widthPct}% - 2px);right:auto;` + (bg ? `background:${bg}22;border-left-color:${bg}` : '');
+        // For a session split into multiple study/break blocks, the
+        // tooltip describes the WHOLE session (not just this one
+        // segment) — hovering any piece should read like hovering the
+        // single functional block it represents.
+        const tooltip = ev.groupKey ? sessionTooltip(ev.ref, ev.sessionLabel) : `${ev.label}${ev.sub ? ' — ' + ev.sub : ''} (${minutesToTime(ev.start)}–${minutesToTime(ev.end)})`;
         const block = el('div', {
           class: `cal-event cal-${ev.cls}`, style,
-          title: `${ev.label}${ev.sub ? ' — ' + ev.sub : ''} (${minutesToTime(ev.start)}–${minutesToTime(ev.end)})`,
+          title: tooltip,
           onclick: () => {
             if (ev.kind === 'exam') editExam(ev.ref);
             else if (ev.kind === 'oneoff') editEvent(ev.ref);
             else if (ev.kind === 'subject') showQuickAttendanceModal(ev.ref.sub, ev.ref.sch, ev.dateStr || localDStr);
-            else if (ev.kind === 'selfstudy') editSelfStudy(ev.ref);
+            else if (ev.kind === 'selfstudy' || ev.kind === 'break') editSelfStudy(ev.ref);
           }
         }, [
           el('div', { class: 'cal-event-title', text: ev.label }),
           height > 32 ? el('div', { class: 'cal-event-sub', text: `${minutesToTime(ev.start)}–${minutesToTime(ev.end)}${ev.sub ? ' · ' + ev.sub : ''}` }) : null
         ]);
+        // Sibling-block hover highlighting — a session split into
+        // several study/break rectangles should visually light up as
+        // ONE unit on hover, even though each piece is a separate DOM
+        // node. Grouped purely by groupKey (the self-study record id).
+        if (ev.groupKey) {
+          block.dataset.group = ev.groupKey;
+          block.addEventListener('mouseenter', () => {
+            calendarHost.querySelectorAll(`.cal-event[data-group="${ev.groupKey}"]`).forEach(sib => sib.classList.add('cal-event-group-hover'));
+          });
+          block.addEventListener('mouseleave', () => {
+            calendarHost.querySelectorAll(`.cal-event[data-group="${ev.groupKey}"]`).forEach(sib => sib.classList.remove('cal-event-group-hover'));
+          });
+        }
         col.appendChild(block);
       });
 
@@ -1851,7 +2001,7 @@ function showAddSelfStudyModal() {
           closeModal();
           await loadData(); await maybeShowLevelUp({ skipXpToast: true }); render();
           if (resp && resp.xp_earned > 0) {
-            showSessionXpToast(resp.xp_earned, payload.minutes, payload.difficulty);
+            showSessionXpToast(resp.xp_earned, payload.minutes, payload.difficulty, resp.nerds_earned || 0);
           }
         } catch (e) { alert(e.message); }
       }})
@@ -3185,9 +3335,11 @@ async function init() {
     await loadGamification({ showCheckIn: true });
     lastKnownLevel = gamification?.level ?? null;
     lastKnownXp = gamification?.xp ?? null;
+    lastKnownNerds = gamification?.nerds ?? null;
   }
   loadTheme();
   updateTopLevelBar();
+  updateNerdsBadge();
   render();
 }
 

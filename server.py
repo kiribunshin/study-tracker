@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StudyTracker v1.2 — Portable study tracking web app."""
+"""StudyTracker v1.3 — Portable study tracking web app."""
 import os, json, time, hashlib, shutil, math, uuid
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
@@ -159,6 +159,44 @@ REC_ATTENDANCE_RATE_WARNING_PCT = 70       # attendance rate below this % trigge
 REC_SPACED_REPETITION_BASE_INTERVAL_DAYS = 10  # interval = max(MIN, BASE - difficulty)
 REC_SPACED_REPETITION_MIN_INTERVAL_DAYS = 2
 REC_MAX_RECOMMENDATIONS_SHOWN = 15
+
+# ── Nerds Economy ──
+# Nerds is the spendable currency (garden/zoo/cosmetics — not yet built).
+# Kept deliberately grounded relative to XP: studying is, and must stay,
+# the best Nerds-per-hour activity in the game. Everything below is
+# priced/tuned against the anchor "1 hour of Done, difficulty-5 study ≈
+# 36 Nerds" — future passive-income sources (plants/animals) should be
+# capped well under that per hour, not compete with it.
+#
+# Self-study Nerds mirror the XP formula's shape exactly (same
+# minutes/difficulty/status structure) so the two currencies always move
+# together — a session that earns more XP also earns more Nerds, never
+# a mismatch.
+NERDS_PER_MINUTE_BASE = 0.6                 # at difficulty 5/10, Done: 0.6*1.25 = 0.75 Nerds/min = 45 Nerds/hour
+NERDS_DIFFICULTY_DIVISOR = 20.0             # same shape as SELF_STUDY_DIFFICULTY_DIVISOR — harder subjects pay a bit more
+NERDS_STATUS_MULT_DONE = 1.0
+NERDS_STATUS_MULT_PARTIAL = 0.5
+NERDS_STATUS_MULT_SKIPPED = 0.0
+
+# Level-up Nerds — a one-time bonus awarded for EACH level reached
+# (levels 2..current), same progressively-more-expensive shape as the
+# XP curve. compute_levelup_nerds(level) is CUMULATIVE across every
+# level-up from 2 up to `level` — e.g. reaching Lv20 nets ~160 Nerds
+# for that specific level-up, but ~1,700 Nerds total when you sum every
+# level-up bonus along the way from Lv1. That's intentionally a
+# meaningful chunk, but still well under what studying itself pays to
+# reach that level (~150h of study to reach Lv20 already earns ~6,750
+# Nerds at the base study rate) — level-ups are a bonus layered on top
+# of studying, never a replacement for it.
+NERDS_LEVELUP_BASE = 6
+NERDS_LEVELUP_EXPONENT = 1.08
+NERDS_LEVELUP_FLAT = 8
+
+# Mastery tier Nerds — awarded once per mastery tier reached, per
+# subject/skill (mirrors MASTERY_TIER_XP's shape/scale, just converted
+# to the Nerds side of the economy at roughly the same XP:Nerds ratio
+# as studying itself, ~45:36 ≈ 0.8).
+MASTERY_TIER_NERDS = [15, 40, 95, 200, 400, 720, 1280, 2400, 4160, 7200]
 
 # ── Misc / System ──
 TRASH_MAX_ENTRIES = 20                     # how many recent deletions the undo trash keeps
@@ -1040,7 +1078,8 @@ def add_self_study(name):
     d["self_study"].append(record)
     save_data(name, d)
     xp_earned = compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"])
-    return jsonify({"ok": True, "record": record, "xp_earned": xp_earned})
+    nerds_earned = compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"])
+    return jsonify({"ok": True, "record": record, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
 
 @app.route("/api/<name>/self_study/<rec_id>", methods=["PUT"])
 def update_self_study(name, rec_id):
@@ -1325,6 +1364,7 @@ def timer_stop(name, timer_id):
     data = request.get_json(force=True)
     d = load_data(name)
     xp_earned = 0
+    nerds_earned = 0
     for t in d["timers"]:
         if t["id"] == timer_id:
             t["status"] = "completed"
@@ -1343,13 +1383,21 @@ def timer_stop(name, timer_id):
                     "difficulty": data.get("difficulty", 5),
                     "status": data.get("self_study_status", "Done"),
                     "note": t.get("note", ""),
+                    # Study/break segments from the timer session (free timer
+                    # pause/resume cycles, or Pomodoro work/break phases) —
+                    # used by the Timetable to draw the session as multiple
+                    # visually-distinct but functionally-linked blocks
+                    # instead of one solid rectangle. Optional/empty for
+                    # manual self-study entries, which have no timer.
+                    "segments": data.get("segments", []),
                     "created": now_str()
                 }
                 d["self_study"].append(record)
                 xp_earned = compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"])
+                nerds_earned = compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"])
             break
     save_data(name, d)
-    return jsonify({"ok": True, "xp_earned": xp_earned})
+    return jsonify({"ok": True, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
 
 @app.route("/api/<name>/timer/<timer_id>", methods=["DELETE"])
 def delete_timer(name, timer_id):
@@ -1519,6 +1567,71 @@ def compute_total_xp(d, cfg=None):
     xp += quest_xp
     xp += compute_login_xp(d)
     return xp
+
+# ── Nerds (spendable currency) ──
+# Deliberately basic/derived-only for now, exactly like XP — no stored
+# "balance" yet since there's nothing to spend Nerds on (garden/zoo
+# shop is a future feature). When that ships, Nerds will need to become
+# a real persisted, spend-able balance (earned - spent), but the earn
+# side computed here won't need to change — only a spend ledger gets
+# added alongside it.
+def _nerds_status_mult(status):
+    if status == "Done":
+        return NERDS_STATUS_MULT_DONE
+    if status == "Partial":
+        return NERDS_STATUS_MULT_PARTIAL
+    return NERDS_STATUS_MULT_SKIPPED
+
+def compute_self_study_record_nerds(minutes, difficulty, status):
+    """Nerds for a single self-study record — same shape as
+    compute_self_study_record_xp, its own (smaller) rate. At difficulty
+    5/10 Done this is ~0.75 Nerds/min (45/hour); studying should always
+    out-earn passive sources on a per-hour basis."""
+    mult = _nerds_status_mult(status)
+    return round(minutes * NERDS_PER_MINUTE_BASE * (1 + difficulty / NERDS_DIFFICULTY_DIVISOR) * mult, 1)
+
+def nerds_for_level(level):
+    """One-time Nerds bonus for reaching `level` (called for every level
+    from 2 up to the current level, cumulatively — see
+    compute_levelup_nerds). Same progressively-larger-but-uncapped
+    shape as xp_for_level, tuned much smaller since this rides on top
+    of the Nerds already earned by studying your way there."""
+    return int(NERDS_LEVELUP_BASE * (level ** NERDS_LEVELUP_EXPONENT)) + NERDS_LEVELUP_FLAT
+
+def compute_levelup_nerds(level):
+    """Cumulative Nerds bonus for every level reached from 2..level."""
+    if level < 2:
+        return 0
+    return sum(nerds_for_level(lv) for lv in range(2, level + 1))
+
+def compute_mastery_nerds(mastery_list):
+    """Nerds from mastery tiers reached, using the already-computed
+    mastery list (see compute_mastery) so the tier math itself isn't
+    duplicated — just converted to the Nerds side of the economy."""
+    total = 0
+    for m in mastery_list:
+        tier_idx = m.get("tier_index", -1)
+        if tier_idx is not None and tier_idx >= 0:
+            total += sum(MASTERY_TIER_NERDS[:tier_idx + 1])
+    return total
+
+def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
+    """Total Nerds earned to date, from: self-study sessions, one-time
+    level-up bonuses, and mastery-tier bonuses. Badges/quests/logins
+    intentionally do NOT pay Nerds (yet) — keeping the Nerds side of
+    the economy narrower than XP's is what keeps studying clearly the
+    best way to earn Nerds specifically, not just XP."""
+    nerds = 0.0
+    for r in d.get("self_study", []):
+        nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done"))
+    if level is not None:
+        nerds += compute_levelup_nerds(level)
+    if mastery_list is not None:
+        nerds += compute_mastery_nerds(mastery_list)
+    elif cfg is not None:
+        mastery_list, _ = compute_mastery(cfg, d)
+        nerds += compute_mastery_nerds(mastery_list)
+    return round(nerds, 1)
 
 def compute_streak(d):
     done_dates = sorted(set(
@@ -1820,8 +1933,10 @@ def gamification_status(name):
     badges, _ = compute_badge_progress(d)
     mastery, _ = compute_mastery(cfg, d)
     quests_this_week, _ = compute_quest_progress(d)
+    total_nerds = compute_total_nerds(d, level=level, mastery_list=mastery)
     return jsonify({
         "xp": round(total_xp, 1),
+        "nerds": total_nerds,
         "level": level,
         "xp_into_level": round(xp_into, 1),
         "xp_for_next": xp_needed,
@@ -2555,5 +2670,5 @@ def styles_css():
     return send_file(Path(__file__).parent / "styles.css")
 
 if __name__ == "__main__":
-    print("StudyTracker v1.1.1 — http://localhost:8080")
+    print("StudyTracker v1.3 — http://localhost:8080")
     app.run(host="127.0.0.1", port=8080, debug=False)

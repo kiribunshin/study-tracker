@@ -1,4 +1,4 @@
-/* StudyTracker v1.2 — Themes
+/* StudyTracker v1.3 — Themes
    Overhauled palette system: every theme now defines a fuller set of
    tokens (soft accent tints, gradients, elevated shadows) so components
    can use real depth and color instead of flat single-tone blocks. */
@@ -534,6 +534,26 @@ tr:hover td { background: var(--accent-soft); }
 .cal-event.cal-workshop { border-left-color: #7c3aed; background: rgba(124,58,237,.14); }
 .cal-event.cal-skill { border-left-color: var(--gold); background: rgba(249,168,37,.14); }
 .cal-event.cal-selfstudy { border-left-color: var(--green); background: rgba(57,255,143,.12); }
+.cal-event.cal-break {
+  border-left-color: var(--amber);
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--amber) 16%, transparent),
+    color-mix(in srgb, var(--amber) 16%, transparent) 6px,
+    color-mix(in srgb, var(--amber) 8%, transparent) 6px,
+    color-mix(in srgb, var(--amber) 8%, transparent) 12px
+  );
+}
+/* Study/break blocks that belong to the same timer session are drawn
+   as separate rectangles but are functionally one unit — hovering any
+   one of them (see the mouseenter/mouseleave wiring in renderCalendar)
+   highlights every sibling block sharing the same groupKey, so the
+   whole session visibly lights up together. */
+.cal-event.cal-event-group-hover {
+  filter: brightness(1.18);
+  box-shadow: var(--shadow), 0 0 0 1px var(--accent), var(--glow);
+  z-index: 5;
+}
 
 /* Recommendation */
 .recommendation {
@@ -579,6 +599,24 @@ tr:hover td { background: var(--accent-soft); }
   0%, 100% { box-shadow: var(--shadow-sm), var(--glow); }
   50% { box-shadow: var(--shadow), 0 0 18px var(--accent-soft-2); }
 }
+.nerds-badge {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 20px;
+  background: var(--bg3); border: 1px solid var(--gold);
+  cursor: pointer; box-shadow: var(--shadow-sm);
+  font-family: 'Share Tech Mono', monospace; font-size: var(--font-s);
+  transition: transform var(--trans-fast), box-shadow var(--trans-fast);
+  white-space: nowrap;
+}
+.nerds-badge:hover { transform: translateY(-1px); box-shadow: var(--shadow), 0 0 12px color-mix(in srgb, var(--gold) 35%, transparent); }
+.nerds-badge-icon { font-size: 1rem; line-height: 1; }
+.nerds-badge-amount { font-weight: 800; color: var(--gold); }
+.nerds-badge.nerds-gain-pulse { animation: nerdsGainPulse .7s ease-in-out 0s 2; }
+@keyframes nerdsGainPulse {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1px) scale(1.06); }
+}
+
 .xp-card { background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft-2)); }
 .xp-progress-track { width: 100%; height: 10px; border-radius: 6px; background: var(--bg4); overflow: hidden; }
 .xp-progress-fill { height: 100%; background: var(--gradient); border-radius: 6px; transition: width .5s ease; }
