@@ -1,4 +1,4 @@
-/* StudyTracker v1 — Frontend */
+/* StudyTracker v1.1.1 — Frontend */
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -10,6 +10,24 @@ let lastKnownLevel = null; // used to detect level-ups after XP-earning actions
 let lastKnownXp = null;
 let pendingSettingsScroll = null;
 let subjectListYearFilter = 'all';
+
+// ═══════════════════════════════════════════
+// ── CONTROL PANEL (frontend) ──
+// UI-only timing/behavior constants — the gameplay/economy numbers
+// (XP rates, badge thresholds, etc.) live server-side in server.py's
+// own Control Panel, since the server is the source of truth for
+// those. This block is just presentation timing: how long toasts
+// stay up, how long celebratory overlays linger, etc.
+// ═══════════════════════════════════════════
+const UI_XP_TOAST_DISPLAY_MS = 2600;
+const UI_UNDO_TOAST_DISPLAY_MS = 8000;
+const UI_SESSION_XP_TOAST_DISPLAY_MS = 4200;
+const UI_TOAST_FADE_OUT_MS = 220;          // matches the .xp-toast CSS transition duration
+const UI_LEVELUP_OVERLAY_AUTO_DISMISS_MS = 6000;
+const UI_LEVELUP_BAR_PULSE_MS = 1800;      // how long #topLevelBar keeps its level-up-pulse class
+const UI_STATUS_MESSAGE_CLEAR_MS = 4000;   // how long a timer status line ("Saved: 30min") stays before clearing
+const UI_MINI_TIMER_TICK_MS = 1000;
+const UI_CHART_CACHE_BUST = true;          // append ?t=Date.now() to chart <img> src so Stats always shows fresh renders
 
 // ── Helpers ──
 function $(sel) { return document.querySelector(sel); }
@@ -91,8 +109,6 @@ function setTheme(theme, force) {
   }
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('st_theme', theme);
-  const sel = $('#themeSelect');
-  if (sel) sel.value = theme;
 }
 function loadTheme() {
   const saved = localStorage.getItem('st_theme') || 'dark';
@@ -148,29 +164,6 @@ function showThemePreviewBanner(themeId) {
   banner.appendChild(el('button', { class: 'btn btn-sm btn-outline', text: 'Exit Preview', onclick: exitThemePreview }));
 }
 
-function renderThemeOptions() {
-  const sel = $('#themeSelect');
-  if (!sel) return;
-  const current = document.documentElement.getAttribute('data-theme') || 'dark';
-  const catalog = gamification?.theme_catalog || [
-    { id: 'sakura', label: 'Sakura', level: 1 }, { id: 'light', label: 'Light', level: 1 },
-    { id: 'dark', label: 'Dark', level: 1 }, { id: 'breeze', label: 'Breeze', level: 5 },
-    { id: 'midnight', label: 'Midnight', level: 10 }, { id: 'forest', label: 'Forest', level: 15 },
-    { id: 'sunset', label: 'Sunset', level: 20 }
-  ];
-  const unlocked = gamification?.unlocked_themes || catalog.filter(t => t.level <= 1).map(t => t.id);
-  sel.innerHTML = '';
-  catalog.forEach(t => {
-    const isUnlocked = unlocked.includes(t.id);
-    sel.appendChild(el('option', {
-      value: t.id,
-      disabled: !isUnlocked,
-      text: isUnlocked ? t.label : `🔒 ${t.label} (Lv ${t.level})`
-    }));
-  });
-  sel.value = current;
-}
-
 // ── Gamification (XP / Levels / Streaks) ──
 async function loadGamification() {
   if (!currentProfile) { gamification = null; gamificationError = null; return null; }
@@ -186,9 +179,7 @@ async function loadGamification() {
     gamification = null;
     gamificationError = e?.message || 'Unable to load progression data';
   }
-  renderThemeOptions();
   updateTopLevelBar();
-  updateXpBadge();
   return checkIn;
 }
 
@@ -264,22 +255,6 @@ function showDailyCheckInPopup(checkIn, g) {
   showModal(content);
 }
 
-function updateXpBadge() {
-  const badge = $('#xpBadge');
-  if (!badge) return;
-  if (!gamification) { badge.classList.add('hidden'); badge.innerHTML = ''; return; }
-  badge.classList.remove('hidden');
-  badge.innerHTML = '';
-  badge.appendChild(el('span', { class: 'xp-badge-level', text: `Lv ${gamification.level}` }));
-  const bar = el('div', { class: 'xp-badge-bar' }, [
-    el('div', { class: 'xp-badge-bar-fill', style: `width:${gamification.progress_pct}%` })
-  ]);
-  badge.appendChild(bar);
-  if (gamification.streak_current > 0) {
-    badge.appendChild(el('span', { class: 'xp-badge-streak', text: `🔥${gamification.streak_current}` }));
-  }
-}
-
 // Call this after any action that can earn XP (self-study logged, timer
 // session saved, attendance marked, exam completed). It
 // re-fetches gamification, compares against the last level we knew
@@ -300,7 +275,7 @@ async function maybeShowLevelUp(opts = {}) {
     const bar = $('#topLevelBar');
     if (bar) {
       bar.classList.add('level-up-pulse');
-      setTimeout(() => bar.classList.remove('level-up-pulse'), 1800);
+      setTimeout(() => bar.classList.remove('level-up-pulse'), UI_LEVELUP_BAR_PULSE_MS);
     }
   }
   lastKnownLevel = gamification.level;
@@ -324,8 +299,8 @@ function showXpToast(delta, totalXp, level) {
   requestAnimationFrame(() => toast.classList.add('show'));
   setTimeout(() => {
     toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 220);
-  }, 2600);
+    setTimeout(() => toast.remove(), UI_TOAST_FADE_OUT_MS);
+  }, UI_XP_TOAST_DISPLAY_MS);
 }
 
 // Shown after deleting a self-study/attendance/exam record. Backed by
@@ -361,8 +336,8 @@ function showUndoToast(message) {
   requestAnimationFrame(() => toast.classList.add('show'));
   setTimeout(() => {
     toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 220);
-  }, 8000);
+    setTimeout(() => toast.remove(), UI_TOAST_FADE_OUT_MS);
+  }, UI_UNDO_TOAST_DISPLAY_MS);
 }
 
 // Shown right when a timer/pomodoro session is saved, using the exact
@@ -388,8 +363,8 @@ function showSessionXpToast(xpEarned, minutes, difficulty) {
   requestAnimationFrame(() => toast.classList.add('show'));
   setTimeout(() => {
     toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 220);
-  }, 4200);
+    setTimeout(() => toast.remove(), UI_TOAST_FADE_OUT_MS);
+  }, UI_SESSION_XP_TOAST_DISPLAY_MS);
 }
 
 function showLevelUpCelebration(newLevel, oldLevel) {
@@ -415,7 +390,7 @@ function showLevelUpCelebration(newLevel, oldLevel) {
     ])
   ]);
   document.body.appendChild(overlay);
-  setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, 6000);
+  setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, UI_LEVELUP_OVERLAY_AUTO_DISMISS_MS);
 }
 
 function playDangerSound() {
@@ -630,7 +605,6 @@ async function switchProfile(name) {
   gamificationError = null;
   lastKnownLevel = null;
   updateTopLevelBar();
-  updateXpBadge();
   await loadConfig();
   try { await api(`/api/${currentProfile}/attendance/autofill`, { method: 'POST' }); } catch (e) { /* non-fatal */ }
   await loadData();
@@ -826,7 +800,7 @@ const TS = {
 // currently rendered.
 function startMiniTimerTicker() {
   if (TS.miniIntervalId) return;
-  TS.miniIntervalId = setInterval(updateMiniTimerBadge, 1000);
+  TS.miniIntervalId = setInterval(updateMiniTimerBadge, UI_MINI_TIMER_TICK_MS);
   updateMiniTimerBadge();
 }
 function stopMiniTimerTicker() {
@@ -998,7 +972,7 @@ function renderTimerWidget() {
       statusDiv.innerHTML = `<span class="text-dim">No study time logged — nothing saved.</span>`;
       TS.activeTimerId = null;
       stopMiniTimerTicker();
-      setTimeout(() => { statusDiv.textContent = ''; }, 4000);
+      setTimeout(() => { statusDiv.textContent = ''; }, UI_STATUS_MESSAGE_CLEAR_MS);
       return;
     }
     showSessionRatingModal(actualMin, TS.timerSubject, async (rating) => {
@@ -1021,7 +995,7 @@ function renderTimerWidget() {
       }
       TS.activeTimerId = null;
       stopMiniTimerTicker();
-      setTimeout(() => { statusDiv.textContent = ''; }, 4000);
+      setTimeout(() => { statusDiv.textContent = ''; }, UI_STATUS_MESSAGE_CLEAR_MS);
     });
   }
 
@@ -2675,7 +2649,7 @@ async function renderStats(c) {
   };
 
   const chartsGrid = el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(380px,1fr))' });
-  const cacheBust = Date.now();
+  const cacheBust = UI_CHART_CACHE_BUST ? Date.now() : 'static';
   CHART_IDS.forEach(([id, hasData]) => {
     if (!hasData) return;
     const chartCard = el('div', { class: 'card', style: 'padding:12px' }, [

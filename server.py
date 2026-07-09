@@ -22,6 +22,150 @@ DEFAULT_DATA = {
     "logins": []
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# ── CONTROL PANEL ──
+# Every gameplay/economy-tunable constant lives here. Change a value,
+# restart the server, done — no need to hunt through logic anywhere
+# else in the file. Anything added in the future that could reasonably
+# be called a "setting" (a rate, a threshold, a cost, a multiplier)
+# belongs here, not inline in the function that uses it.
+#
+# Sections below: XP & Leveling, Attendance/Exam XP, Login XP,
+# Tiers (Badges/Mastery), Badges catalog, Weekly Quests, Cosmetic
+# Themes, Titles, Smart Recommendations thresholds, Misc/System.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── XP & Leveling curve ──
+# xp_for_level(L) = int(XP_CURVE_BASE * (L ** XP_CURVE_EXPONENT)) + XP_CURVE_FLAT
+# Uncapped, always costs a bit more per level. Current tuning: Lv5 ~7h,
+# Lv10 ~34h, Lv15 ~82h, Lv20 ~150h, Lv30 ~375h, Lv50 ~1160h of study.
+XP_CURVE_BASE = 35
+XP_CURVE_EXPONENT = 1.22
+XP_CURVE_FLAT = 40
+
+# ── Self-Study XP (the primary/best-paying source — keep it that way) ──
+# XP = minutes * (1 + difficulty / SELF_STUDY_DIFFICULTY_DIVISOR) * status_mult
+# At difficulty 5/10 Done, this is 1.25 XP/min (75 XP/hour); at 10/10 Done,
+# 1.5 XP/min (90 XP/hour). Raise SELF_STUDY_DIFFICULTY_DIVISOR to flatten
+# the difficulty bonus, lower it to reward hard subjects more.
+SELF_STUDY_DIFFICULTY_DIVISOR = 20.0
+SELF_STUDY_STATUS_MULT_DONE = 1.0
+SELF_STUDY_STATUS_MULT_PARTIAL = 0.5
+SELF_STUDY_STATUS_MULT_SKIPPED = 0.0
+
+# ── Attendance / Exam XP (flat, not time-scaled) ──
+ATTENDANCE_XP_PRESENT = 8
+ATTENDANCE_XP_PARTIAL = 4
+EXAM_XP_BASE = 20            # awarded for any completed ("done") exam
+EXAM_XP_SCORE_BONUS_MAX = 30 # additional, scaled by score/20 (a 20/20 exam gets the full bonus)
+
+# ── Login / Streak XP ──
+LOGIN_XP_DAILY = 10
+LOGIN_XP_STREAK_BONUS = 50           # awarded INSTEAD of the daily amount every Nth day
+LOGIN_XP_STREAK_BONUS_EVERY = 7      # ...on every 7th consecutive login day
+
+# ── Achievement/Mastery Tiers (shared 10-tier ladder: Bachelor's I
+# through Laureate) ──
+TIERS = ["Bachelor's I", "Bachelor's II", "Bachelor's III", "Master's I", "Master's II",
+         "Master's III", "PhD I", "PhD II", "PhD III", "Laureate"]
+TIER_XP = [30, 80, 180, 350, 650, 1200, 2200, 4000, 7000, 12000]           # XP awarded per badge tier reached
+MASTERY_TIER_XP = [20, 50, 120, 250, 500, 900, 1600, 3000, 5200, 9000]     # XP awarded per mastery tier reached
+
+# ── Badge definitions — copy-paste a block below to add a new badge.
+# thresholds_* must have exactly 10 ascending values (one per TIERS
+# entry above). Pick ONE of thresholds_min / thresholds_count /
+# thresholds_days depending on what the badge tracks. ──
+BADGE_DEFS = [
+    {"id": "hours", "label": "Study Hours", "icon": "\U0001F4DA", "thresholds_min": [60, 300, 900, 2400, 6000, 15000, 36000, 72000, 132000, 240000]},
+    {"id": "streak", "label": "Study Streak", "icon": "\U0001F525", "thresholds_days": [2, 3, 5, 7, 14, 30, 60, 100, 180, 365]},
+    {"id": "early_bird", "label": "Early Bird", "icon": "\U0001F305", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "night_owl", "label": "Night Owl", "icon": "\U0001F989", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "attendance", "label": "Perfect Attendance", "icon": "\u2705", "thresholds_count": [5, 15, 30, 60, 120, 250, 500, 1000, 1800, 3200]},
+    {"id": "exam_ace", "label": "Exam Ace", "icon": "\U0001F3C6", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 60, 100, 160]},
+    {"id": "comeback", "label": "Comeback Kid", "icon": "\U0001F4AA", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 50, 75, 110]},
+    {"id": "well_rounded", "label": "Well-Rounded", "icon": "\u2696\uFE0F", "thresholds_count": [1, 2, 4, 8, 15, 25, 40, 60, 90, 130]},
+    {"id": "variety", "label": "Subject Variety", "icon": "\U0001F3AF", "thresholds_count": [2, 4, 6, 9, 13, 18, 25, 35, 48, 65]},
+    {"id": "weekend", "label": "Weekend Warrior", "icon": "\U0001F3D6\uFE0F", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "marathon", "label": "Marathoner", "icon": "\U0001F3C3", "thresholds_count": [1, 3, 6, 12, 20, 35, 60, 100, 150, 220]},
+    {"id": "login_streak", "label": "Loyal Login", "icon": "\U0001F4C5", "thresholds_days": [3, 7, 14, 30, 60, 100, 180, 365, 600, 900]},
+]
+# Badge *behavior* thresholds — the raw definitions of what counts
+# toward each badge above (as opposed to the tier thresholds, which
+# are how MUCH of it earns which tier).
+BADGE_EARLY_BIRD_HOUR_CUTOFF = 8     # sessions starting before this hour count as "early"
+BADGE_NIGHT_OWL_HOUR_CUTOFF = 22     # sessions starting at/after this hour (or before 4am) count as "night"
+BADGE_NIGHT_OWL_EARLY_MORNING_CUTOFF = 4
+BADGE_MARATHON_MIN_MINUTES = 120     # a single session at/above this length counts as a "marathon"
+BADGE_WEEKEND_WEEKDAY_CUTOFF = 5     # Python weekday() >= this is Sat/Sun
+BADGE_COMEBACK_GAP_DAYS = 5          # gap between study days that counts as a "comeback"
+BADGE_EXAM_ACE_MIN_SCORE = 16        # out of 20
+
+# ── Weekly Quests — copy-paste a block below to add a new quest. Each
+# quest's `id` must match a key computed in compute_quest_progress(). ──
+QUEST_DEFS = [
+    {"id": "days3", "label": "Study on 3+ different days this week", "xp": 40},
+    {"id": "hours5", "label": "Log 5+ hours of self-study this week", "xp": 60},
+    {"id": "variety2", "label": "Study 2+ different subjects/skills this week", "xp": 40},
+    {"id": "attendance3", "label": "Log attendance for 3+ classes this week", "xp": 30},
+]
+QUEST_DAYS3_MIN_DAYS = 3
+QUEST_HOURS5_MIN_HOURS = 5
+QUEST_VARIETY2_MIN_ITEMS = 2
+QUEST_ATTENDANCE3_MIN_LOGGED = 3
+
+# ── Cosmetic Themes — copy-paste a block below to add a new theme.
+# `id` must match a `[data-theme="..."]` block in styles.css. ──
+THEME_CATALOG = [
+    {"id": "sakura", "label": "Sakura", "level": 1},
+    {"id": "light", "label": "Light", "level": 1},
+    {"id": "dark", "label": "Dark", "level": 1},
+    {"id": "breeze", "label": "Breeze", "level": 5},
+    {"id": "midnight", "label": "Midnight", "level": 10},
+    {"id": "forest", "label": "Forest", "level": 15},
+    {"id": "sunset", "label": "Sunset", "level": 20},
+    {"id": "ocean", "label": "Ocean", "level": 25},
+    {"id": "rosegold", "label": "Rose Gold", "level": 30},
+    {"id": "autumn", "label": "Autumn", "level": 40},
+    {"id": "cyberpunk", "label": "Cyberpunk", "level": 50},
+    {"id": "nord", "label": "Nord", "level": 65},
+    {"id": "mono", "label": "Mono", "level": 80},
+    {"id": "candy", "label": "Candy", "level": 100},
+    {"id": "coffee", "label": "Coffee", "level": 125},
+]
+
+# ── Title Tiers — copy-paste a block below to add a new title. Must
+# stay sorted ascending by level; the highest entry <= current level
+# is used. ──
+TITLE_TIERS = [
+    (1, "Novice Scholar"), (5, "Diligent Student"), (10, "Focused Learner"),
+    (20, "Dedicated Apprentice"), (30, "Skilled Researcher"), (45, "Adept Scholar"),
+    (60, "Expert Analyst"), (80, "Master of Study"), (100, "Grandmaster Scholar"),
+    (130, "Sage"), (160, "Luminary"), (200, "Archmage of Diligence"),
+]
+
+# ── Smart Recommendations thresholds ──
+REC_MIN_EXAM_HISTORY_FOR_ML = 4            # fewer scored exams than this -> cold-start heuristic instead of regression
+REC_SOON_MULTIPLIER_WITHIN_7_DAYS = 1.6
+REC_SOON_MULTIPLIER_WITHIN_14_DAYS = 1.2
+REC_PREDICTED_SCORE_WARNING = 12           # predicted score below this -> warning-level recommendation
+REC_PREDICTED_SCORE_WARNING_URGENT = 10    # below this -> "warning" type instead of "info"
+REC_PREDICTED_SCORE_SOON_THRESHOLD = 15    # within 5 days AND below this score also triggers a warning
+REC_PREDICTED_SCORE_SOON_DAYS = 5
+REC_NO_UPCOMING_EXAM_SCORE_THRESHOLD = 11  # no exam scheduled yet, but pace looks low for the subject's difficulty
+REC_NO_UPCOMING_EXAM_MIN_DIFFICULTY = 6
+REC_COLD_START_MIN_DIFFICULTY = 6          # cold-start warning only applies to subjects at/above this difficulty
+REC_COLD_START_STUDY_RATIO = 0.65          # ...and only if studied less than this fraction of your own average
+REC_ATTENDANCE_RATE_WARNING_PCT = 70       # attendance rate below this % triggers a warning
+REC_SPACED_REPETITION_BASE_INTERVAL_DAYS = 10  # interval = max(MIN, BASE - difficulty)
+REC_SPACED_REPETITION_MIN_INTERVAL_DAYS = 2
+REC_MAX_RECOMMENDATIONS_SHOWN = 15
+
+# ── Misc / System ──
+TRASH_MAX_ENTRIES = 20                     # how many recent deletions the undo trash keeps
+DEFAULT_ATTENDANCE_MINUTES_FALLBACK = 90   # used when a schedule slot's start/end time can't be parsed
+DEFAULT_ML_MIN_RECORDS = 30                # config default for a profile's "ml_min_records" field
+# ═══════════════════════════════════════════════════════════════════
+
 # ── Helpers ──
 def now_str():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -119,7 +263,7 @@ def load_trash(profile):
 
 def save_trash(profile, trash):
     with open(trash_path(profile), "w") as f:
-        json.dump(trash[-20:], f, indent=2, ensure_ascii=False)
+        json.dump(trash[-TRASH_MAX_ENTRIES:], f, indent=2, ensure_ascii=False)
 
 def push_trash(profile, kind, record):
     if not record:
@@ -142,7 +286,7 @@ def ensure_profile(profile):
             "academic_years": [],
             "subjects": [],
             "skills": [],
-            "ml_min_records": 30,
+            "ml_min_records": DEFAULT_ML_MIN_RECORDS,
             "ml_prediction_enabled": True,
             "attendance_default_mode": "manual",  # "manual" | "mostly_present" | "mostly_absent"
             "attendance_autofill_last_date": "",
@@ -278,7 +422,7 @@ def _fit_score_model(X_train, y_train):
     person's own history. Returns None if sklearn is unavailable or there
     isn't enough data yet — callers fall back to a self-relative signal
     in that case rather than a hardcoded universal threshold."""
-    if len(X_train) < 4:
+    if len(X_train) < REC_MIN_EXAM_HISTORY_FOR_ML:
         return None
     try:
         from sklearn.linear_model import LinearRegression
@@ -355,12 +499,18 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
             import numpy as np
             predicted = float(model.predict(np.array([[mins, diff, att_rate]]))[0])
             predicted = max(0.0, min(20.0, predicted))
-            soon_multiplier = 1.6 if (days_until is not None and days_until <= 7) else (1.2 if (days_until is not None and days_until <= 14) else 1.0)
+            soon_multiplier = (
+                REC_SOON_MULTIPLIER_WITHIN_7_DAYS if (days_until is not None and days_until <= 7)
+                else (REC_SOON_MULTIPLIER_WITHIN_14_DAYS if (days_until is not None and days_until <= 14) else 1.0)
+            )
             urgency = (20 - predicted) * (diff / 10) * soon_multiplier
-            if next_exam is not None and (predicted < 12 or (days_until is not None and days_until <= 5 and predicted < 15)):
+            if next_exam is not None and (
+                predicted < REC_PREDICTED_SCORE_WARNING or
+                (days_until is not None and days_until <= REC_PREDICTED_SCORE_SOON_DAYS and predicted < REC_PREDICTED_SCORE_SOON_THRESHOLD)
+            ):
                 when = f" in {days_until} day{'s' if days_until != 1 else ''}" if days_until is not None else ""
                 recs.append({
-                    "type": "warning" if predicted < 10 else "info",
+                    "type": "warning" if predicted < REC_PREDICTED_SCORE_WARNING_URGENT else "info",
                     "source": "ml_predictive",
                     "urgency": round(urgency, 2),
                     "msg": (
@@ -369,7 +519,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
                         f"Consider prioritizing this one."
                     )
                 })
-            elif next_exam is None and predicted < 11 and diff >= 6:
+            elif next_exam is None and predicted < REC_NO_UPCOMING_EXAM_SCORE_THRESHOLD and diff >= REC_NO_UPCOMING_EXAM_MIN_DIFFICULTY:
                 recs.append({
                     "type": "info",
                     "source": "ml_predictive",
@@ -383,7 +533,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
             # Cold start — not enough exam history to train a model yet.
             # Compare against the person's own average instead of a fixed
             # global constant.
-            if diff >= 6 and mins < avg_minutes_all * 0.65:
+            if diff >= REC_COLD_START_MIN_DIFFICULTY and mins < avg_minutes_all * REC_COLD_START_STUDY_RATIO:
                 when = f", with \u201c{next_exam.get('name', 'an exam')}\u201d in {days_until} day{'s' if days_until != 1 else ''}" if days_until is not None else ""
                 recs.append({
                     "type": "warning",
@@ -474,7 +624,7 @@ def get_spaced_repetition_recs(cfg, d):
         except Exception:
             continue
         days_since = (today - last_date).days
-        interval = max(2, 10 - diff)
+        interval = max(REC_SPACED_REPETITION_MIN_INTERVAL_DAYS, REC_SPACED_REPETITION_BASE_INTERVAL_DAYS - diff)
         if days_since > interval:
             recs.append({
                 "type": "info", "source": "spaced_repetition",
@@ -508,10 +658,10 @@ def get_recommendations(cfg, d):
         total_events = attendance_by_subject_events.get(sid, 0)
         if total_events > 0:
             rate = attendance_by_subject_present.get(sid, 0) / total_events * 100
-            if rate < 70:
+            if rate < REC_ATTENDANCE_RATE_WARNING_PCT:
                 recs.append({
-                    "type": "warning", "source": "heuristic", "urgency": round((70 - rate) / 10, 2),
-                    "msg": f"Attendance for {s['name']} is {rate:.0f}% — below the 70% threshold."
+                    "type": "warning", "source": "heuristic", "urgency": round((REC_ATTENDANCE_RATE_WARNING_PCT - rate) / 10, 2),
+                    "msg": f"Attendance for {s['name']} is {rate:.0f}% — below the {REC_ATTENDANCE_RATE_WARNING_PCT}% threshold."
                 })
 
     # No self-study logged at all for a subject yet
@@ -524,7 +674,7 @@ def get_recommendations(cfg, d):
         recs += get_pattern_insights(cfg, d)
     recs += get_spaced_repetition_recs(cfg, d)
     recs.sort(key=lambda r: r.get("urgency", 0), reverse=True)
-    return recs[:15]
+    return recs[:REC_MAX_RECOMMENDATIONS_SHOWN]
 
 
 # ── Profile management ──
@@ -1028,7 +1178,7 @@ def autofill_attendance_for_profile(name):
                     eh, em = (sch.get("end") or sch.get("start") or "09:00").split(":")
                     minutes = max(15, (int(eh) * 60 + int(em)) - (int(sh) * 60 + int(sm)))
                 except Exception:
-                    minutes = 90
+                    minutes = DEFAULT_ATTENDANCE_MINUTES_FALLBACK
                 d.setdefault("attendance", []).append({
                     "id": gen_id(12), "date": date_str, "subject_id": s["id"],
                     "type": sch_type, "event_label": f"{s['name']} {sch_type} (auto)",
@@ -1307,14 +1457,13 @@ def xp_for_level(level):
     (e.g. League of Legends past level 30): steady, always a bit more
     per level, never actually capped.
 
-    Tuned so early levels come fast (level 2 within the first study
-    session) and mid-game unlocks land at realistic usage milestones —
-    roughly: Lv5 ~7h, Lv10 ~34h, Lv15 ~82h, Lv20 ~150h, Lv30 ~375h,
-    Lv50 ~1160h — with high levels (80-125+) as a genuine multi-year
-    prestige tail rather than a wall nobody reaches. An earlier version
-    of this curve put Lv20 at ~500h, which felt punishing rather than
-    motivating; these constants replace it."""
-    return int(35 * (level ** 1.22)) + 40
+    Tuned (via XP_CURVE_* in the Control Panel) so early levels come
+    fast (level 2 within the first study session) and mid-game unlocks
+    land at realistic usage milestones — roughly: Lv5 ~7h, Lv10 ~34h,
+    Lv15 ~82h, Lv20 ~150h, Lv30 ~375h, Lv50 ~1160h — with high levels
+    (80-125+) as a genuine multi-year prestige tail rather than a wall
+    nobody reaches."""
+    return int(XP_CURVE_BASE * (level ** XP_CURVE_EXPONENT)) + XP_CURVE_FLAT
 
 def level_from_xp(total_xp):
     level = 1
@@ -1326,14 +1475,21 @@ def level_from_xp(total_xp):
         guard += 1
     return level, remaining, xp_for_level(level)
 
+def _self_study_status_mult(status):
+    if status == "Done":
+        return SELF_STUDY_STATUS_MULT_DONE
+    if status == "Partial":
+        return SELF_STUDY_STATUS_MULT_PARTIAL
+    return SELF_STUDY_STATUS_MULT_SKIPPED
+
 def compute_self_study_record_xp(minutes, difficulty, status):
-    """XP for a single self-study record: minutes * (1 + difficulty/20)
-    * a status multiplier (Done=1x, Partial=0.5x, Skipped=0x). A harder
+    """XP for a single self-study record: minutes * (1 + difficulty /
+    SELF_STUDY_DIFFICULTY_DIVISOR) * a status multiplier. A harder
     subject (higher difficulty) earns more per minute — e.g. at
     difficulty 5/10 that's 1.25 XP/min, at difficulty 10/10 it's 1.5
-    XP/min, both at status Done."""
-    mult = 1.0 if status == "Done" else (0.5 if status == "Partial" else 0.0)
-    return round(minutes * (1 + difficulty / 20.0) * mult, 1)
+    XP/min, both at status Done (with the default divisor of 20)."""
+    mult = _self_study_status_mult(status)
+    return round(minutes * (1 + difficulty / SELF_STUDY_DIFFICULTY_DIVISOR) * mult, 1)
 
 def compute_total_xp(d, cfg=None):
     xp = 0.0
@@ -1341,17 +1497,17 @@ def compute_total_xp(d, cfg=None):
         mins = r.get("minutes", 0)
         diff = r.get("difficulty", 5)
         status = r.get("status", "Done")
-        mult = 1.0 if status == "Done" else (0.5 if status == "Partial" else 0.0)
-        xp += mins * (1 + diff / 20.0) * mult
+        mult = _self_study_status_mult(status)
+        xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult
     for r in d.get("attendance", []):
         if r.get("status") == "present":
-            xp += 8
+            xp += ATTENDANCE_XP_PRESENT
         elif r.get("status") == "partial":
-            xp += 4
+            xp += ATTENDANCE_XP_PARTIAL
     for e in d.get("exams", []):
         if e.get("status") == "done":
             score = e.get("score")
-            xp += 20 + ((score / 20.0) * 30 if score is not None else 0)
+            xp += EXAM_XP_BASE + ((score / 20.0) * EXAM_XP_SCORE_BONUS_MAX if score is not None else 0)
     # Additional XP sources (badges/mastery/quests/logins) — added so that
     # reaching high levels doesn't depend on raw study minutes alone.
     _, badge_xp = compute_badge_progress(d)
@@ -1400,11 +1556,6 @@ def compute_streak(d):
             i -= 1
     return current, best
 
-TIERS = ["Bachelor's I", "Bachelor's II", "Bachelor's III", "Master's I", "Master's II",
-         "Master's III", "PhD I", "PhD II", "PhD III", "Laureate"]
-TIER_XP = [30, 80, 180, 350, 650, 1200, 2200, 4000, 7000, 12000]
-MASTERY_TIER_XP = [20, 50, 120, 250, 500, 900, 1600, 3000, 5200, 9000]
-
 def _tier_progress(value, thresholds):
     """Given a raw accumulator value and 8 ascending thresholds, return
     (tier_index reached (-1 if none), xp earned from all tiers reached,
@@ -1419,21 +1570,6 @@ def _tier_progress(value, thresholds):
             break
     nxt = thresholds[reached + 1] if reached + 1 < len(thresholds) else None
     return reached, xp, nxt
-
-BADGE_DEFS = [
-    {"id": "hours", "label": "Study Hours", "icon": "\U0001F4DA", "thresholds_min": [60, 300, 900, 2400, 6000, 15000, 36000, 72000, 132000, 240000]},
-    {"id": "streak", "label": "Study Streak", "icon": "\U0001F525", "thresholds_days": [2, 3, 5, 7, 14, 30, 60, 100, 180, 365]},
-    {"id": "early_bird", "label": "Early Bird", "icon": "\U0001F305", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "night_owl", "label": "Night Owl", "icon": "\U0001F989", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "attendance", "label": "Perfect Attendance", "icon": "\u2705", "thresholds_count": [5, 15, 30, 60, 120, 250, 500, 1000, 1800, 3200]},
-    {"id": "exam_ace", "label": "Exam Ace", "icon": "\U0001F3C6", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 60, 100, 160]},
-    {"id": "comeback", "label": "Comeback Kid", "icon": "\U0001F4AA", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 50, 75, 110]},
-    {"id": "well_rounded", "label": "Well-Rounded", "icon": "\u2696\uFE0F", "thresholds_count": [1, 2, 4, 8, 15, 25, 40, 60, 90, 130]},
-    {"id": "variety", "label": "Subject Variety", "icon": "\U0001F3AF", "thresholds_count": [2, 4, 6, 9, 13, 18, 25, 35, 48, 65]},
-    {"id": "weekend", "label": "Weekend Warrior", "icon": "\U0001F3D6\uFE0F", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "marathon", "label": "Marathoner", "icon": "\U0001F3C3", "thresholds_count": [1, 3, 6, 12, 20, 35, 60, 100, 150, 220]},
-    {"id": "login_streak", "label": "Loyal Login", "icon": "\U0001F4C5", "thresholds_days": [3, 7, 14, 30, 60, 100, 180, 365, 600, 900]},
-]
 
 def _week_key(date_str):
     try:
@@ -1457,21 +1593,21 @@ def compute_badge_progress(d):
         except Exception:
             return None
 
-    early = sum(1 for r in done if (h := _hour(r.get("created", ""))) is not None and h < 8)
-    night = sum(1 for r in done if (h := _hour(r.get("created", ""))) is not None and (h >= 22 or h < 4))
-    marathon = sum(1 for r in done if r.get("minutes", 0) >= 120)
+    early = sum(1 for r in done if (h := _hour(r.get("created", ""))) is not None and h < BADGE_EARLY_BIRD_HOUR_CUTOFF)
+    night = sum(1 for r in done if (h := _hour(r.get("created", ""))) is not None and (h >= BADGE_NIGHT_OWL_HOUR_CUTOFF or h < BADGE_NIGHT_OWL_EARLY_MORNING_CUTOFF))
+    marathon = sum(1 for r in done if r.get("minutes", 0) >= BADGE_MARATHON_MIN_MINUTES)
 
     weekend = 0
     for r in done:
         try:
             wd = datetime.strptime(r.get("date", ""), "%Y-%m-%d").weekday()
-            if wd >= 5:
+            if wd >= BADGE_WEEKEND_WEEKDAY_CUTOFF:
                 weekend += 1
         except Exception:
             pass
 
     attendance_present = sum(1 for r in d.get("attendance", []) if r.get("status") == "present")
-    exam_ace = sum(1 for e in d.get("exams", []) if e.get("score") is not None and e.get("score", 0) >= 16)
+    exam_ace = sum(1 for e in d.get("exams", []) if e.get("score") is not None and e.get("score", 0) >= BADGE_EXAM_ACE_MIN_SCORE)
 
     variety_ids = set()
     for r in done:
@@ -1481,13 +1617,14 @@ def compute_badge_progress(d):
             variety_ids.add(("k", r["skill_id"]))
     variety = len(variety_ids)
 
-    # comeback: gaps of >=5 days between consecutive Done dates
+    # comeback: gap between consecutive Done dates of at least
+    # BADGE_COMEBACK_GAP_DAYS
     dates = sorted(set(r.get("date") for r in done if r.get("date")))
     comeback = 0
     for i in range(1, len(dates)):
         try:
             gap = (datetime.strptime(dates[i], "%Y-%m-%d") - datetime.strptime(dates[i - 1], "%Y-%m-%d")).days
-            if gap >= 5:
+            if gap >= BADGE_COMEBACK_GAP_DAYS:
                 comeback += 1
         except Exception:
             pass
@@ -1582,13 +1719,6 @@ def compute_mastery(cfg, d):
                          "tier_index": tier_idx, "tier_name": TIERS[tier_idx] if tier_idx >= 0 else None, "next_threshold": nxt})
     return mastery, total_mastery_xp
 
-QUEST_DEFS = [
-    {"id": "days3", "label": "Study on 3+ different days this week", "xp": 40},
-    {"id": "hours5", "label": "Log 5+ hours of self-study this week", "xp": 60},
-    {"id": "variety2", "label": "Study 2+ different subjects/skills this week", "xp": 40},
-    {"id": "attendance3", "label": "Log attendance for 3+ classes this week", "xp": 30},
-]
-
 def _week_records(records, week):
     return [r for r in records if _week_key(r.get("date", "")) == week]
 
@@ -1618,8 +1748,8 @@ def compute_quest_progress(d):
         attendance_logged = len(att)
 
         results = {
-            "days3": days >= 3, "hours5": hours >= 5,
-            "variety2": variety >= 2, "attendance3": attendance_logged >= 3
+            "days3": days >= QUEST_DAYS3_MIN_DAYS, "hours5": hours >= QUEST_HOURS5_MIN_HOURS,
+            "variety2": variety >= QUEST_VARIETY2_MIN_ITEMS, "attendance3": attendance_logged >= QUEST_ATTENDANCE3_MIN_LOGGED
         }
         for q in QUEST_DEFS:
             if results.get(q["id"]):
@@ -1630,10 +1760,11 @@ def compute_quest_progress(d):
     return this_week_status, total_quest_xp
 
 def compute_login_xp(d):
-    """10 xp per unique login day, 5x (50xp) on every 7th consecutive day
-    of an unbroken streak. Login dates are appended (deduped) by the
-    /ping_login endpoint, so this is just as derivable as everything
-    else — no fragile incremented counter."""
+    """LOGIN_XP_DAILY per unique login day, LOGIN_XP_STREAK_BONUS on
+    every LOGIN_XP_STREAK_BONUS_EVERYth consecutive day of an unbroken
+    streak. Login dates are appended (deduped) by the /ping_login
+    endpoint, so this is just as derivable as everything else — no
+    fragile incremented counter."""
     dates = sorted(set(d.get("logins", [])))
     if not dates:
         return 0
@@ -1648,7 +1779,7 @@ def compute_login_xp(d):
             run += 1
         else:
             run = 1
-        xp += 50 if run % 7 == 0 else 10
+        xp += LOGIN_XP_STREAK_BONUS if run % LOGIN_XP_STREAK_BONUS_EVERY == 0 else LOGIN_XP_DAILY
     return xp
 
 
@@ -1665,33 +1796,6 @@ def _login_stats(d):
         "login_streak_best": streak_best,
     }
 
-
-# Cosmetic themes unlocked by level. sakura/light/dark are the free
-# starting set; everything else is a level-gated "skin".
-THEME_CATALOG = [
-    {"id": "sakura", "label": "Sakura", "level": 1},
-    {"id": "light", "label": "Light", "level": 1},
-    {"id": "dark", "label": "Dark", "level": 1},
-    {"id": "breeze", "label": "Breeze", "level": 5},
-    {"id": "midnight", "label": "Midnight", "level": 10},
-    {"id": "forest", "label": "Forest", "level": 15},
-    {"id": "sunset", "label": "Sunset", "level": 20},
-    {"id": "ocean", "label": "Ocean", "level": 25},
-    {"id": "rosegold", "label": "Rose Gold", "level": 30},
-    {"id": "autumn", "label": "Autumn", "level": 40},
-    {"id": "cyberpunk", "label": "Cyberpunk", "level": 50},
-    {"id": "nord", "label": "Nord", "level": 65},
-    {"id": "mono", "label": "Mono", "level": 80},
-    {"id": "candy", "label": "Candy", "level": 100},
-    {"id": "coffee", "label": "Coffee", "level": 125},
-]
-
-TITLE_TIERS = [
-    (1, "Novice Scholar"), (5, "Diligent Student"), (10, "Focused Learner"),
-    (20, "Dedicated Apprentice"), (30, "Skilled Researcher"), (45, "Adept Scholar"),
-    (60, "Expert Analyst"), (80, "Master of Study"), (100, "Grandmaster Scholar"),
-    (130, "Sage"), (160, "Luminary"), (200, "Archmage of Diligence"),
-]
 
 def title_for_level(level):
     title = TITLE_TIERS[0][1]

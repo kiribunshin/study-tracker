@@ -5,10 +5,11 @@ cd /d "%~dp0"
 title StudyTracker v1
 
 echo.
-echo ========================================
-echo    StudyTracker v1
+echo ================================================
+echo    StudyTracker v1.1.1
 echo    Study Tracking Dashboard
-echo ========================================
+echo    Live to love. Love to learn. Learn to live.
+echo ================================================
 echo.
 
 :: -- Check Python --
