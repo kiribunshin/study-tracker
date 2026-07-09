@@ -14,7 +14,7 @@ A personal study tracker I built for myself because I wanted something that actu
 
 ## Stack
 
-Flask backend, vanilla JS/HTML/CSS frontend, no framework bloat. Runs locally via `start.sh` / `start.bat`.
+Flask backend, vanilla JS/HTML/CSS frontend, no framework bloat. Runs locally via `start.bat`.
 
 ## Status
 
