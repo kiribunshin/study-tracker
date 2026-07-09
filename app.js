@@ -1,4 +1,4 @@
-/* StudyTracker v1.1.1 — Frontend */
+/* StudyTracker v1.2 — Frontend */
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
