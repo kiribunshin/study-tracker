@@ -665,10 +665,21 @@ tr:hover td { background: var(--accent-soft); }
 /* Theme preview banner */
 .theme-preview-banner {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  z-index: 1500; display: flex; align-items: center; gap: 12px;
+  z-index: 2600; display: flex; align-items: center; gap: 12px;
   padding: 10px 16px; border-radius: 999px; background: var(--bg2);
   border: 1px solid var(--accent); box-shadow: var(--shadow-lg), var(--glow);
   font-size: var(--font-s); animation: fadeIn .2s ease;
+}
+
+/* Theme preview lock overlay — while previewing a locked theme, this
+   sits over the entire app (below the banner's own z-index) and
+   swallows every click/scroll/hover so the preview stays a single,
+   frozen screenshot-like view. Only the banner's "Exit Preview" button
+   (which lives outside/above this overlay) remains clickable. */
+.preview-lock-overlay {
+  position: fixed; inset: 0; z-index: 2500;
+  cursor: not-allowed;
+  background: transparent;
 }
 
 /* Empty states */

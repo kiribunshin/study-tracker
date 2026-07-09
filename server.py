@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StudyTracker v1 — Portable study tracking web app."""
+"""StudyTracker v1.1.1 — Portable study tracking web app."""
 import os, json, time, hashlib, shutil, math, uuid
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
@@ -2451,5 +2451,5 @@ def styles_css():
     return send_file(Path(__file__).parent / "styles.css")
 
 if __name__ == "__main__":
-    print("StudyTracker v1 — http://localhost:8080")
+    print("StudyTracker v1.1.1 — http://localhost:8080")
     app.run(host="127.0.0.1", port=8080, debug=False)

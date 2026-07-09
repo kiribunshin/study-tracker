@@ -113,18 +113,25 @@ function startThemePreview(themeId) {
   previewingTheme = themeId;
   document.documentElement.setAttribute('data-theme', themeId);
   showThemePreviewBanner(themeId);
+  // Freeze the rest of the app behind a click-swallowing overlay — a
+  // preview is meant to be a single frozen look at the theme, not a
+  // way to browse the whole app in disguise. The only way out is the
+  // "Exit Preview" button on the banner itself, which sits above this
+  // overlay in the stacking order.
+  const overlay = $('#previewLockOverlay');
+  if (overlay) overlay.classList.remove('hidden');
 }
 
 function exitThemePreview() {
   if (themeBeforePreview) {
     document.documentElement.setAttribute('data-theme', themeBeforePreview);
-    const sel = $('#themeSelect');
-    if (sel) sel.value = themeBeforePreview;
   }
   previewingTheme = null;
   themeBeforePreview = null;
   const banner = $('#themePreviewBanner');
   if (banner) banner.remove();
+  const overlay = $('#previewLockOverlay');
+  if (overlay) overlay.classList.add('hidden');
 }
 
 function showThemePreviewBanner(themeId) {
