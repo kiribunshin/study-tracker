@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudyTracker — Study Tracker v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<!-- Topbar -->
+<div class="topbar">
+  <div class="logo" onclick="navigate('dashboard')">StudyTracker<span class="logo-sub"> v1</span></div>
+  <div id="topLevelBar" class="top-level-bar hidden" onclick="navigate('dashboard')" title="Your progression"></div>
+  <div id="miniTimerBadge" class="mini-timer-badge hidden" onclick="navigate('dashboard')" title="Go to your running timer"></div>
+  <div class="nav-btns">
+    <button class="nav-btn active" data-page="dashboard" onclick="navigate('dashboard')">Dashboard</button>
+    <button class="nav-btn" data-page="timetable" onclick="navigate('timetable')">Timetable</button>
+    <button class="nav-btn" data-page="self_study" onclick="navigate('self_study')">Self-Study</button>
+    <button class="nav-btn" data-page="attendance" onclick="navigate('attendance')">Attendance</button>
+    <button class="nav-btn" data-page="exams" onclick="navigate('exams')">Exams</button>
+    <button class="nav-btn" data-page="events" onclick="navigate('events')">Events</button>
+    <button class="nav-btn" data-page="stats" onclick="navigate('stats')">Stats</button>
+    <button class="nav-btn" data-page="progression" onclick="navigate('progression')">Progression</button>
+    <button class="nav-btn" data-page="settings" onclick="navigate('settings')">Settings</button>
+  </div>
+  <div class="profile-selector">
+    <select id="profileSelect" onchange="switchProfile(this.value)"></select>
+    <button class="btn btn-sm btn-outline" onclick="showProfileModal()">+</button>
+    <div id="xpBadge" class="xp-badge hidden" onclick="navigate('dashboard')" title="Your progression"></div>
+    <select id="themeSelect" onchange="setTheme(this.value)" title="Theme">
+      <option value="sakura">Sakura</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+      <option value="breeze">Breeze</option>
+      <option value="midnight">Midnight</option>
+      <option value="forest">Forest</option>
+      <option value="sunset">Sunset</option>
+    </select>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <div id="content" class="content">
+    <!-- Dynamic content loaded here -->
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal" id="modalContent" onclick="event.stopPropagation()"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
