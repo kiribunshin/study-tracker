@@ -30,6 +30,16 @@ const UI_STATUS_MESSAGE_CLEAR_MS = 4000;   // how long a timer status line ("Sav
 const UI_MINI_TIMER_TICK_MS = 1000;
 const UI_CHART_CACHE_BUST = true;          // append ?t=Date.now() to chart <img> src so Stats always shows fresh renders
 
+// Timetable calendar vertical scale. pxPerHour normally sits at
+// CAL_BASE_PX_PER_HOUR; renderCalendar() grows it (up to
+// CAL_MAX_PX_PER_HOUR) whenever the current week has a real block
+// shorter than CAL_MIN_BLOCK_PX would need at the base scale — this is
+// what keeps short back-to-back study/break segments from visually
+// overlapping instead of padding them past their real end time.
+const CAL_BASE_PX_PER_HOUR = 44;
+const CAL_MAX_PX_PER_HOUR = 110;
+const CAL_MIN_BLOCK_PX = 20;               // must match the render-time height floor below
+
 // ── Helpers ──
 function $(sel) { return document.querySelector(sel); }
 function $$(sel) { return document.querySelectorAll(sel); }
@@ -1591,7 +1601,16 @@ async function renderTimetable(c) {
           const end = timeToMinutes(seg.end);
           const isBreak = seg.type === 'break';
           timed.push({
-            start, end: Math.max(start + 10, end),
+            // Use the segment's REAL start/end — no artificial minimum
+            // duration here. Segments are drawn back-to-back (a break
+            // immediately followed by more study), so padding one of
+            // them past its true end pushes it into the next segment's
+            // real time slot, which is what caused them to visually
+            // overlap/collide. Short segments are instead handled by
+            // renderCalendar() dynamically growing the whole week's
+            // pixel-per-hour scale so every real block gets a readable
+            // minimum height without eating into its neighbor.
+            start, end,
             label: isBreak ? '☕ Break' : `📖 ${label}`,
             sub: isBreak ? '' : r.status,
             cls: isBreak ? 'break' : 'selfstudy',
@@ -1656,7 +1675,29 @@ async function renderTimetable(c) {
     rangeStart = Math.max(0, rangeStart);
     rangeEnd = Math.min(24 * 60, rangeEnd);
     const totalMins = rangeEnd - rangeStart;
-    const pxPerHour = 44;
+
+    // pxPerHour normally sits at CAL_BASE_PX_PER_HOUR, but grows for the
+    // WHOLE week's grid whenever any real block (most commonly a short
+    // Pomodoro break, or a trailing study segment) is shorter than
+    // CAL_MIN_BLOCK_PX would need at the base scale. This keeps every
+    // block readable at its true, non-overlapping time position instead
+    // of the old approach of padding short blocks past their real end
+    // time, which pushed them into the next block's slot and made
+    // same-session study/break blocks visually collide. Capped at
+    // CAL_MAX_PX_PER_HOUR so one freak 1-2 minute entry can't blow the
+    // whole calendar out to an unusable height — the trade-off beyond
+    // that cap is a thin (but still correctly positioned, non-
+    // overlapping) block rather than an ever-taller grid.
+    let shortestBlockMinutes = Infinity;
+    dayData.forEach(({ timed }) => {
+      timed.forEach(ev => {
+        const dur = ev.end - ev.start;
+        if (dur > 0 && dur < shortestBlockMinutes) shortestBlockMinutes = dur;
+      });
+    });
+    const pxPerHour = Number.isFinite(shortestBlockMinutes)
+      ? Math.min(CAL_MAX_PX_PER_HOUR, Math.max(CAL_BASE_PX_PER_HOUR, (CAL_MIN_BLOCK_PX * 60) / shortestBlockMinutes))
+      : CAL_BASE_PX_PER_HOUR;
     const totalHeight = (totalMins / 60) * pxPerHour;
 
     // All-day strip (only rendered if there's something to show)
@@ -1711,7 +1752,16 @@ async function renderTimetable(c) {
       // render them all at full width, hiding all but the last one.
       assignLanes(dayData[i].timed).forEach(({ ev, lane, laneCount }) => {
         const top = Math.max(0, ((ev.start - rangeStart) / totalMins) * totalHeight);
-        const height = Math.max(20, ((ev.end - ev.start) / totalMins) * totalHeight);
+        // No height floor here on purpose: pxPerHour above is already
+        // derived so the week's shortest real block lands at roughly
+        // CAL_MIN_BLOCK_PX tall. Adding a floor on top of that would
+        // re-introduce the original bug — a block rendering taller than
+        // its true time slot and visually eating into whichever
+        // block comes right after it. Only pathologically short blocks
+        // (shorter than what CAL_MAX_PX_PER_HOUR's cap can comfortably
+        // fit) end up as thin slivers instead; they stay perfectly
+        // positioned, just less readable, which is the right trade-off.
+        const height = ((ev.end - ev.start) / totalMins) * totalHeight;
         const bg = ev.color || null;
         const widthPct = 100 / laneCount;
         const leftPct = lane * widthPct;
