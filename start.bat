@@ -2,11 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
-title StudyTracker v1
+title StudyTracker v2.0
 
 echo.
 echo ================================================
-echo    StudyTracker v1.3
+echo    StudyTracker v2.0
 echo    Study Tracking Dashboard
 echo    Live to love. Love to learn. Learn to live.
 echo ================================================

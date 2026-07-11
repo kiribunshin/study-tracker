@@ -1,4 +1,4 @@
-/* StudyTracker v1.3 — Themes
+/* StudyTracker v2.0 — Themes
    Overhauled palette system: every theme now defines a fuller set of
    tokens (soft accent tints, gradients, elevated shadows) so components
    can use real depth and color instead of flat single-tone blocks. */
@@ -218,6 +218,35 @@
   --shadow: 0 2px 12px rgba(0,0,0,.3);
   --shadow-lg: 0 8px 32px rgba(0,0,0,.4);
   --shadow-sm: 0 1px 4px rgba(0,0,0,.25);
+}
+
+/* Aurora (Market-purchasable — cool teal/violet northern-lights dark) */
+[data-theme="aurora"] {
+  --bg: #06111a; --bg2: #0c1c2a; --bg3: #122a3d; --bg4: #1c3d54;
+  --border: #1c3d54; --accent: #45e8c4; --accent2: #7c5cff; --accent3: #45c4e8;
+  --green: #45e8a0; --amber: #ffd166; --red: #ff6b8b; --gold: #d4ff66;
+  --text: #d9f5ef; --textdim: #6f9aa5;
+  --accent-soft: rgba(69,232,196,.10);
+  --accent-soft-2: rgba(124,92,255,.18);
+  --gradient: linear-gradient(135deg, var(--accent), var(--accent2) 55%, var(--accent3));
+  --shadow: 0 2px 16px rgba(69,232,196,.16);
+  --shadow-lg: 0 8px 40px rgba(124,92,255,.22), 0 0 60px rgba(69,232,196,.14);
+  --shadow-sm: 0 1px 6px rgba(69,232,196,.1);
+  --glow: 0 0 14px rgba(124,92,255,.3);
+}
+
+/* Velvet (Market-purchasable — deep plum/magenta luxury dark) */
+[data-theme="velvet"] {
+  --bg: #170a17; --bg2: #221129; --bg3: #301a3a; --bg4: #452750;
+  --border: #452750; --accent: #d946a8; --accent2: #7c2d8f; --accent3: #f0729e;
+  --green: #5fbf8f; --amber: #e0a458; --red: #e0526e; --gold: #e6b84e;
+  --text: #f5e3f0; --textdim: #a582a3;
+  --accent-soft: rgba(217,70,168,.10);
+  --accent-soft-2: rgba(217,70,168,.20);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent));
+  --shadow: 0 2px 16px rgba(217,70,168,.16);
+  --shadow-lg: 0 8px 40px rgba(217,70,168,.24);
+  --shadow-sm: 0 1px 6px rgba(217,70,168,.1);
 }
 
 
@@ -609,7 +638,6 @@ tr:hover td { background: var(--accent-soft); }
   white-space: nowrap;
 }
 .nerds-badge:hover { transform: translateY(-1px); box-shadow: var(--shadow), 0 0 12px color-mix(in srgb, var(--gold) 35%, transparent); }
-.nerds-badge-icon { font-size: 1rem; line-height: 1; }
 .nerds-badge-amount { font-weight: 800; color: var(--gold); }
 .nerds-badge.nerds-gain-pulse { animation: nerdsGainPulse .7s ease-in-out 0s 2; }
 @keyframes nerdsGainPulse {
@@ -617,9 +645,70 @@ tr:hover td { background: var(--accent-soft); }
   50% { transform: translateY(-1px) scale(1.06); }
 }
 
+/* ── Rotating coin (Nerds icon) ──
+   The 8 coin_0N.png files are SEPARATE images, not one spritesheet
+   strip — so this can't be a CSS background-position/steps() trick
+   (that only works on a single combined strip image). Instead,
+   startCoinAnimation() in app.js swaps a real <img>'s src through all
+   8 frames on an interval. coinIcon() (static) just uses coin_01.png
+   directly anywhere a cost needs to be visible at rest, no animation. */
+.coin-icon { image-rendering: pixelated; vertical-align: middle; flex-shrink: 0; }
+.coin-icon-animated, .nerds-badge-icon-animated {
+  image-rendering: pixelated; flex-shrink: 0; display: inline-block; object-fit: contain;
+}
+.nerds-badge-icon-animated { width: 18px; height: 18px; }
+
 .xp-card { background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft-2)); }
 .xp-progress-track { width: 100%; height: 10px; border-radius: 6px; background: var(--bg4); overflow: hidden; }
 .xp-progress-fill { height: 100%; background: var(--gradient); border-radius: 6px; transition: width .5s ease; }
+
+/* ── Botanarium ── */
+.pixel-sprite { image-rendering: pixelated; display: block; }
+.plant-card { display: flex; flex-direction: column; border-width: 2px; }
+.yield-chip {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 20px; background: var(--bg3);
+  border: 1px solid var(--gold); font-size: var(--font-xs); font-weight: 700;
+  color: var(--gold); white-space: nowrap; flex-shrink: 0;
+}
+
+/* ── Inventory / item slots ── */
+.item-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.item-slot {
+  position: relative; aspect-ratio: 1; border-radius: var(--r-sm); cursor: pointer;
+  background-image: url('/sprites/gui/item-slot.png'); background-size: cover; background-position: center;
+  background-color: var(--bg3); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform var(--trans-fast), box-shadow var(--trans-fast);
+}
+.item-slot:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.item-slot-empty { cursor: default; opacity: .5; }
+.item-slot-empty:hover { transform: none; box-shadow: none; }
+.item-slot-icon { width: 70%; height: 70%; object-fit: contain; image-rendering: pixelated; }
+.item-slot-qty {
+  position: absolute; bottom: 2px; right: 4px; font-size: var(--font-xxs); font-weight: 800;
+  color: var(--text); text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg);
+}
+
+/* ── Clementine's Book of Wonders — IEEE-style two-column entries ── */
+.book-modal-content { max-width: 800px; width: 92%; }
+.book-entry-header { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 16px; }
+.book-entry-image { width: 160px; height: 160px; object-fit: cover; border-radius: var(--r-sm); border: 1px solid var(--border); flex-shrink: 0; }
+.book-classification-table { margin-bottom: 18px; font-size: var(--font-s); }
+.book-classification-table td { padding: 3px 10px 3px 0; border: none; }
+.book-two-column {
+  column-count: 2; column-gap: 28px; column-rule: 1px solid var(--border);
+  font-size: var(--font-s); line-height: 1.65;
+}
+.book-column { break-inside: avoid-column; }
+.book-two-column h3 { font-size: var(--font-s); text-transform: uppercase; letter-spacing: .5px; color: var(--accent); margin: 14px 0 6px; }
+.book-two-column p { margin-bottom: 10px; }
+.book-fact-list { padding-left: 18px; }
+.book-fact-list li { margin-bottom: 8px; }
+@media (max-width: 640px) {
+  .book-two-column { column-count: 1; }
+  .book-entry-header { flex-direction: column; align-items: center; text-align: center; }
+}
 
 .xp-toast-container {
   position: fixed; top: 70px; right: 18px; z-index: 2100;

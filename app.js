@@ -1,4 +1,4 @@
-/* StudyTracker v1.3 — Frontend */
+/* StudyTracker v2.0 — Frontend */
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -230,18 +230,37 @@ function updateTopLevelBar() {
   ]));
 }
 
+let nerdsBadgeCoinInterval = null;
 function updateNerdsBadge() {
   const badge = $('#nerdsBadge');
   if (!badge) return;
   if (!gamification) {
     badge.classList.add('hidden');
     badge.innerHTML = '';
+    if (nerdsBadgeCoinInterval) { clearInterval(nerdsBadgeCoinInterval); nerdsBadgeCoinInterval = null; }
     return;
   }
   badge.classList.remove('hidden');
-  badge.innerHTML = '';
-  badge.appendChild(el('span', { class: 'nerds-badge-icon', text: '🪙' }));
-  badge.appendChild(el('span', { class: 'nerds-badge-amount', text: Math.round(gamification.nerds || 0).toLocaleString() }));
+  // updateNerdsBadge() runs on basically every data refresh — only
+  // build the coin + start its interval ONCE and just update the
+  // amount text after that, instead of wiping and recreating the <img>
+  // (and leaking a new setInterval) every single time.
+  let coinImg = badge.querySelector('.nerds-badge-icon-animated');
+  let amountEl = badge.querySelector('.nerds-badge-amount');
+  if (!coinImg) {
+    badge.innerHTML = '';
+    coinImg = el('img', { src: '/sprites/nerds/coin_01.png', class: 'nerds-badge-icon-animated' });
+    amountEl = el('span', { class: 'nerds-badge-amount' });
+    badge.appendChild(coinImg);
+    badge.appendChild(amountEl);
+    if (nerdsBadgeCoinInterval) clearInterval(nerdsBadgeCoinInterval);
+    nerdsBadgeCoinInterval = setInterval(() => {
+      const next = (parseInt(coinImg.dataset.frame || '1', 10) % COIN_ANIM_FRAME_COUNT) + 1;
+      coinImg.dataset.frame = next;
+      coinImg.src = `/sprites/nerds/coin_${String(next).padStart(2, '0')}.png`;
+    }, 1000 / COIN_ANIM_FPS);
+  }
+  amountEl.textContent = Math.round(gamification.nerds || 0).toLocaleString();
 }
 
 function showDailyCheckInPopup(checkIn, g) {
@@ -582,14 +601,15 @@ function renderBadgesGrid() {
   );
 }
 
-function renderMasteryGrid() {
-  if (!gamification || !gamification.mastery) return el('div', { class: 'text-dim text-sm', text: gamificationError ? 'Mastery could not be loaded.' : 'No mastery yet. Add subjects or skills to start building it.' });
-  if (!gamification.mastery.length) return el('div', { class: 'text-dim text-sm', text: 'Add subjects/skills to start earning mastery.' });
+function renderMasteryGrid(filterType, emptyHint) {
+  if (!gamification || !gamification.mastery) return el('div', { class: 'text-dim text-sm', text: gamificationError ? 'Mastery could not be loaded.' : 'No mastery yet.' });
+  const items = filterType ? gamification.mastery.filter(m => m.type === filterType) : gamification.mastery;
+  if (!items.length) return el('div', { class: 'text-dim text-sm', text: emptyHint || 'Nothing here yet.' });
   return el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(150px,1fr))' },
-    gamification.mastery.map(m => {
+    items.map(m => {
       const color = m.tier_name ? TIER_COLORS[m.tier_name] : 'var(--border)';
       return el('div', { class: 'stat-card', style: `border-color:${color}` }, [
-        el('div', { style: 'font-size:1.2rem', text: m.type === 'skill' ? '🎯' : '📚' }),
+        el('div', { style: 'font-size:1.2rem', text: m.type === 'skill' ? '🎯' : (m.type === 'category' ? '🗂' : '📚') }),
         el('div', { class: 'stat-label', style: 'margin-top:6px;font-weight:600', text: m.name }),
         el('div', { style: `font-weight:800;color:${color}`, text: m.tier_name || 'Unranked' }),
         el('div', { class: 'text-dim', style: 'font-size:10px', text: m.next_threshold ? `${Math.round(m.minutes)} / ${m.next_threshold} min` : `Maxed (${Math.round(m.minutes)}min)` })
@@ -661,6 +681,18 @@ async function loadConfig() {
   } catch (e) { cachedConfig = null; }
 }
 
+// Subjects/skills/categories being added or removed changes mastery
+// entries (a brand-new skill needs to appear at 0 progress; a deleted
+// one needs to disappear) — but mastery lives in `gamification`, a
+// separately-cached object that loadConfig() alone never touches. Using
+// this instead of a bare loadConfig() after those specific actions is
+// what makes Progression reflect the change immediately instead of
+// only after a full page reload.
+async function loadConfigAndGamification() {
+  await loadConfig();
+  await loadGamification();
+}
+
 async function loadData() {
   if (!currentProfile) return;
   try {
@@ -689,6 +721,8 @@ async function render() {
       case 'attendance': await renderAttendance(c); break;
       case 'exams': await renderExams(c); break;
       case 'events': await renderEvents(c); break;
+      case 'botanarium': await renderBotanarium(c); break;
+      case 'inventory': await renderInventory(c); break;
       case 'stats': await renderStats(c); break;
       case 'progression': await renderProgression(c); break;
       case 'settings': await renderSettings(c); break;
@@ -2005,7 +2039,14 @@ async function renderSelfStudy(c) {
 }
 
 function showAddSelfStudyModal() {
+  const now = new Date();
   const dateInput = el('input', { type: 'date', value: todayStr() });
+  // Defaults to the current local hour/minute — matches the old
+  // implicit behavior (records used to always silently timestamp
+  // themselves "now" regardless of the chosen date), but now it's an
+  // editable field instead of a hidden assumption, so a backdated
+  // entry can get a sensible time instead of inheriting today's clock.
+  const timeInput = el('input', { type: 'time', value: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` });
   const subjSel = el('select', {}, [
     el('option', { value: '', text: 'Select subject...' }),
     ...(cachedConfig?.subjects || []).map(s => el('option', { value: s.id, text: s.name })),
@@ -2028,7 +2069,10 @@ function showAddSelfStudyModal() {
       el('div', { class: 'modal-title', text: 'Add Self-Study Record' }),
       el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
     ]),
-    el('label', { text: 'Date' }), dateInput,
+    el('div', { class: 'row' }, [
+      el('div', { class: 'flex-1' }, [el('label', { text: 'Date' }), dateInput]),
+      el('div', { class: 'flex-1' }, [el('label', { text: 'Time' }), timeInput])
+    ]),
     el('label', { text: 'Subject / Skill' }), subjSel,
     el('label', { text: 'Minutes' }), minutesInput,
     el('label', { text: 'Difficulty' }), el('div', { class: 'row' }, [difficultyInput, difficultyLabel]),
@@ -2039,6 +2083,7 @@ function showAddSelfStudyModal() {
         const isSkill = subjSel.value.startsWith('skill_');
         const payload = {
           date: dateInput.value,
+          time: timeInput.value,
           minutes: parseInt(minutesInput.value) || 0,
           difficulty: parseInt(difficultyInput.value),
           status: statusSel.value,
@@ -2570,6 +2615,523 @@ function editEvent(record) {
 // ═══════════════════════════════════════════
 // STATISTICS
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// BOTANARIUM
+// ═══════════════════════════════════════════
+let botanariumCatalog = null;   // cached /botanarium/catalog response (static-ish, per profile)
+let bookOfWonders = null;       // cached /book_of_wonders response (fully static, global)
+
+async function loadBotanariumCatalog() {
+  if (!botanariumCatalog) {
+    try { botanariumCatalog = await api(`/api/${currentProfile}/botanarium/catalog`); }
+    catch (e) { botanariumCatalog = null; }
+  }
+  return botanariumCatalog;
+}
+async function loadBookOfWonders() {
+  if (!bookOfWonders) {
+    try { bookOfWonders = await api('/api/book_of_wonders'); }
+    catch (e) { bookOfWonders = null; }
+  }
+  return bookOfWonders;
+}
+
+const COIN_ANIM_FRAME_COUNT = 8;
+const COIN_ANIM_FPS = 10;
+
+function coinIcon(size) {
+  // Static coin — used anywhere a Nerds cost/amount is shown inline
+  // (buy buttons, chips, etc.) so the cost is always visible without
+  // needing to hover. The animated version (coinIconAnimated) is only
+  // used for the one "this is currently earning/ticking" spot per card.
+  return el('img', { src: '/sprites/nerds/coin_01.png', class: 'coin-icon', style: `width:${size||16}px;height:${size||16}px` });
+}
+// The 8 coin frames are separate PNG files (coin_01.png..coin_08.png),
+// not one combined spritesheet strip — so this can't be done with a
+// CSS background-position/steps() trick (that only works against a
+// single strip image; against 8 separate files it just shows one tiny
+// frame stretched/mispositioned, which is the "blinks to nothing" bug).
+// The straightforward, genuinely trivial fix for a separate-frame
+// sequence like this is exactly what's below: a real <img>, and a
+// setInterval that swaps its src through the frame list. No animation
+// library needed for something this simple — that's really only worth
+// reaching for if you have dozens of these or need easing/blending.
+function coinIconAnimated(size) {
+  const s = size || 20;
+  const img = el('img', { src: '/sprites/nerds/coin_01.png', class: 'coin-icon-animated', style: `width:${s}px;height:${s}px` });
+  startCoinAnimation(img);
+  return img;
+}
+function startCoinAnimation(imgEl) {
+  let frame = 1;
+  const intervalId = setInterval(() => {
+    frame = (frame % COIN_ANIM_FRAME_COUNT) + 1;
+    imgEl.src = `/sprites/nerds/coin_${String(frame).padStart(2, '0')}.png`;
+  }, 1000 / COIN_ANIM_FPS);
+  // Stop the interval once the <img> is no longer on the page —
+  // otherwise every re-render of the topbar badge (which happens on
+  // basically every data refresh) would leak another running interval
+  // forever, each one still trying to update a detached, invisible node.
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(imgEl)) {
+      clearInterval(intervalId);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+function nerdsAmount(amount, size) {
+  return el('span', { class: 'row', style: 'display:inline-flex;gap:4px;align-items:center;white-space:nowrap' }, [
+    coinIcon(size || 14), el('span', { text: Math.round(amount * 10) / 10 })
+  ]);
+}
+
+async function renderBotanarium(c) {
+  c.innerHTML = '<div class="text-center text-dim" style="padding:40px">Loading the Botanarium...</div>';
+  let catalog, plantsResp;
+  try {
+    catalog = await loadBotanariumCatalog();
+    plantsResp = await api(`/api/${currentProfile}/plants`);
+  } catch (e) {
+    c.innerHTML = `<div class="card"><p>Error loading the Botanarium: ${esc(e.message)}</p></div>`;
+    return;
+  }
+  if (!catalog) { c.innerHTML = `<div class="card"><p>Could not load the plant catalog.</p></div>`; return; }
+
+  c.innerHTML = '';
+  c.appendChild(el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px' }, [
+    el('h2', { text: '🌿 The Botanarium' }),
+    el('button', { class: 'btn btn-sm btn-outline', text: '📖 Clementine\'s Book of Wonders', onclick: showBookOfWonders })
+  ]));
+
+  // Botanarium Bank card
+  const bank = plantsResp.bank;
+  const bankCard = el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: '🏦 Botanarium Bank' }),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Every plant\'s passive Nerds are capped by how much you can claim in any rolling 24 hours — that cap is set by your Bank level, not by this week\'s activity, so vacations and slow weeks never waste a plant\'s worth.' }),
+    el('div', { class: 'row', style: 'gap:20px;flex-wrap:wrap;align-items:center' }, [
+      el('div', {}, [
+        el('div', { style: 'font-size:1.3rem;font-weight:800', text: `Bank Level ${bank.level}` }),
+        el('div', { class: 'text-dim text-sm', text: `24h claim cap: ` }, ),
+      ]),
+    ]),
+  ]);
+  const capLine = el('div', { class: 'row', style: 'gap:6px;align-items:center;margin:6px 0' }, [
+    nerdsAmount(bank.daily_claim_cap, 15),
+    el('span', { class: 'text-dim text-sm', text: `per 24h · used ${plantsResp.claimed_last_24h} / ${bank.daily_claim_cap} · ${plantsResp.claim_remaining_24h} remaining` })
+  ]);
+  bankCard.appendChild(capLine);
+  if (bank.next_level) {
+    const canUpgrade = bank.can_upgrade;
+    bankCard.appendChild(el('div', { class: 'row', style: 'gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px' }, [
+      el('span', { class: 'text-sm', text: `Next: Level ${bank.next_level} → ${BOTANARIUM_BANK_NEXT_CAP_HINT(catalog, bank.next_level)} cap/24h` }),
+      el('span', { class: 'text-dim text-sm', text: `Needs ${bank.next_hours_required}h lifetime study (${bank.lifetime_hours}h so far) + ` }),
+      nerdsAmount(bank.next_nerds_cost, 14),
+      el('button', { class: `btn btn-sm ${canUpgrade ? '' : 'btn-outline'}`, text: canUpgrade ? 'Upgrade Bank' : 'Not Yet Eligible', disabled: !canUpgrade, onclick: async () => {
+        try {
+          await api(`/api/${currentProfile}/botanarium/bank/upgrade`, { method: 'POST' });
+          await maybeShowLevelUp({ skipXpToast: true });
+          render();
+        } catch (e) { alert(e.message); }
+      } })
+    ]));
+  } else {
+    bankCard.appendChild(el('div', { class: 'text-dim text-sm mt-8', text: 'Your Botanarium Bank is fully upgraded.' }));
+  }
+  c.appendChild(bankCard);
+
+  // Owned plant cards
+  if (plantsResp.plants.length) {
+    c.appendChild(el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(320px,1fr))' },
+      plantsResp.plants.map(p => renderPlantCard(p, catalog))
+    ));
+  }
+
+  // Not-yet-owned plants (acquire via seed)
+  const ownedTypes = new Set(plantsResp.plants.map(p => p.plant_type));
+  const notOwned = catalog.catalog.filter(p => !ownedTypes.has(p.id));
+  if (notOwned.length) {
+    c.appendChild(el('div', { class: 'card fade-in' }, [
+      el('div', { class: 'card-title', text: '🌱 Not Yet Planted' }),
+      el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(220px,1fr))' },
+        notOwned.map(p => el('div', { class: 'stat-card' }, [
+          el('img', { src: p.sprites[0], class: 'pixel-sprite', style: 'width:64px;height:64px;margin:0 auto', onerror: (e) => { e.target.style.display = 'none'; } }),
+          el('div', { class: 'stat-label', style: 'margin-top:8px;font-weight:700', text: p.name }),
+          el('div', { class: 'text-dim', style: 'font-size:10px;font-style:italic', text: p.scientific_name }),
+          el('div', { class: 'row', style: 'justify-content:center;gap:6px;margin-top:8px', }, [nerdsAmount(p.seed_buy_price, 14)]),
+          el('button', { class: 'btn btn-sm mt-8', text: 'Buy Seed & Plant', onclick: () => buySeedAndPlant(p) })
+        ]))
+      )
+    ]));
+  }
+
+  // Info panel
+  c.appendChild(el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: 'ℹ️ How Plant Growth Works' }),
+    el('div', { class: 'col', style: 'gap:8px;font-size:var(--font-s)' }, [
+      el('div', {}, [el('strong', { text: 'Growth: ' }), el('span', { text: 'Every plant levels up (1 through 5) purely from hours of studying/working since you acquired it — no watering, no separate action. Fertilizer (bought with Nerds) speeds this up.' })]),
+      el('div', {}, [el('strong', { text: 'Bonuses: ' }), el('span', { text: 'Each level permanently unlocks one bonus. Colors on the card border always mean the same level across every plant.' })]),
+      el('div', {}, [el('strong', { text: 'Passive Yield: ' }), el('span', { text: 'Every plant generates Nerds passively over real time, claimable any time — up to 24 hours\' worth banks up, the rest is lost, so check back regularly. The rate scales with how much you\'ve studied THIS week (a slow week still gives a trickle, never zero).' })]),
+      el('div', {}, [el('strong', { text: 'Prestige: ' }), el('span', { text: 'Once a plant hits Level 5, continued study hours build toward Prestige tiers instead. Each tier grants one point to permanently boost any one of the plant\'s 5 bonuses.' })]),
+      el('div', {}, [el('strong', { text: 'Seeds: ' }), el('span', { text: 'A plant\'s first seed plants it. Any extra seeds (bought, or occasionally earned from that plant\'s own bonuses) can only upgrade its Fast Grower bonus, or be sold in the Market.' })]),
+    ]),
+    el('div', { class: 'row', style: 'gap:14px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)' }, [
+      ...catalog.level_colors.map((color, i) => el('span', { class: 'row', style: 'gap:5px;align-items:center' }, [
+        el('span', { style: `width:12px;height:12px;border-radius:50%;background:${color};display:inline-block` }),
+        el('span', { class: 'text-dim text-sm', text: `Level ${i + 1}` })
+      ])),
+      ...catalog.prestige_colors.slice(0, 3).map((color, i) => el('span', { class: 'row', style: 'gap:5px;align-items:center' }, [
+        el('span', { style: `width:12px;height:12px;border-radius:50%;background:${color};display:inline-block` }),
+        el('span', { class: 'text-dim text-sm', text: catalog.prestige_names[i] })
+      ])),
+      el('span', { class: 'text-dim text-sm', text: '...and beyond' })
+    ])
+  ]));
+}
+
+function BOTANARIUM_BANK_NEXT_CAP_HINT(catalog, nextLevel) {
+  const tier = (catalog.bank_levels || []).find(b => b.level === nextLevel);
+  return tier ? tier.daily_claim_cap : '?';
+}
+
+function renderPlantCard(p, catalog) {
+  const card = el('div', { class: 'stat-card plant-card', style: `border-color:${p.color};text-align:left` });
+  const header = el('div', { class: 'row', style: 'gap:12px;align-items:flex-start' }, [
+    el('img', { src: p.sprite, class: 'pixel-sprite', style: 'width:72px;height:72px;flex-shrink:0', onerror: (e) => { e.target.style.display = 'none'; } }),
+    el('div', { class: 'flex-1' }, [
+      el('div', { style: 'font-weight:800;font-size:1.05rem', text: p.name }),
+      el('div', { class: 'text-dim text-sm', style: 'font-style:italic', text: p.scientific_name }),
+      el('div', { style: `display:inline-block;margin-top:4px;padding:2px 9px;border-radius:20px;background:${p.color}22;border:1px solid ${p.color};color:${p.color};font-weight:700;font-size:var(--font-xxs)`, text: p.tier_name })
+    ]),
+    el('div', { class: 'yield-chip', title: 'Current passive Nerds/hour' }, [
+      coinIcon(13), el('span', { text: `${p.yield_per_hour_effective}/h` })
+    ])
+  ]);
+  card.appendChild(header);
+
+  // Growth bar
+  if (p.hours_for_next_level) {
+    const pct = Math.min(100, (p.hours_into_level / p.hours_for_next_level) * 100);
+    card.appendChild(el('div', { class: 'mt-8' }, [
+      el('div', { class: 'xp-progress-track' }, [el('div', { class: 'xp-progress-fill', style: `width:${pct}%;background:${p.color}` })]),
+      el('div', { class: 'text-dim text-sm mt-8', text: `${fmt(p.hours_into_level, 1)}h / ${p.hours_for_next_level}h to Level ${p.level + 1}` })
+    ]));
+  } else if (p.prestige_tier > 0) {
+    card.appendChild(el('div', { class: 'text-sm mt-8', text: `${catalog.prestige_names[p.prestige_tier - 1] || 'Prestige'} · ${p.prestige_points_available} buff point${p.prestige_points_available === 1 ? '' : 's'} available` }));
+  } else {
+    card.appendChild(el('div', { class: 'text-dim text-sm mt-8', text: 'Fully grown — hours now build toward Prestige.' }));
+  }
+
+  // Claim
+  const claimRow = el('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:10px' }, [
+    el('span', { class: 'text-sm', text: 'Ready to claim:' }),
+    nerdsAmount(p.claimable_nerds, 15),
+    el('button', { class: 'btn btn-sm btn-success', text: 'Claim', disabled: p.claimable_nerds <= 0, onclick: async () => {
+      try {
+        const resp = await api(`/api/${currentProfile}/plants/${p.id}/claim`, { method: 'POST' });
+        if (resp.amount > 0) {
+          showSessionXpToast(0, 0, 0, resp.amount);
+          if (resp.seed_dropped) alert(`🌱 A ${resp.seed_item.replace('_', ' ')} dropped into your inventory!`);
+        } else if (resp.reason) {
+          alert(resp.reason);
+        }
+        await maybeShowLevelUp({ skipXpToast: true });
+        render();
+      } catch (e) { alert(e.message); }
+    } })
+  ]);
+  card.appendChild(claimRow);
+
+  // Bonuses
+  const bonusList = el('div', { class: 'mt-8' }, p.bonuses.map(b => el('div', {
+    class: 'row', style: `justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);opacity:${b.unlocked ? 1 : .45}`
+  }, [
+    el('span', { class: 'text-sm', text: `${b.unlocked ? '✓' : '🔒'} ${b.label} (Lv${b.level_required})` }),
+    el('span', { class: 'text-sm', style: 'font-weight:700', text: b.unlocked ? `+${b.value}${b.unit}` : '—' })
+  ])));
+  card.appendChild(bonusList);
+
+  // Actions: Fertilize, Fast Grower upgrade, Prestige allocation
+  const actions = el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-top:10px' });
+  if (p.fertilizer_stacks < catalog.fertilizer.max_stacks) {
+    const cost = Math.round(catalog.fertilizer.base_cost * Math.pow(catalog.fertilizer.cost_multiplier, p.fertilizer_stacks) * 10) / 10;
+    actions.appendChild(el('button', { class: 'btn btn-sm btn-outline', onclick: async () => {
+      try { await api(`/api/${currentProfile}/plants/${p.id}/fertilize`, { method: 'POST' }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
+      catch (e) { alert(e.message); }
+    } }, [el('span', { text: `Fertilize (${p.fertilizer_stacks}/${catalog.fertilizer.max_stacks}) ` }), coinIcon(12), el('span', { text: cost })]));
+  }
+  const fgBonus = p.bonuses.find(b => b.id === 'fast_grower');
+  if (fgBonus && fgBonus.unlocked && p.fast_grower_seed_tiers < catalog.fast_grower.max_tiers) {
+    const seedCost = catalog.fast_grower.tier_base_cost * Math.pow(2, p.fast_grower_seed_tiers);
+    actions.appendChild(el('button', { class: 'btn btn-sm btn-outline', text: `Upgrade Fast Grower (${seedCost} seeds)`, onclick: async () => {
+      try { await api(`/api/${currentProfile}/plants/${p.id}/upgrade_fast_grower`, { method: 'POST' }); render(); }
+      catch (e) { alert(e.message); }
+    } }));
+  }
+  if (p.prestige_points_available > 0) {
+    actions.appendChild(el('button', { class: 'btn btn-sm btn-amber', text: `Allocate Prestige Point (${p.prestige_points_available})`, onclick: () => showPrestigeAllocationModal(p) }));
+  }
+  if (actions.children.length) card.appendChild(actions);
+
+  return card;
+}
+
+function showPrestigeAllocationModal(p) {
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [
+      el('div', { class: 'modal-title', text: `Allocate a Prestige Point — ${p.name}` }),
+      el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+    ]),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Pick which bonus to permanently boost. You have ' + p.prestige_points_available + ' point(s) available.' }),
+    el('div', { class: 'col', style: 'gap:8px' }, p.bonuses.map(b => el('button', { class: 'btn btn-outline', style: 'justify-content:space-between', onclick: async () => {
+      try {
+        await api(`/api/${currentProfile}/plants/${p.id}/allocate_prestige`, { method: 'POST', body: JSON.stringify({ bonus_id: b.id }) });
+        closeModal(); render();
+      } catch (e) { alert(e.message); }
+    } }, [el('span', { text: b.label }), el('span', { class: 'text-dim', text: `+${b.value}${b.unit} now` })])))
+  ]);
+  showModal(content);
+}
+
+async function buySeedAndPlant(plantDef) {
+  try {
+    await api(`/api/${currentProfile}/shop/buy`, { method: 'POST', body: JSON.stringify({ item_type: plantDef.seed_item, qty: 1 }) });
+    await api(`/api/${currentProfile}/inventory/use_seed`, { method: 'POST', body: JSON.stringify({ item_type: plantDef.seed_item }) });
+    await maybeShowLevelUp({ skipXpToast: true });
+    render();
+  } catch (e) { alert(e.message); }
+}
+
+// ── Clementine's Book of Wonders ──
+function showBookOfWonders() {
+  showModal(el('div', { class: 'text-center', style: 'padding:20px' }, [el('div', { class: 'text-dim', text: 'Loading the Book of Wonders...' })]));
+  loadBookOfWonders().then(book => {
+    if (!book) { closeModal(); alert('Could not load the Book of Wonders.'); return; }
+    renderBookIndex(book);
+  });
+}
+
+function renderBookIndex(book) {
+  const content = el('div', { class: 'book-modal' }, [
+    el('div', { class: 'modal-header' }, [
+      el('div', { class: 'modal-title', text: '📖 Clementine\'s Book of Wonders' }),
+      el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+    ]),
+    el('div', { class: 'col', style: 'gap:18px' }, book.categories.map(cat => {
+      const subEntries = cat.subcategories.map(sub => {
+        const entries = book.entries.filter(e => e.category === cat.id && e.subcategory === sub.id);
+        if (!entries.length) return null;
+        return el('div', { style: 'margin-bottom:8px' }, [
+          el('div', { class: 'text-dim text-sm', style: 'font-weight:700;margin-bottom:4px', text: sub.label }),
+          el('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, entries.map(en => el('button', {
+            class: 'btn btn-sm btn-outline', text: en.common_name, onclick: () => renderBookEntry(book, en)
+          })))
+        ]);
+      }).filter(Boolean);
+      if (!subEntries.length) return null;
+      return el('div', {}, [el('div', { style: 'font-weight:800;margin-bottom:8px', text: cat.label }), ...subEntries]);
+    }).filter(Boolean))
+  ]);
+  showModal(content);
+  document.getElementById('modalContent').classList.add('book-modal-content');
+}
+
+function renderBookEntry(book, entry) {
+  const content = el('div', { class: 'book-modal book-entry' }, [
+    el('div', { class: 'modal-header' }, [
+      el('div', { class: 'modal-title', text: '📖 Clementine\'s Book of Wonders' }),
+      el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+    ]),
+    el('button', { class: 'btn btn-sm btn-outline mb-16', text: '← Back to Index', onclick: () => renderBookIndex(book) }),
+    el('div', { class: 'book-entry-header' }, [
+      el('img', { src: entry.image, class: 'book-entry-image', onerror: (e) => { e.target.style.display = 'none'; } }),
+      el('div', {}, [
+        el('h2', { text: entry.common_name }),
+        el('div', { class: 'text-dim', style: 'font-style:italic;font-size:1.1rem', text: entry.scientific_name }),
+        el('div', { class: 'text-dim text-sm', text: `Family: ${entry.family}` })
+      ])
+    ]),
+    el('table', { class: 'book-classification-table' }, [
+      el('tbody', {}, entry.classification.map(([rank, val]) => el('tr', {}, [
+        el('td', { class: 'text-dim', style: 'font-weight:700', text: rank }), el('td', { text: val })
+      ])))
+    ]),
+    el('div', { class: 'book-two-column' }, [
+      el('div', { class: 'book-column' }, [
+        el('h3', { text: 'Summary' }),
+        el('p', { text: entry.summary }),
+        el('h3', { text: 'History' }),
+        ...entry.history.split('\n\n').map(para => el('p', { text: para }))
+      ]),
+      el('div', { class: 'book-column' }, [
+        el('h3', { text: 'Fun Facts' }),
+        el('ul', { class: 'book-fact-list' }, entry.fun_facts.map(f => el('li', { text: f })))
+      ])
+    ])
+  ]);
+  showModal(content);
+  document.getElementById('modalContent').classList.add('book-modal-content');
+}
+
+// ═══════════════════════════════════════════
+// INVENTORY
+// ═══════════════════════════════════════════
+async function renderInventory(c) {
+  c.innerHTML = '<div class="text-center text-dim" style="padding:40px">Loading Inventory...</div>';
+  let inv, shop, catalog;
+  try {
+    inv = await api(`/api/${currentProfile}/inventory`);
+    shop = await api(`/api/${currentProfile}/shop/catalog`);
+    catalog = await loadBotanariumCatalog();
+  } catch (e) {
+    c.innerHTML = `<div class="card"><p>Error loading Inventory: ${esc(e.message)}</p></div>`;
+    return;
+  }
+
+  c.innerHTML = '';
+  c.appendChild(el('h2', { style: 'margin-bottom:16px', text: '🎒 Inventory & Shop' }));
+
+  const items = inv.inventory || [];
+  const slotCount = inv.slot_count || 20;
+  // Items of the same item_type already stack automatically into one
+  // slot (qty goes up rather than taking a second slot) — that's
+  // handled server-side. This grid places each stack at its saved
+  // slot_index, and lets you drag a stack onto another slot to
+  // rearrange — including swapping with whatever's already there.
+  const bySlot = {};
+  items.forEach(it => { bySlot[it.slot_index] = it; });
+
+  const slotsGrid = el('div', { class: 'item-slot-grid' });
+  for (let i = 0; i < slotCount; i++) {
+    const item = bySlot[i];
+    if (item) {
+      const shopItem = (shop.items || []).find(s => s.item_type === item.item_type);
+      const slotEl = el('div', {
+        class: 'item-slot', title: shopItem ? shopItem.label : item.item_type,
+        draggable: true,
+        onclick: () => showInventoryItemModal(item, shopItem),
+        ondragstart: (e) => { e.dataTransfer.setData('text/plain', item.item_type); e.currentTarget.classList.add('item-slot-dragging'); },
+        ondragend: (e) => e.currentTarget.classList.remove('item-slot-dragging'),
+        ondragover: (e) => e.preventDefault(),
+        ondrop: async (e) => {
+          e.preventDefault();
+          const draggedType = e.dataTransfer.getData('text/plain');
+          if (!draggedType || draggedType === item.item_type) return;
+          try { await api(`/api/${currentProfile}/inventory/move`, { method: 'POST', body: JSON.stringify({ item_type: draggedType, to_slot: i }) }); render(); }
+          catch (err) { alert(err.message); }
+        }
+      }, [
+        el('img', { src: shopItem ? shopItem.sprite : '', class: 'item-slot-icon', onerror: (e) => { e.target.style.display = 'none'; } }),
+        item.qty > 1 ? el('div', { class: 'item-slot-qty', text: item.qty }) : null
+      ]);
+      slotsGrid.appendChild(slotEl);
+    } else {
+      slotsGrid.appendChild(el('div', {
+        class: 'item-slot item-slot-empty',
+        ondragover: (e) => e.preventDefault(),
+        ondrop: async (e) => {
+          e.preventDefault();
+          const draggedType = e.dataTransfer.getData('text/plain');
+          if (!draggedType) return;
+          try { await api(`/api/${currentProfile}/inventory/move`, { method: 'POST', body: JSON.stringify({ item_type: draggedType, to_slot: i }) }); render(); }
+          catch (err) { alert(err.message); }
+        }
+      }));
+    }
+  }
+  c.appendChild(el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: '📦 Your Items' }),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Same-type items stack into one slot automatically. Drag a slot onto another to rearrange (or swap) them.' }),
+    items.length ? null : el('div', { class: 'text-dim text-sm mb-8', text: 'Your inventory is empty. Buy a seed from the Market below, or earn one from a plant\'s own bonuses.' }),
+    slotsGrid
+  ]));
+
+  // Market
+  c.appendChild(el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: '🏪 Market' }),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Buy seeds to plant new species in the Botanarium, sell off surplus seeds for Nerds, or pick up a cosmetic theme.' }),
+    el('table', {}, [
+      el('thead', {}, el('tr', {}, [el('th', { text: 'Item' }), el('th', { text: 'Buy' }), el('th', { text: 'Sell' }), el('th', { text: 'You Have' }), el('th', { text: '' })])),
+      el('tbody', {}, (shop.items || []).map(it => {
+        const owned = items.find(x => x.item_type === it.item_type);
+        return el('tr', {}, [
+          el('td', {}, el('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
+            el('img', { src: it.sprite, style: 'width:28px;height:28px;image-rendering:pixelated', onerror: (e) => { e.target.style.display = 'none'; } }),
+            el('span', { text: it.label })
+          ])),
+          el('td', {}, nerdsAmount(it.buy_price, 14)),
+          el('td', {}, nerdsAmount(it.sell_price, 14)),
+          el('td', { text: owned ? owned.qty : 0 }),
+          el('td', {}, el('div', { class: 'btn-group' }, [
+            el('button', { class: 'btn btn-sm', text: 'Buy', onclick: async () => {
+              try { await api(`/api/${currentProfile}/shop/buy`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
+              catch (e) { alert(e.message); }
+            } }),
+            el('button', { class: 'btn btn-sm btn-amber', text: 'Sell 1', disabled: !owned || owned.qty < 1, onclick: async () => {
+              try { await api(`/api/${currentProfile}/shop/sell`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); render(); }
+              catch (e) { alert(e.message); }
+            } })
+          ]))
+        ]);
+      }))
+    ])
+  ]));
+
+  // Theme shop — cosmetic themes purchasable with Nerds, separate from
+  // the level-unlocked catalog in Progression.
+  const purchasableThemes = (gamification?.theme_catalog || []).filter(t => t.price);
+  if (purchasableThemes.length) {
+    c.appendChild(el('div', { class: 'card fade-in' }, [
+      el('div', { class: 'card-title', text: '🎨 Theme Shop' }),
+      el('div', { class: 'text-dim text-sm mb-8', text: 'A couple of themes available for purchase outright, on top of the ones you unlock by leveling up.' }),
+      el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(160px,1fr))' },
+        purchasableThemes.map(t => {
+          const owned = (gamification.unlocked_themes || []).includes(t.id);
+          return el('div', { class: 'stat-card' }, [
+            el('div', { style: 'font-size:1.4rem', text: '🎨' }),
+            el('div', { class: 'stat-label', style: 'margin-top:6px;font-weight:600', text: t.label }),
+            owned
+              ? el('div', { class: 'text-dim', style: 'font-size:10px;margin-top:6px', text: 'Owned' })
+              : el('button', { class: 'btn btn-sm mt-8', onclick: async () => {
+                  try { await api(`/api/${currentProfile}/shop/buy_theme`, { method: 'POST', body: JSON.stringify({ theme_id: t.id }) }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
+                  catch (e) { alert(e.message); }
+                } }, [nerdsAmount(t.price, 13)])
+          ]);
+        })
+      )
+    ]));
+  }
+}
+
+function showInventoryItemModal(item, shopItem) {
+  const plantDef = (botanariumCatalog?.catalog || []).find(p => p.seed_item === item.item_type);
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [
+      el('div', { class: 'modal-title', text: shopItem ? shopItem.label : item.item_type }),
+      el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+    ]),
+    el('div', { class: 'text-center' }, [
+      el('img', { src: shopItem ? shopItem.sprite : '', style: 'width:64px;height:64px;image-rendering:pixelated' })
+    ]),
+    el('div', { class: 'text-dim text-sm text-center mb-16', text: `You have ${item.qty}` }),
+    el('div', { class: 'btn-group', style: 'justify-content:center' }, [
+      plantDef ? el('button', { class: 'btn', text: 'Use (Plant)', onclick: async () => {
+        try {
+          await api(`/api/${currentProfile}/inventory/use_seed`, { method: 'POST', body: JSON.stringify({ item_type: item.item_type }) });
+          closeModal(); render();
+        } catch (e) { alert(e.message); }
+      } }) : null,
+      el('button', { class: 'btn btn-amber', text: `Sell 1 for ${shopItem ? shopItem.sell_price : '?'} Nerds`, onclick: async () => {
+        try {
+          await api(`/api/${currentProfile}/shop/sell`, { method: 'POST', body: JSON.stringify({ item_type: item.item_type, qty: 1 }) });
+          closeModal(); render();
+        } catch (e) { alert(e.message); }
+      } })
+    ])
+  ]);
+  showModal(content);
+}
+
 async function renderStats(c) {
   c.innerHTML = '<div class="text-center text-dim" style="padding:40px">Loading statistics...</div>';
   let stats;
@@ -2933,7 +3495,7 @@ async function renderProgression(c) {
           }, [
             el('div', { style: 'font-size:1.4rem', text: isUnlocked ? '🎨' : '👁' }),
             el('div', { class: 'stat-label', style: 'margin-top:6px;font-weight:600', text: t.label }),
-            el('div', { class: 'text-dim', style: 'font-size:10px', text: isUnlocked ? (isActive ? 'Active' : 'Unlocked') : (isPreviewing ? 'Previewing' : `Preview • Lv ${t.level}`) })
+            el('div', { class: 'text-dim', style: 'font-size:10px', text: isUnlocked ? (isActive ? 'Active' : 'Unlocked') : (isPreviewing ? 'Previewing' : (t.price ? `Preview • Buy in Market` : `Preview • Lv ${t.level}`)) })
           ]);
         })
       )
@@ -2952,8 +3514,19 @@ async function renderProgression(c) {
   ]));
 
   c.appendChild(el('div', { class: 'card fade-in' }, [
-    el('div', { class: 'card-title', text: '🎓 Subject & Skill Mastery' }),
-    renderMasteryGrid()
+    el('div', { class: 'card-title', text: '📚 Subject Mastery' }),
+    renderMasteryGrid('subject', 'Add subjects in Settings to start earning mastery.')
+  ]));
+
+  c.appendChild(el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: '🎯 Skill Mastery' }),
+    renderMasteryGrid('skill', 'Add skills in Settings to start earning mastery.')
+  ]));
+
+  c.appendChild(el('div', { class: 'card fade-in' }, [
+    el('div', { class: 'card-title', text: '🗂 Skill Category Mastery' }),
+    el('div', { class: 'text-sm text-dim mb-8', text: "A category's mastery is an automatic aggregate of all its skills' combined progress." }),
+    renderMasteryGrid('category', 'Group skills into a category in Settings to start earning category-level mastery.')
   ]));
 }
 
@@ -2961,7 +3534,7 @@ async function renderProgression(c) {
 // SETTINGS
 // ═══════════════════════════════════════════
 async function renderSettings(c) {
-  const cfg = cachedConfig || { subjects: [], skills: [], academic_years: [] };
+  const cfg = cachedConfig || { subjects: [], skills: [], academic_years: [], skill_categories: [] };
 
   c.innerHTML = '';
   c.appendChild(el('h2', { style: 'margin-bottom:16px', text: '⚙️ Settings' }));
@@ -3169,7 +3742,7 @@ async function renderSettings(c) {
           el('td', {}, el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
             if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session, attendance record, exam, and file linked to this subject too — including all mastery progress earned for it. This cannot be undone.`)) return;
             await api(`/api/${currentProfile}/subjects/${s.id}`, { method: 'DELETE' });
-            await loadConfig(); render();
+            await loadConfigAndGamification(); render();
           } }))
         ]);
           }))
@@ -3181,23 +3754,34 @@ async function renderSettings(c) {
   // Skills
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: '🎯 Skills' }),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Categories group related skills together (e.g. "Software Engineering" holding both "Design" and "Programming Languages"). A category levels up automatically from its skills\' combined mastery — no separate tracking needed.' }),
+    el('div', { class: 'row', style: 'gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end' }, [
+      el('div', {}, [el('label', { text: 'New Category', style: 'margin:0 0 4px' }), el('input', { id: 'newSkillCatName', placeholder: 'e.g. Software Engineering', style: 'width:200px' })]),
+      el('button', { class: 'btn btn-sm btn-outline', text: '+ Add Category', onclick: addSkillCategory })
+    ]),
     el('div', { class: 'row', style: 'gap:8px;margin-bottom:12px;flex-wrap:wrap' }, [
       el('input', { id: 'newSkillName', placeholder: 'Skill name', style: 'width:180px' }),
-      el('input', { id: 'newSkillCat', placeholder: 'Category', style: 'width:120px' }),
+      el('select', { id: 'newSkillCat', style: 'width:auto' }, [
+        el('option', { value: '', text: 'No category' }),
+        ...cfg.skill_categories.map(c => el('option', { value: c.id, text: c.name }))
+      ]),
       el('button', { class: 'btn btn-sm', text: 'Add Skill', onclick: addSkill })
     ]),
     cfg.skills.length ? el('div', { style: 'max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:var(--r-sm)' }, [
       el('table', { style: 'margin:0' }, [
         el('thead', {}, el('tr', {}, [el('th', { text: 'Name' }), el('th', { text: 'Category' }), el("th", { text: "" })])),
-        el('tbody', {}, cfg.skills.map(s => el('tr', {}, [
+        el('tbody', {}, cfg.skills.map(s => {
+          const cat = cfg.skill_categories.find(c => c.id === s.category_id);
+          return el('tr', {}, [
           el('td', { text: s.name }),
-          el('td', { class: 'text-dim', text: s.category || '—' }),
+          el('td', { class: 'text-dim', text: cat ? cat.name : '—' }),
           el('td', {}, el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
             if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session and file linked to this skill too — including all mastery progress earned for it. This cannot be undone.`)) return;
             await api(`/api/${currentProfile}/skills/${s.id}`, { method: 'DELETE' });
-            await loadConfig(); render();
+            await loadConfigAndGamification(); render();
           } }))
-        ])))
+        ]);
+        }))
       ])
     ]) : el('div', { class: 'text-dim text-sm', text: 'No skills yet.' })
   ]));
@@ -3275,18 +3859,28 @@ async function addSubject() {
       schedule: day ? [{ day, type, start, end }] : []
     }) });
     $('#newSubName').value = '';
-    await loadConfig(); render();
+    await loadConfigAndGamification(); render();
   } catch (e) { alert(e.message); }
 }
 
 async function addSkill() {
   const name = $('#newSkillName').value.trim();
-  const cat = $('#newSkillCat').value.trim();
+  const categoryId = $('#newSkillCat').value;
   if (!name) { alert('Enter name'); return; }
   try {
-    await api(`/api/${currentProfile}/skills`, { method: 'POST', body: JSON.stringify({ name, category: cat, difficulty: 5 }) });
-    $('#newSkillName').value = ''; $('#newSkillCat').value = '';
-    await loadConfig(); render();
+    await api(`/api/${currentProfile}/skills`, { method: 'POST', body: JSON.stringify({ name, category_id: categoryId, difficulty: 5 }) });
+    $('#newSkillName').value = '';
+    await loadConfigAndGamification(); render();
+  } catch (e) { alert(e.message); }
+}
+
+async function addSkillCategory() {
+  const name = $('#newSkillCatName').value.trim();
+  if (!name) { alert('Enter a category name'); return; }
+  try {
+    await api(`/api/${currentProfile}/skill_categories`, { method: 'POST', body: JSON.stringify({ name }) });
+    $('#newSkillCatName').value = '';
+    await loadConfigAndGamification(); render();
   } catch (e) { alert(e.message); }
 }
 

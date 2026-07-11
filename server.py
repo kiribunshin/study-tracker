@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StudyTracker v1.3 — Portable study tracking web app."""
+"""StudyTracker v2.0 — Portable study tracking web app."""
 import os, json, time, hashlib, shutil, math, uuid
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
@@ -12,6 +12,7 @@ app = Flask(__name__)
 # ── Configuration ──
 SAVES_DIR = Path(__file__).parent / "saves"
 SAVES_DIR.mkdir(exist_ok=True)
+SPRITES_DIR = Path(__file__).parent / "sprites"   # /sprites/<category>/<file>.png — see sprite_file() route below
 FILES_DIR_NAME = "_files"  # subdirectory per save for subject/skill files
 DEFAULT_DATA = {
     "self_study": [],
@@ -19,7 +20,11 @@ DEFAULT_DATA = {
     "exams": [],
     "events": [],
     "timers": [],
-    "logins": []
+    "logins": [],
+    "plants": [],          # owned Botanarium plants — see PLANT_DEFS / compute_plant_state()
+    "inventory": [],       # {item_type, qty} stacks — seeds, future sellables, etc.
+    "passive_claims": [],  # {id, plant_id, plant_type, date, created, amount, elapsed_hours, weekly_multiplier}
+    "nerds_spent": []      # {id, date, created, item_type, qty, unit_cost, total_cost} — every Nerds purchase
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -114,7 +119,10 @@ QUEST_VARIETY2_MIN_ITEMS = 2
 QUEST_ATTENDANCE3_MIN_LOGGED = 3
 
 # ── Cosmetic Themes — copy-paste a block below to add a new theme.
-# `id` must match a `[data-theme="..."]` block in styles.css. ──
+# `id` must match a `[data-theme="..."]` block in styles.css. Themes
+# normally unlock by `level`; a theme can instead (or additionally)
+# carry a `price` making it purchasable with Nerds in the Market —
+# set `level` to 0 for a purchase-only theme with no level gate at all. ──
 THEME_CATALOG = [
     {"id": "sakura", "label": "Sakura", "level": 1},
     {"id": "light", "label": "Light", "level": 1},
@@ -131,6 +139,8 @@ THEME_CATALOG = [
     {"id": "mono", "label": "Mono", "level": 80},
     {"id": "candy", "label": "Candy", "level": 100},
     {"id": "coffee", "label": "Coffee", "level": 125},
+    {"id": "aurora", "label": "Aurora", "level": 0, "price": 600},
+    {"id": "velvet", "label": "Velvet", "level": 0, "price": 900},
 ]
 
 # ── Title Tiers — copy-paste a block below to add a new title. Must
@@ -198,8 +208,272 @@ NERDS_LEVELUP_FLAT = 8
 # as studying itself, ~45:36 ≈ 0.8).
 MASTERY_TIER_NERDS = [15, 40, 95, 200, 400, 720, 1280, 2400, 4160, 7200]
 
+# ── Botanarium (plants) ──
+# A plant is acquired from a seed (bought in the Market, or found via a
+# plant's own "Seedy"-style trait). It grows from Level 1 to
+# PLANT_MAX_LEVEL purely from hours of studying/working — no separate
+# "watering" action — optionally sped up by Fertilizer (bought with
+# Nerds, stacks). Levels are deliberately reachable in a medium-term
+# timeframe (weeks, not months); Prestige tiers ABOVE max level are the
+# actual long-term sink, growing steeper forever like the XP curve.
+#
+# Sprite stage N (watermelonN.png) maps directly to Level N+1 — e.g.
+# watermelon0.png (a freshly-planted seed) IS Level 1; watermelon4.png
+# (full maturity) IS Level 5. sprites[level-1] always gives the right file.
+PLANT_MAX_LEVEL = 5
+
+# Visual/identity color per growth level (1..PLANT_MAX_LEVEL) — used on
+# every plant card, the level chip, and the Book of Wonders so the same
+# color always means the same level at a glance, across every plant.
+PLANT_LEVEL_COLORS = ["#8bc34a", "#5a9e3d", "#2e7d32", "#f9a825", "#e64a19"]
+
+# Prestige tiers (past PLANT_MAX_LEVEL) reuse the SAME 10-tier color
+# ladder as badges/mastery — one consistent "achievement color" language
+# across the whole app, rather than inventing a second palette.
+PLANT_PRESTIGE_COLORS = ["#8a8a8a", "#a3672f", "#b9c2cc", "#e0b23a", "#4fd6c4",
+                          "#2ecc71", "#5fc9f8", "#c9a4ff", "#ff6ec7", "#ffd700"]
+PLANT_PRESTIGE_NAMES = ["Prestige I", "Prestige II", "Prestige III", "Prestige IV", "Prestige V",
+                         "Prestige VI", "Prestige VII", "Prestige VIII", "Prestige IX", "Prestige X"]
+# Cumulative growth-hours needed, ABOVE the hours required for max level,
+# to reach prestige tier n: int(PLANT_PRESTIGE_HOURS_BASE * n ** PLANT_PRESTIGE_HOURS_EXPONENT).
+# Tier 1 lands at a real but reachable "next big goal"; each tier after
+# that costs meaningfully more, uncapped — the actual long-term sink.
+PLANT_PRESTIGE_HOURS_BASE = 40
+PLANT_PRESTIGE_HOURS_EXPONENT = 1.5
+
+# Each Prestige tier reached grants ONE buff point, spendable on any ONE
+# of a plant's 5 level-bonuses to permanently increase its magnitude by
+# the increment below. Points can stack into the same bonus repeatedly.
+PRESTIGE_BUFF_POINT_INCREMENTS = {
+    "refreshing": 1.0,     # +1% XP (on top of the base 5%) per point
+    "voluminous": 0.5,     # +0.5% (on top of the base 2%) per point
+    "seedy": 0.5,          # +0.5% chance (on top of the base 4%) per point
+    "fast_grower": 1.0,    # +1% passive yield rate (on top of base+seed-upgrades) per point
+    "hydration": 1.0,      # +1% XP&Nerds (on top of the base 5%) per point
+}
+
+# Fertilizer — bought with Nerds, stacks additively, speeds up growth-
+# hour accrual for ALL of a profile's plants at once (a global boost,
+# not per-plant) up to FERTILIZER_MAX_STACKS. Affects LEVELING UP only —
+# not the passive yield rate (that's what Fast Grower is for).
+FERTILIZER_GROWTH_BONUS_PCT = 10        # +10% growth-hour rate per stack
+FERTILIZER_MAX_STACKS = 5               # cap: +50% growth speed
+FERTILIZER_BASE_COST = 40               # Nerds cost of stack #1
+FERTILIZER_COST_MULTIPLIER = 1.6        # each further stack costs 1.6x the last
+
+# Seeds — the Market's entry item. First seed of a given plant type
+# plants it (if not already owned); any seed after that can only be
+# spent on that plant's seed-upgrade track (see FAST_GROWER_* below) or
+# sold back. Priced to be a real, but reachable, first goal.
+SEED_SHOP_BUY_PRICE = 750
+SEED_SHOP_SELL_PRICE = 120
+
+# Fast Grower (the Level 4 bonus) is upgraded with SEEDS, not Nerds —
+# each tier doubles the seed cost of the last (1,2,4,8,16 = 31 seeds to
+# fully max). It boosts this plant's PASSIVE YIELD RATE (see below) —
+# "faster yield" means "produces its passive Nerds faster," stacking
+# multiplicatively with Voluminous.
+FAST_GROWER_BASE_PCT = 1.0
+FAST_GROWER_SEED_UPGRADE_PCT = 1.0      # + per seed-upgrade tier
+FAST_GROWER_MAX_SEED_TIERS = 5
+FAST_GROWER_SEED_TIER_BASE_COST = 1
+
+# "Summer" for summer-conditional bonuses (Refreshing, Hydration) —
+# calendar months, Northern-hemisphere default. Adjust freely per your
+# own hemisphere/preference.
+SUMMER_MONTHS = [6, 7, 8]
+REFRESHING_MIN_SESSION_MINUTES = 90     # Refreshing only applies to sessions at/above this length
+
+# ── Passive Yield (every plant/tree, at every level, generates Nerds
+# passively over real time — this is the "Claim" button on each card) ──
+# Base rate is a shared curve indexed by level (not per-species — a
+# plant's personality comes from its bonuses, not its raw yield rate).
+# Deliberately modest relative to active studying (~45 Nerds/hour): even
+# a maxed Level-5 plant claimed like clockwork every 24h caps out well
+# under what an active study habit earns in the same day.
+PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL = [0.5, 1.0, 1.75, 2.75, 4.0]
+
+# Nerds don't accumulate forever — claiming after a longer gap only ever
+# banks up to this many hours' worth; the rest is lost. This is the
+# "log back in or lose it" incentive.
+PASSIVE_YIELD_MAX_STORAGE_HOURS = 24
+
+# The passive RATE (not the storage cap) is modulated by how much you've
+# actually studied THIS ISO week: 0 hours studied -> a trickle
+# (WEEKLY_YIELD_MIN_MULTIPLIER); studying up to WEEKLY_YIELD_LOWER_LIMIT_HOURS
+# ramps linearly up to a full 1.0x; studying BEYOND that keeps climbing
+# (WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE per extra hour), capped at
+# WEEKLY_YIELD_MAX_MULTIPLIER so passive income can never spiral. The
+# lower limit intentionally matches the existing "hours5" weekly quest
+# threshold — the same "solid study week" benchmark used everywhere else.
+WEEKLY_YIELD_LOWER_LIMIT_HOURS = 5
+WEEKLY_YIELD_MIN_MULTIPLIER = 0.01
+WEEKLY_YIELD_MAX_MULTIPLIER = 2.0
+WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE = 0.1   # +10% multiplier per hour studied beyond the lower limit
+
+# The Botanarium Bank — a separate, PERMANENT progression track (not
+# weekly, never resets) that raises how many Nerds can be claimed in
+# any rolling 24h window, across ALL plants combined. Upgrading a tier
+# requires both LIFETIME study hours and a Nerds payment — so the
+# ceiling itself is only ever raised through real invested effort, but
+# once raised it stays raised, including through vacations, slow weeks,
+# or a burst of newly-acquired plants that would otherwise all sit
+# capped and useless on a quiet week. Copy-paste a tier to extend it
+# further; the shape (steadily more of both currencies) can continue
+# indefinitely, matching the rest of this app's uncapped philosophy.
+BOTANARIUM_BANK_LEVELS = [
+    {"level": 1, "hours_required": 0,   "nerds_cost": 0,     "daily_claim_cap": 30},
+    {"level": 2, "hours_required": 10,  "nerds_cost": 1000,  "daily_claim_cap": 65},
+    {"level": 3, "hours_required": 30,  "nerds_cost": 2500,  "daily_claim_cap": 115},
+    {"level": 4, "hours_required": 60,  "nerds_cost": 5000,  "daily_claim_cap": 185},
+    {"level": 5, "hours_required": 100, "nerds_cost": 9000,  "daily_claim_cap": 285},
+    {"level": 6, "hours_required": 150, "nerds_cost": 15000, "daily_claim_cap": 425},
+    {"level": 7, "hours_required": 220, "nerds_cost": 24000, "daily_claim_cap": 620},
+    {"level": 8, "hours_required": 320, "nerds_cost": 38000, "daily_claim_cap": 900},
+]
+
+# ── Plant catalog — copy-paste a block below to add a new plant. Each
+# entry's `level_bonus_defs` must have exactly PLANT_MAX_LEVEL entries,
+# one per level, each with a stable `id` used by prestige allocations
+# and (for fast_grower) the seed-upgrade track above. `sprites` must
+# have exactly PLANT_MAX_LEVEL filenames living in /sprites/<sprite_dir>/. ──
+PLANT_DEFS = [
+    {
+        "id": "watermelon",
+        "name": "Watermelon",
+        "scientific_name": "Citrullus lanatus",
+        "sprite_dir": "crops",
+        "sprites": ["watermelon0.png", "watermelon1.png", "watermelon2.png", "watermelon3.png", "watermelon4.png"],
+        "seed_item": "watermelon_seed",
+        # Cumulative growth-hours (since acquired, Fertilizer applied)
+        # needed to REACH each level. Level 1 is immediate — the plant
+        # starts there the moment it's planted. ~100h total to fully
+        # mature: a real, felt, medium-to-long-term goal (a few months
+        # of steady studying) — tedious enough to stay meaningful, not
+        # so long it feels pointless to pursue.
+        "level_hours_thresholds": [0, 12, 30, 58, 100],
+        "level_bonus_defs": [
+            {"level": 1, "id": "refreshing", "label": "Refreshing", "base_value": 5.0, "unit": "%",
+             "desc": "Gives a bonus to session XP for long, deep-focus sessions during summer."},
+            {"level": 2, "id": "voluminous", "label": "Voluminous", "base_value": 2.0, "unit": "%",
+             "desc": "Increases this plant's final claimable passive Nerds amount."},
+            {"level": 3, "id": "seedy", "label": "Seedy", "base_value": 4.0, "unit": "%",
+             "desc": "A small chance, each time you Claim, to also yield a Watermelon Seed."},
+            {"level": 4, "id": "fast_grower", "label": "Fast Grower", "base_value": 1.0, "unit": "%",
+             "desc": "Increases this plant's passive Nerds yield rate. Upgradeable further by spending Watermelon Seeds."},
+            {"level": 5, "id": "hydration", "label": "Hydration", "base_value": 5.0, "unit": "%",
+             "desc": "Gives a bonus to both XP and Nerds for every study session during summer."},
+        ],
+    },
+]
+
+# ── Clementine's Book of Wonders — the in-game plant-pedia. Organized
+# by category > subcategory so it can comfortably host many future
+# plants/trees without needing a restructure; copy-paste a subcategory
+# to add a new one, and a BOOK_ENTRIES block to add a new write-up. ──
+BOOK_CATEGORIES = [
+    {"id": "fruits_vegetables", "label": "Fruits & Vegetables", "subcategories": [
+        {"id": "cucurbits", "label": "Cucurbits (Gourd Family)"},
+        {"id": "nightshades", "label": "Nightshades"},
+        {"id": "legumes", "label": "Legumes"},
+        {"id": "brassicas", "label": "Brassicas"},
+        {"id": "root_vegetables", "label": "Root Vegetables"},
+        {"id": "stone_fruits", "label": "Stone Fruits"},
+        {"id": "citrus", "label": "Citrus"},
+        {"id": "berries", "label": "Berries"},
+    ]},
+    {"id": "trees", "label": "Trees", "subcategories": [
+        {"id": "deciduous", "label": "Deciduous Trees"},
+        {"id": "coniferous", "label": "Coniferous Trees"},
+        {"id": "fruit_trees", "label": "Fruit Trees"},
+        {"id": "tropical_trees", "label": "Tropical Trees"},
+    ]},
+    {"id": "vines_climbers", "label": "Vines & Climbers", "subcategories": [
+        {"id": "flowering_vines", "label": "Flowering Vines"},
+        {"id": "fruiting_vines", "label": "Fruiting Vines"},
+    ]},
+    {"id": "herbs_spices", "label": "Herbs & Spices", "subcategories": [
+        {"id": "culinary_herbs", "label": "Culinary Herbs"},
+        {"id": "medicinal_herbs", "label": "Medicinal Herbs"},
+    ]},
+    {"id": "flowers_ornamentals", "label": "Flowers & Ornamentals", "subcategories": [
+        {"id": "annuals", "label": "Annuals"},
+        {"id": "perennials", "label": "Perennials"},
+        {"id": "bulbs", "label": "Bulbs & Tubers"},
+    ]},
+    {"id": "succulents_cacti", "label": "Succulents & Cacti", "subcategories": [
+        {"id": "desert_succulents", "label": "Desert Succulents"},
+        {"id": "cacti", "label": "Cacti"},
+    ]},
+]
+
+# ── Book entries — copy-paste this whole block for each new plant. Every
+# field is plain text/lists so the frontend can render any entry with
+# the exact same two-column layout, no special-casing per plant. ──
+BOOK_ENTRIES = [
+    {
+        "plant_id": "watermelon",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Watermelon",
+        "scientific_name": "Citrullus lanatus",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/watermelonbotanarium.jpg",
+        "summary": (
+            "A sprawling, vining annual grown for its large, sweet, water-rich fruit. One of the "
+            "most widely cultivated crops on Earth, watermelon is prized for its high water content, "
+            "refreshing taste, and versatility — eaten fresh, juiced, pickled by the rind, or roasted "
+            "for its seeds."
+        ),
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Citrullus"),
+            ("Species", "C. lanatus"),
+        ],
+        "history": (
+            "Watermelon is believed to have originated in northeastern Africa, with wild ancestors "
+            "still found growing across the continent today. Archaeological evidence — including "
+            "seeds recovered from a site in Libya dated to roughly 5,000 years ago — points to a long "
+            "history of cultivation stretching back to ancient Egypt, where watermelons were depicted "
+            "in tomb paintings and are thought to have been placed in burial chambers to nourish the "
+            "deceased in the afterlife.\n\n"
+            "From Africa, the crop spread along trade routes into the Mediterranean, the Middle East, "
+            "and eventually India and China by the 7th to 10th centuries. Moorish traders are credited "
+            "with introducing watermelon to Europe during the medieval period, and European colonizers "
+            "and enslaved Africans later brought it to the Americas in the 16th and 17th centuries. "
+            "Today China is by a wide margin the largest producer of watermelon in the world, followed "
+            "by countries across Africa, the Middle East, and the Americas — a testament to the fruit's "
+            "long and genuinely global journey from a wild African vine to a worldwide summer staple."
+        ),
+        "fun_facts": [
+            "Watermelon is about 92% water by weight — close enough to a drink that it's a genuinely "
+            "effective way to stay hydrated in hot weather.",
+            "Botanically, watermelon is a fruit, but it's also classified as a vegetable in some "
+            "culinary and agricultural contexts since it belongs to the same family as cucumbers and "
+            "squash — it's a bit of both, depending who's asking.",
+            "The entire fruit is edible, including the rind — pickled watermelon rind is a traditional "
+            "preserve in cuisines around the world, and the seeds can be roasted and eaten as a snack.",
+            "Seedless watermelons aren't genetically modified — they're bred by crossing a "
+            "normal (diploid) watermelon with a chromosome-doubled (tetraplum/tetraploid) one, "
+            "producing sterile triploid offspring that can't form full-sized seeds.",
+            "Watermelon comes in far more varieties than the common pink-fleshed kind — yellow- and "
+            "orange-fleshed cultivars exist, and some heirloom varieties are prized specifically for "
+            "unusual colors and flavors.",
+            "The world record for heaviest watermelon on record is well over 350 pounds (roughly "
+            "159 kg) — bigger than most adult humans.",
+            "In parts of the world, watermelon rind is stir-fried as a vegetable rather than discarded "
+            "or pickled, valued for its mild flavor and crisp texture.",
+        ],
+    },
+]
+
+
 # ── Misc / System ──
 TRASH_MAX_ENTRIES = 20                     # how many recent deletions the undo trash keeps
+INVENTORY_SLOT_COUNT = 20                  # fixed grid size shown in the Inventory page
 DEFAULT_ATTENDANCE_MINUTES_FALLBACK = 90   # used when a schedule slot's start/end time can't be parsed
 DEFAULT_ML_MIN_RECORDS = 30                # config default for a profile's "ml_min_records" field
 # ═══════════════════════════════════════════════════════════════════
@@ -248,6 +522,31 @@ def load_config(profile):
         cfg.setdefault("ml_prediction_enabled", True)
         cfg.setdefault("attendance_default_mode", "manual")
         cfg.setdefault("attendance_autofill_last_date", "")
+        cfg.setdefault("skill_categories", [])
+        # Migration: skills used to carry a free-text `category` string
+        # with no structure behind it. First load after upgrading,
+        # every distinct non-empty string in use gets turned into a
+        # real category record (by name, deduped), and every skill gets
+        # pointed at it via category_id — after this runs once, `category`
+        # on a skill is just a legacy display fallback, category_id is
+        # the real field.
+        existing_names = {c["name"]: c["id"] for c in cfg["skill_categories"]}
+        changed = False
+        for s in cfg.get("skills", []):
+            if s.get("category_id"):
+                continue
+            legacy_name = (s.get("category") or "").strip()
+            if not legacy_name:
+                continue
+            if legacy_name not in existing_names:
+                new_cat = {"id": gen_id(8), "name": legacy_name}
+                cfg["skill_categories"].append(new_cat)
+                existing_names[legacy_name] = new_cat["id"]
+                changed = True
+            s["category_id"] = existing_names[legacy_name]
+            changed = True
+        if changed:
+            save_config(profile, cfg)
         return cfg
     return None
 
@@ -1008,7 +1307,23 @@ def delete_subject(name, sub_id):
         shutil.rmtree(fd)
     return jsonify({"ok": True})
 
-# ── Skills ──
+# ── Skills & Skill Categories ──
+@app.route("/api/<name>/skill_categories", methods=["POST"])
+def add_skill_category(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    cat_name = (data.get("name") or "").strip()
+    if not cat_name:
+        return jsonify({"error": "Category name required"}), 400
+    cfg = load_config(name)
+    existing = next((c for c in cfg.get("skill_categories", []) if c["name"].lower() == cat_name.lower()), None)
+    if existing:
+        return jsonify({"ok": True, "category": existing})
+    cat = {"id": gen_id(8), "name": cat_name}
+    cfg.setdefault("skill_categories", []).append(cat)
+    save_config(name, cfg)
+    return jsonify({"ok": True, "category": cat})
+
 @app.route("/api/<name>/skills", methods=["POST"])
 def add_skill(name):
     ensure_profile(name)
@@ -1016,7 +1331,7 @@ def add_skill(name):
     skill = {
         "id": gen_id(8),
         "name": data["name"],
-        "category": data.get("category", ""),
+        "category_id": data.get("category_id", ""),
         "difficulty": data.get("difficulty", 5),
         "color": data.get("color", "#e91e63"),
         # Skills can now optionally carry their own recurring schedule
@@ -1063,22 +1378,41 @@ def delete_skill(name, skill_id):
 def add_self_study(name):
     ensure_profile(name)
     data = request.get_json(force=True)
+    record_date = data.get("date", today_str())
+    # A manually-added record's `created` timestamp doubles as its
+    # Timetable time-of-day anchor (see buildDayEvents in app.js), so it
+    # needs to reflect the person's CHOSEN date/time, not just whichever
+    # instant they happened to click Save — otherwise a backdated entry
+    # would silently show up at "right now" on the Timetable instead of
+    # any sensible time on the date it's actually dated. Falls back to
+    # the real current time if no time was given (e.g. older API
+    # clients, or a future integration that doesn't send one).
+    time_str = data.get("time")
+    if time_str:
+        try:
+            hh, mm = time_str.split(":")
+            created = f"{record_date}T{int(hh):02d}:{int(mm):02d}:00"
+        except Exception:
+            created = now_str()
+    else:
+        created = now_str()
     record = {
         "id": gen_id(12),
-        "date": data.get("date", today_str()),
+        "date": record_date,
         "subject_id": data.get("subject_id", ""),
         "skill_id": data.get("skill_id", ""),
         "minutes": int(data.get("minutes", 0)),
         "difficulty": data.get("difficulty", 5),
         "status": data.get("status", "Done"),  # Done, Partial, Skipped
         "note": data.get("note", ""),
-        "created": now_str()
+        "created": created
     }
     d = load_data(name)
     d["self_study"].append(record)
     save_data(name, d)
-    xp_earned = compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"])
-    nerds_earned = compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"])
+    xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
+    xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
+    nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
     return jsonify({"ok": True, "record": record, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
 
 @app.route("/api/<name>/self_study/<rec_id>", methods=["PUT"])
@@ -1393,8 +1727,9 @@ def timer_stop(name, timer_id):
                     "created": now_str()
                 }
                 d["self_study"].append(record)
-                xp_earned = compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"])
-                nerds_earned = compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"])
+                xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
+                xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
+                nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
             break
     save_data(name, d)
     return jsonify({"ok": True, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
@@ -1546,7 +1881,8 @@ def compute_total_xp(d, cfg=None):
         diff = r.get("difficulty", 5)
         status = r.get("status", "Done")
         mult = _self_study_status_mult(status)
-        xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult
+        xp_mult, _ = compute_plant_session_multipliers(d, mins, r.get("date", ""))
+        xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult * xp_mult
     for r in d.get("attendance", []):
         if r.get("status") == "present":
             xp += ATTENDANCE_XP_PRESENT
@@ -1616,14 +1952,16 @@ def compute_mastery_nerds(mastery_list):
     return total
 
 def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
-    """Total Nerds earned to date, from: self-study sessions, one-time
-    level-up bonuses, and mastery-tier bonuses. Badges/quests/logins
-    intentionally do NOT pay Nerds (yet) — keeping the Nerds side of
-    the economy narrower than XP's is what keeps studying clearly the
-    best way to earn Nerds specifically, not just XP."""
+    """Total Nerds BALANCE: everything ever earned (self-study sessions,
+    one-time level-up bonuses, mastery-tier bonuses, passive Botanarium
+    claims) minus everything ever spent (Market purchases). Like
+    everything else in this file, nothing here is a mutable counter —
+    it's entirely replayed from event logs every time, so it can never
+    drift out of sync with what actually happened."""
     nerds = 0.0
     for r in d.get("self_study", []):
-        nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done"))
+        _, nerds_mult = compute_plant_session_multipliers(d, r.get("minutes", 0), r.get("date", ""))
+        nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done")) * nerds_mult
     if level is not None:
         nerds += compute_levelup_nerds(level)
     if mastery_list is not None:
@@ -1631,7 +1969,261 @@ def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
     elif cfg is not None:
         mastery_list, _ = compute_mastery(cfg, d)
         nerds += compute_mastery_nerds(mastery_list)
+    nerds += sum(c.get("amount", 0) for c in d.get("passive_claims", []))
+    nerds -= sum(p.get("total_cost", 0) for p in d.get("nerds_spent", []))
     return round(nerds, 1)
+
+# ═══════════════════════════════════════════════════════════════════
+# ── Botanarium (plants) ──
+# ═══════════════════════════════════════════════════════════════════
+def get_plant_def(plant_type):
+    return next((p for p in PLANT_DEFS if p["id"] == plant_type), None)
+
+def get_plant_bonus_def(plant_def, bonus_id):
+    return next((b for b in plant_def["level_bonus_defs"] if b["id"] == bonus_id), None)
+
+def compute_weekly_study_hours(d, week=None):
+    """Total self-study hours (Done=1x, Partial=0.5x, Skipped=0x — same
+    quality weighting used everywhere else) logged in the given ISO
+    week (default: the current week). This is the input to the passive
+    yield rate multiplier — a SEPARATE thing from a plant's own
+    cumulative growth-hours, which never resets."""
+    week = week or _week_key(today_str())
+    mins = 0.0
+    for r in d.get("self_study", []):
+        if _week_key(r.get("date", "")) != week:
+            continue
+        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done"))
+    return mins / 60.0
+
+def compute_weekly_yield_multiplier(weekly_study_hours):
+    """0 hours studied this week -> a trickle (WEEKLY_YIELD_MIN_MULTIPLIER).
+    Hours climbing toward WEEKLY_YIELD_LOWER_LIMIT_HOURS ramp linearly up
+    to a full 1.0x. Studying BEYOND that keeps climbing the multiplier
+    (rewarding a genuinely strong week), capped at WEEKLY_YIELD_MAX_MULTIPLIER
+    so passive income can never spiral past a modest ceiling."""
+    lower = WEEKLY_YIELD_LOWER_LIMIT_HOURS
+    if weekly_study_hours <= 0:
+        return WEEKLY_YIELD_MIN_MULTIPLIER
+    if weekly_study_hours >= lower:
+        over = weekly_study_hours - lower
+        bonus = min(WEEKLY_YIELD_MAX_MULTIPLIER - 1.0, over * WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE)
+        return round(1.0 + bonus, 4)
+    frac = weekly_study_hours / lower
+    return round(WEEKLY_YIELD_MIN_MULTIPLIER + (1.0 - WEEKLY_YIELD_MIN_MULTIPLIER) * frac, 4)
+
+def compute_plant_growth_hours(plant_record, d):
+    """Cumulative growth-hours a plant has banked toward leveling up —
+    ALL self-study minutes (any subject/skill; growth is generic, not
+    tied to what you studied) logged since the plant was acquired,
+    quality-weighted the same way as everything else, with Fertilizer's
+    flat rate bonus applied. This determines LEVEL — a completely
+    separate track from the weekly passive-yield multiplier above."""
+    acquired = plant_record.get("created", "")
+    fert_mult = 1.0 + (plant_record.get("fertilizer_stacks", 0) * FERTILIZER_GROWTH_BONUS_PCT / 100.0)
+    mins = 0.0
+    for r in d.get("self_study", []):
+        created = r.get("created", "")
+        if not created or created < acquired:
+            continue
+        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done"))
+    return (mins / 60.0) * fert_mult
+
+def compute_plant_level_and_prestige(growth_hours, plant_def):
+    """Returns (level 1..PLANT_MAX_LEVEL, prestige_tier 0=none/1../10,
+    hours_into_current_level, hours_needed_for_next / None if maxed)."""
+    thresholds = plant_def["level_hours_thresholds"]
+    level = 1
+    for i, t in enumerate(thresholds):
+        if growth_hours >= t:
+            level = i + 1
+        else:
+            break
+    if level < PLANT_MAX_LEVEL:
+        into = growth_hours - thresholds[level - 1]
+        nxt = thresholds[level] - thresholds[level - 1]
+        return level, 0, into, nxt
+    # Fully grown — check Prestige tiers on the hours ABOVE max-level threshold.
+    overflow = growth_hours - thresholds[PLANT_MAX_LEVEL - 1]
+    prestige_tier = 0
+    for n in range(1, len(PLANT_PRESTIGE_NAMES) + 1):
+        need = int(PLANT_PRESTIGE_HOURS_BASE * (n ** PLANT_PRESTIGE_HOURS_EXPONENT))
+        if overflow >= need:
+            prestige_tier = n
+        else:
+            break
+    return level, prestige_tier, overflow, None
+
+def get_plant_bonus_value(plant_record, plant_def, bonus_id, level):
+    """Current effective magnitude of one named bonus, including any
+    Prestige buff points allocated to it and (fast_grower only) its
+    seed-upgrade tiers. Returns 0 if the bonus's level hasn't been
+    reached yet."""
+    bdef = get_plant_bonus_def(plant_def, bonus_id)
+    if not bdef or level < bdef["level"]:
+        return 0.0
+    value = bdef["base_value"]
+    if bonus_id == "fast_grower":
+        value += plant_record.get("fast_grower_seed_tiers", 0) * FAST_GROWER_SEED_UPGRADE_PCT
+    points = (plant_record.get("prestige_allocations") or {}).get(bonus_id, 0)
+    value += points * PRESTIGE_BUFF_POINT_INCREMENTS.get(bonus_id, 0)
+    return round(value, 2)
+
+def compute_plant_state(plant_record, d):
+    """Full computed view of one owned plant — everything the frontend
+    needs to render its card in one shot."""
+    plant_def = get_plant_def(plant_record["plant_type"])
+    if not plant_def:
+        return None
+    growth_hours = compute_plant_growth_hours(plant_record, d)
+    level, prestige_tier, into, nxt = compute_plant_level_and_prestige(growth_hours, plant_def)
+    bonuses = []
+    for bdef in plant_def["level_bonus_defs"]:
+        unlocked = level >= bdef["level"]
+        bonuses.append({
+            "id": bdef["id"], "label": bdef["label"], "level_required": bdef["level"],
+            "unit": bdef["unit"], "desc": bdef["desc"], "unlocked": unlocked,
+            "value": get_plant_bonus_value(plant_record, plant_def, bdef["id"], level) if unlocked else 0.0,
+        })
+    color = PLANT_PRESTIGE_COLORS[min(prestige_tier, len(PLANT_PRESTIGE_COLORS)) - 1] if prestige_tier > 0 else PLANT_LEVEL_COLORS[level - 1]
+    tier_name = PLANT_PRESTIGE_NAMES[prestige_tier - 1] if prestige_tier > 0 else f"Level {level}"
+    claimable, elapsed_hours, weekly_mult, effective_rate = compute_plant_claimable_nerds(plant_record, plant_def, d, level, bonuses)
+    return {
+        "id": plant_record["id"], "plant_type": plant_def["id"], "name": plant_def["name"],
+        "scientific_name": plant_def["scientific_name"],
+        "sprite": f"/sprites/{plant_def['sprite_dir']}/{plant_def['sprites'][level - 1]}",
+        "level": level, "prestige_tier": prestige_tier, "tier_name": tier_name, "color": color,
+        "growth_hours": round(growth_hours, 2),
+        "hours_into_level": round(into, 2), "hours_for_next_level": nxt,
+        "fertilizer_stacks": plant_record.get("fertilizer_stacks", 0),
+        "fast_grower_seed_tiers": plant_record.get("fast_grower_seed_tiers", 0),
+        "prestige_allocations": plant_record.get("prestige_allocations") or {},
+        "prestige_points_available": max(0, prestige_tier - sum((plant_record.get("prestige_allocations") or {}).values())),
+        "bonuses": bonuses,
+        "claimable_nerds": claimable, "claimable_elapsed_hours": round(elapsed_hours, 2),
+        "weekly_yield_multiplier": weekly_mult,
+        "yield_per_hour_base": PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL[level - 1],
+        "yield_per_hour_effective": round(effective_rate, 2),
+    }
+
+def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuses=None):
+    """How many Nerds this plant would pay out if claimed RIGHT NOW —
+    base rate for its level, scaled by the weekly study multiplier and
+    real hours elapsed since its last claim (capped at
+    PASSIVE_YIELD_MAX_STORAGE_HOURS), then Voluminous/Fast Grower on top.
+    Does NOT apply the Bank's daily cap — that's enforced at claim time
+    (see claim_plant_yield) since it depends on every plant's claims
+    together, not just this one. Also returns the effective Nerds/hour
+    rate (post-multipliers) for display on the card."""
+    if level is None:
+        growth_hours = compute_plant_growth_hours(plant_record, d)
+        level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+    last_claim_ts = plant_record.get("created", now_str())
+    for c in d.get("passive_claims", []):
+        if c.get("plant_id") == plant_record["id"] and c.get("created", "") > last_claim_ts:
+            last_claim_ts = c["created"]
+    try:
+        last_dt = datetime.strptime(last_claim_ts, "%Y-%m-%dT%H:%M:%S")
+        elapsed_hours = min(PASSIVE_YIELD_MAX_STORAGE_HOURS, max(0.0, (datetime.now() - last_dt).total_seconds() / 3600.0))
+    except Exception:
+        elapsed_hours = 0.0
+
+    weekly_mult = compute_weekly_yield_multiplier(compute_weekly_study_hours(d))
+    base_rate = PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL[level - 1]
+
+    if bonuses is None:
+        voluminous_pct = get_plant_bonus_value(plant_record, plant_def, "voluminous", level)
+        fast_grower_pct = get_plant_bonus_value(plant_record, plant_def, "fast_grower", level)
+    else:
+        voluminous_pct = next((b["value"] for b in bonuses if b["id"] == "voluminous"), 0.0)
+        fast_grower_pct = next((b["value"] for b in bonuses if b["id"] == "fast_grower"), 0.0)
+
+    total_mult = (1 + voluminous_pct / 100.0) * (1 + fast_grower_pct / 100.0)
+    effective_rate = base_rate * weekly_mult * total_mult
+    raw = effective_rate * elapsed_hours
+    return round(raw, 1), elapsed_hours, weekly_mult, effective_rate
+
+def compute_lifetime_study_hours(d):
+    """Total hours studied EVER (quality-weighted, never resets) — the
+    hours-side input to Bank Level eligibility. Deliberately separate
+    from a single plant's own growth-hours (which only start counting
+    from when THAT plant was acquired)."""
+    mins = sum(r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done")) for r in d.get("self_study", []))
+    return mins / 60.0
+
+def compute_bank_state(d):
+    """The Botanarium Bank's current tier and what it takes to reach the
+    next one. Level is fully derived from how many bank upgrades have
+    been successfully purchased (logged in nerds_spent, same event-log
+    pattern as everything else) — never a stored counter that could
+    drift."""
+    bought = sum(1 for p in d.get("nerds_spent", []) if p.get("item_type") == "botanarium_bank")
+    level = min(1 + bought, len(BOTANARIUM_BANK_LEVELS))
+    cur = BOTANARIUM_BANK_LEVELS[level - 1]
+    nxt = BOTANARIUM_BANK_LEVELS[level] if level < len(BOTANARIUM_BANK_LEVELS) else None
+    lifetime_hours = compute_lifetime_study_hours(d)
+    return {
+        "level": level, "daily_claim_cap": cur["daily_claim_cap"], "lifetime_hours": round(lifetime_hours, 2),
+        "next_level": nxt["level"] if nxt else None,
+        "next_hours_required": nxt["hours_required"] if nxt else None,
+        "next_nerds_cost": nxt["nerds_cost"] if nxt else None,
+        "can_upgrade": bool(nxt) and lifetime_hours >= nxt["hours_required"],
+    }
+
+def compute_rolling_24h_claimed(d):
+    """Total passive Nerds claimed (across ALL plants, plus any Market
+    sell-backs, which are logged the same way) in the trailing 24 real
+    hours — what the Bank's daily_claim_cap is measured against. Rolling,
+    not calendar-day-based, so it can't be gamed by claiming right before
+    and right after midnight."""
+    cutoff = datetime.now() - __import__("datetime").timedelta(hours=24)
+    total = 0.0
+    for c in d.get("passive_claims", []):
+        try:
+            ts = datetime.strptime(c.get("created", ""), "%Y-%m-%dT%H:%M:%S")
+            if ts >= cutoff:
+                total += c.get("amount", 0)
+        except Exception:
+            pass
+    return total
+
+def compute_plant_session_multipliers(d, minutes, date_str):
+    """Refreshing (XP only, sessions >= REFRESHING_MIN_SESSION_MINUTES,
+    summer) and Hydration (XP & Nerds, every session, summer) are the
+    only two bonuses that modify a session's own XP/Nerds as it's being
+    logged — everything else (Voluminous/Seedy/Fast Grower) lives on the
+    passive-yield/claim side instead. Returns (xp_mult, nerds_mult)."""
+    xp_bonus_pct = 0.0
+    nerds_bonus_pct = 0.0
+    try:
+        month = datetime.strptime(date_str, "%Y-%m-%d").month
+    except Exception:
+        month = datetime.now().month
+    is_summer = month in SUMMER_MONTHS
+    if not is_summer:
+        return 1.0, 1.0
+    for plant_record in d.get("plants", []):
+        plant_def = get_plant_def(plant_record.get("plant_type"))
+        if not plant_def:
+            continue
+        growth_hours = compute_plant_growth_hours(plant_record, d)
+        level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+        if minutes >= REFRESHING_MIN_SESSION_MINUTES:
+            xp_bonus_pct += get_plant_bonus_value(plant_record, plant_def, "refreshing", level)
+        hydration_pct = get_plant_bonus_value(plant_record, plant_def, "hydration", level)
+        xp_bonus_pct += hydration_pct
+        nerds_bonus_pct += hydration_pct
+    return 1.0 + xp_bonus_pct / 100.0, 1.0 + nerds_bonus_pct / 100.0
+
+def compute_current_balance(name, d):
+    """The one place routes should call to check 'how many Nerds does
+    this profile actually have right now' — loads config so mastery-tier
+    Nerds are correctly included (omitting it would under-count the
+    balance and could wrongly block an affordable purchase)."""
+    cfg = load_config(name)
+    total_xp = compute_total_xp(d, cfg)
+    level, _, _ = level_from_xp(total_xp)
+    return compute_total_nerds(d, cfg=cfg, level=level)
 
 def compute_streak(d):
     done_dates = sorted(set(
@@ -1799,9 +2391,12 @@ def _best_run(sorted_unique_dates):
     return best
 
 def compute_mastery(cfg, d):
-    """Per-subject and per-skill mastery, same Iron..Challenger tiers,
-    based on minutes invested. Every subject/skill the person adds opens
-    up a brand new masterable track (and its XP potential)."""
+    """Per-subject, per-skill, AND per-skill-category mastery, all on the
+    same Bachelor's..Laureate tier ladder, based on minutes invested. A
+    category's mastery is a pure aggregate of its daughter skills' Done
+    minutes — leveling a category is really just "level up 2+ skills
+    that share a category," so it stacks naturally on top of, not
+    instead of, each skill's own mastery XP."""
     thresholds = [60, 300, 900, 2400, 6000, 12000, 24000, 45000, 80000, 140000]
     minutes_by_subject = defaultdict(float)
     minutes_by_skill = defaultdict(float)
@@ -1829,6 +2424,17 @@ def compute_mastery(cfg, d):
         xp = sum(MASTERY_TIER_XP[:tier_idx + 1]) if tier_idx >= 0 else 0
         total_mastery_xp += xp
         mastery.append({"type": "skill", "id": s["id"], "name": s["name"], "minutes": mins,
+                         "tier_index": tier_idx, "tier_name": TIERS[tier_idx] if tier_idx >= 0 else None, "next_threshold": nxt})
+    minutes_by_category = defaultdict(float)
+    for s in cfg.get("skills", []):
+        if s.get("category_id"):
+            minutes_by_category[s["category_id"]] += minutes_by_skill.get(s["id"], 0)
+    for c in cfg.get("skill_categories", []):
+        mins = minutes_by_category.get(c["id"], 0)
+        tier_idx, xp, nxt = _tier_progress(mins, thresholds)
+        xp = sum(MASTERY_TIER_XP[:tier_idx + 1]) if tier_idx >= 0 else 0
+        total_mastery_xp += xp
+        mastery.append({"type": "category", "id": c["id"], "name": c["name"], "minutes": mins,
                          "tier_index": tier_idx, "tier_name": TIERS[tier_idx] if tier_idx >= 0 else None, "next_threshold": nxt})
     return mastery, total_mastery_xp
 
@@ -1928,8 +2534,14 @@ def gamification_status(name):
     level, xp_into, xp_needed = level_from_xp(total_xp)
     current_streak, best_streak = compute_streak(d)
     login_stats = _login_stats(d)
-    unlocked = [t["id"] for t in THEME_CATALOG if t["level"] <= level]
-    locked = [t for t in THEME_CATALOG if t["level"] > level]
+    # Level-gated themes unlock at their level, same as always. Themes
+    # that instead carry a `price` (see THEME_CATALOG) are level 0 —
+    # they must be explicitly purchased (logged in nerds_spent) to
+    # count as unlocked, regardless of level, since a level-0 gate would
+    # otherwise trivially pass for everyone.
+    purchased_theme_ids = {p["item_type"][len("theme_"):] for p in d.get("nerds_spent", []) if p.get("item_type", "").startswith("theme_")}
+    unlocked = [t["id"] for t in THEME_CATALOG if (t.get("price") is None and t["level"] <= level) or t["id"] in purchased_theme_ids]
+    locked = [t for t in THEME_CATALOG if t["id"] not in unlocked]
     badges, _ = compute_badge_progress(d)
     mastery, _ = compute_mastery(cfg, d)
     quests_this_week, _ = compute_quest_progress(d)
@@ -1971,6 +2583,380 @@ def ping_login(name):
     save_data(name, d)
     login_stats = _login_stats(d)
     return jsonify({"ok": True, "new_today": is_new, **login_stats})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ── Botanarium routes ──
+# ═══════════════════════════════════════════════════════════════════
+def _inventory_qty(d, item_type):
+    for it in d.get("inventory", []):
+        if it.get("item_type") == item_type:
+            return it
+    return None
+
+def _inventory_next_free_slot(d):
+    used = {it.get("slot_index") for it in d.get("inventory", []) if it.get("slot_index") is not None}
+    for i in range(INVENTORY_SLOT_COUNT):
+        if i not in used:
+            return i
+    return len(d.get("inventory", []))  # grid is full — overflow past the fixed count rather than lose the item
+
+def _inventory_add(d, item_type, qty):
+    it = _inventory_qty(d, item_type)
+    if it:
+        it["qty"] = it.get("qty", 0) + qty
+    else:
+        d.setdefault("inventory", []).append({
+            "id": gen_id(8), "item_type": item_type, "qty": qty,
+            "slot_index": _inventory_next_free_slot(d)
+        })
+
+def _inventory_remove(d, item_type, qty):
+    it = _inventory_qty(d, item_type)
+    if not it or it.get("qty", 0) < qty:
+        return False
+    it["qty"] -= qty
+    if it["qty"] <= 0:
+        d["inventory"] = [x for x in d.get("inventory", []) if x.get("item_type") != item_type]
+    return True
+
+def _inventory_move(d, item_type, to_slot):
+    """Moves one item stack to a specific slot, swapping places with
+    whatever (if anything) already occupies that slot — a real
+    rearrange, not just a reorder of the underlying list."""
+    if to_slot < 0 or to_slot >= INVENTORY_SLOT_COUNT:
+        return False
+    moving = _inventory_qty(d, item_type)
+    if not moving:
+        return False
+    occupant = next((it for it in d.get("inventory", []) if it.get("slot_index") == to_slot and it is not moving), None)
+    if occupant:
+        occupant["slot_index"] = moving.get("slot_index")
+    moving["slot_index"] = to_slot
+    return True
+
+def _spend_nerds(d, item_type, qty, unit_cost):
+    """Logs a purchase (see nerds_spent in DEFAULT_DATA) rather than
+    decrementing a stored balance — compute_total_nerds() replays this
+    log, so a purchase can never desync from the actual balance."""
+    total_cost = round(unit_cost * qty, 1)
+    d.setdefault("nerds_spent", []).append({
+        "id": gen_id(8), "date": today_str(), "created": now_str(),
+        "item_type": item_type, "qty": qty, "unit_cost": unit_cost, "total_cost": total_cost
+    })
+    return total_cost
+
+@app.route("/api/book_of_wonders")
+def book_of_wonders():
+    """Clementine's Book of Wonders — static reference content, not
+    profile-scoped (the pedia is the same for everyone). Returns the
+    full category tree plus every entry; the frontend groups entries
+    under their category/subcategory client-side."""
+    return jsonify({"categories": BOOK_CATEGORIES, "entries": BOOK_ENTRIES})
+
+@app.route("/api/<name>/botanarium/catalog")
+def botanarium_catalog(name):
+    """The full plant catalog (owned or not) plus a resolved sprite URL
+    for every growth stage — the Botanarium page uses this to show
+    'not yet owned' plants too, and the Book of Wonders reuses it."""
+    ensure_profile(name)
+    catalog = []
+    for p in PLANT_DEFS:
+        catalog.append({
+            "id": p["id"], "name": p["name"], "scientific_name": p["scientific_name"],
+            "seed_item": p["seed_item"],
+            "sprites": [f"/sprites/{p['sprite_dir']}/{f}" for f in p["sprites"]],
+            "level_hours_thresholds": p["level_hours_thresholds"],
+            "level_bonus_defs": p["level_bonus_defs"],
+            "seed_buy_price": SEED_SHOP_BUY_PRICE, "seed_sell_price": SEED_SHOP_SELL_PRICE,
+        })
+    return jsonify({
+        "catalog": catalog,
+        "plant_max_level": PLANT_MAX_LEVEL,
+        "level_colors": PLANT_LEVEL_COLORS,
+        "prestige_colors": PLANT_PRESTIGE_COLORS,
+        "prestige_names": PLANT_PRESTIGE_NAMES,
+        "fertilizer": {
+            "bonus_pct": FERTILIZER_GROWTH_BONUS_PCT, "max_stacks": FERTILIZER_MAX_STACKS,
+            "base_cost": FERTILIZER_BASE_COST, "cost_multiplier": FERTILIZER_COST_MULTIPLIER,
+        },
+        "fast_grower": {
+            "base_pct": FAST_GROWER_BASE_PCT, "upgrade_pct": FAST_GROWER_SEED_UPGRADE_PCT,
+            "max_tiers": FAST_GROWER_MAX_SEED_TIERS, "tier_base_cost": FAST_GROWER_SEED_TIER_BASE_COST,
+        },
+        "passive_yield": {
+            "storage_cap_hours": PASSIVE_YIELD_MAX_STORAGE_HOURS,
+            "weekly_lower_limit_hours": WEEKLY_YIELD_LOWER_LIMIT_HOURS,
+            "min_multiplier": WEEKLY_YIELD_MIN_MULTIPLIER, "max_multiplier": WEEKLY_YIELD_MAX_MULTIPLIER,
+        },
+        "bank_levels": BOTANARIUM_BANK_LEVELS,
+        "summer_months": SUMMER_MONTHS,
+    })
+
+@app.route("/api/<name>/plants")
+def list_plants(name):
+    ensure_profile(name)
+    d = load_data(name)
+    states = [compute_plant_state(p, d) for p in d.get("plants", [])]
+    weekly_hours = compute_weekly_study_hours(d)
+    bank = compute_bank_state(d)
+    claimed_24h = compute_rolling_24h_claimed(d)
+    return jsonify({
+        "plants": [s for s in states if s],
+        "weekly_study_hours": round(weekly_hours, 2),
+        "weekly_yield_multiplier": compute_weekly_yield_multiplier(weekly_hours),
+        "bank": bank,
+        "claimed_last_24h": round(claimed_24h, 1),
+        "claim_remaining_24h": round(max(0, bank["daily_claim_cap"] - claimed_24h), 1),
+    })
+
+@app.route("/api/<name>/plants/<plant_id>/fertilize", methods=["POST"])
+def fertilize_plant(name, plant_id):
+    ensure_profile(name)
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    stacks = plant.get("fertilizer_stacks", 0)
+    if stacks >= FERTILIZER_MAX_STACKS:
+        return jsonify({"error": "Fertilizer is already maxed for this plant"}), 400
+    cost = round(FERTILIZER_BASE_COST * (FERTILIZER_COST_MULTIPLIER ** stacks), 1)
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    plant["fertilizer_stacks"] = stacks + 1
+    _spend_nerds(d, "fertilizer", 1, cost)
+    save_data(name, d)
+    return jsonify({"ok": True, "fertilizer_stacks": plant["fertilizer_stacks"], "cost": cost})
+
+@app.route("/api/<name>/plants/<plant_id>/upgrade_fast_grower", methods=["POST"])
+def upgrade_fast_grower(name, plant_id):
+    ensure_profile(name)
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    plant_def = get_plant_def(plant["plant_type"])
+    tiers = plant.get("fast_grower_seed_tiers", 0)
+    if tiers >= FAST_GROWER_MAX_SEED_TIERS:
+        return jsonify({"error": "Fast Grower is already maxed for this plant"}), 400
+    seed_cost = FAST_GROWER_SEED_TIER_BASE_COST * (2 ** tiers)
+    if not _inventory_remove(d, plant_def["seed_item"], seed_cost):
+        have = _inventory_qty(d, plant_def["seed_item"])
+        return jsonify({"error": f"Not enough {plant_def['seed_item']} (need {seed_cost}, have {have.get('qty',0) if have else 0})"}), 400
+    plant["fast_grower_seed_tiers"] = tiers + 1
+    save_data(name, d)
+    return jsonify({"ok": True, "fast_grower_seed_tiers": plant["fast_grower_seed_tiers"], "seeds_spent": seed_cost})
+
+@app.route("/api/<name>/plants/<plant_id>/allocate_prestige", methods=["POST"])
+def allocate_prestige_point(name, plant_id):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    bonus_id = data.get("bonus_id")
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    plant_def = get_plant_def(plant["plant_type"])
+    if not get_plant_bonus_def(plant_def, bonus_id):
+        return jsonify({"error": "Unknown bonus"}), 400
+    growth_hours = compute_plant_growth_hours(plant, d)
+    _, prestige_tier, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+    allocations = plant.setdefault("prestige_allocations", {})
+    spent = sum(allocations.values())
+    if spent >= prestige_tier:
+        return jsonify({"error": "No Prestige points available"}), 400
+    allocations[bonus_id] = allocations.get(bonus_id, 0) + 1
+    save_data(name, d)
+    return jsonify({"ok": True, "prestige_allocations": allocations})
+
+@app.route("/api/<name>/plants/<plant_id>/claim", methods=["POST"])
+def claim_plant_yield(name, plant_id):
+    ensure_profile(name)
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    plant_def = get_plant_def(plant["plant_type"])
+    growth_hours = compute_plant_growth_hours(plant, d)
+    level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+    raw_amount, elapsed_hours, weekly_mult, _ = compute_plant_claimable_nerds(plant, plant_def, d, level)
+
+    bank = compute_bank_state(d)
+    claimed_24h = compute_rolling_24h_claimed(d)
+    remaining_cap = max(0.0, bank["daily_claim_cap"] - claimed_24h)
+    amount = round(min(raw_amount, remaining_cap), 1)
+
+    if amount <= 0:
+        reason = "Nothing to claim yet." if raw_amount <= 0 else "Your Botanarium Bank's 24h claim cap is already reached — upgrade the Bank to raise it, or wait for the window to roll over."
+        return jsonify({"ok": True, "amount": 0, "reason": reason})
+
+    claim = {
+        "id": gen_id(10), "plant_id": plant_id, "plant_type": plant["plant_type"],
+        "date": today_str(), "created": now_str(), "amount": amount,
+        "elapsed_hours": round(elapsed_hours, 2), "weekly_multiplier": weekly_mult
+    }
+    d.setdefault("passive_claims", []).append(claim)
+
+    seed_dropped = False
+    seedy_pct = get_plant_bonus_value(plant, plant_def, "seedy", level)
+    if seedy_pct > 0 and __import__("random").random() * 100 < seedy_pct:
+        _inventory_add(d, plant_def["seed_item"], 1)
+        seed_dropped = True
+
+    save_data(name, d)
+    return jsonify({"ok": True, "amount": amount, "seed_dropped": seed_dropped, "seed_item": plant_def["seed_item"] if seed_dropped else None})
+
+@app.route("/api/<name>/botanarium/bank")
+def get_bank_state(name):
+    ensure_profile(name)
+    d = load_data(name)
+    return jsonify(compute_bank_state(d))
+
+@app.route("/api/<name>/botanarium/bank/upgrade", methods=["POST"])
+def upgrade_bank(name):
+    ensure_profile(name)
+    d = load_data(name)
+    state = compute_bank_state(d)
+    if state["next_level"] is None:
+        return jsonify({"error": "The Botanarium Bank is already at its maximum level"}), 400
+    if not state["can_upgrade"]:
+        return jsonify({"error": f"Need {state['next_hours_required']}h of lifetime study (you have {state['lifetime_hours']}h)"}), 400
+    cost = state["next_nerds_cost"]
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    _spend_nerds(d, "botanarium_bank", 1, cost)
+    save_data(name, d)
+    return jsonify({"ok": True, "new_level": state["next_level"]})
+
+@app.route("/api/<name>/inventory")
+def get_inventory(name):
+    ensure_profile(name)
+    d = load_data(name)
+    # Backfill: items saved before slot_index existed get one assigned
+    # on first read after upgrading, same lazy-migration pattern used
+    # elsewhere (e.g. skill_categories in load_config).
+    changed = False
+    for it in d.get("inventory", []):
+        if it.get("slot_index") is None:
+            it["slot_index"] = _inventory_next_free_slot(d)
+            changed = True
+    if changed:
+        save_data(name, d)
+    return jsonify({"inventory": d.get("inventory", []), "slot_count": INVENTORY_SLOT_COUNT})
+
+@app.route("/api/<name>/inventory/move", methods=["POST"])
+def move_inventory_item(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    d = load_data(name)
+    if not _inventory_move(d, data.get("item_type"), int(data.get("to_slot", -1))):
+        return jsonify({"error": "Could not move item"}), 400
+    save_data(name, d)
+    return jsonify({"ok": True, "inventory": d.get("inventory", [])})
+
+@app.route("/api/<name>/shop/catalog")
+def shop_catalog(name):
+    """Everything purchasable/sellable right now — just watermelon seeds
+    for the moment, but every plant's seed_item is listed automatically
+    so future plants need zero shop code changes."""
+    ensure_profile(name)
+    items = []
+    for p in PLANT_DEFS:
+        items.append({
+            "item_type": p["seed_item"], "label": f"{p['name']} Seed",
+            "sprite": f"/sprites/{p['sprite_dir']}/{p['sprites'][0]}",
+            "buy_price": SEED_SHOP_BUY_PRICE, "sell_price": SEED_SHOP_SELL_PRICE,
+            "plant_id": p["id"],
+        })
+    return jsonify({"items": items})
+
+@app.route("/api/<name>/shop/buy", methods=["POST"])
+def shop_buy(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    item_type = data.get("item_type")
+    qty = max(1, int(data.get("qty", 1)))
+    d = load_data(name)
+    seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
+    if not seed_def:
+        return jsonify({"error": "Unknown item"}), 400
+    cost = SEED_SHOP_BUY_PRICE * qty
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    _spend_nerds(d, item_type, qty, SEED_SHOP_BUY_PRICE)
+    _inventory_add(d, item_type, qty)
+    save_data(name, d)
+    return jsonify({"ok": True, "item_type": item_type, "qty": qty, "cost": cost})
+
+@app.route("/api/<name>/shop/sell", methods=["POST"])
+def shop_sell(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    item_type = data.get("item_type")
+    qty = max(1, int(data.get("qty", 1)))
+    d = load_data(name)
+    seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
+    if not seed_def:
+        return jsonify({"error": "Unknown item"}), 400
+    if not _inventory_remove(d, item_type, qty):
+        return jsonify({"error": "Not enough of that item to sell"}), 400
+    proceeds = round(SEED_SHOP_SELL_PRICE * qty, 1)
+    d.setdefault("passive_claims", []).append({
+        "id": gen_id(8), "plant_id": None, "plant_type": None, "date": today_str(),
+        "created": now_str(), "amount": proceeds, "elapsed_hours": 0, "weekly_multiplier": 0,
+        "note": f"Sold {qty}x {item_type}"
+    })
+    save_data(name, d)
+    return jsonify({"ok": True, "item_type": item_type, "qty": qty, "proceeds": proceeds})
+
+@app.route("/api/<name>/shop/buy_theme", methods=["POST"])
+def buy_theme(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    theme_id = data.get("theme_id")
+    theme = next((t for t in THEME_CATALOG if t["id"] == theme_id), None)
+    if not theme or not theme.get("price"):
+        return jsonify({"error": "That theme isn't purchasable"}), 400
+    d = load_data(name)
+    already_owned = any(p.get("item_type") == f"theme_{theme_id}" for p in d.get("nerds_spent", []))
+    if already_owned:
+        return jsonify({"error": "You already own this theme"}), 400
+    cost = theme["price"]
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    _spend_nerds(d, f"theme_{theme_id}", 1, cost)
+    save_data(name, d)
+    return jsonify({"ok": True, "theme_id": theme_id})
+
+@app.route("/api/<name>/inventory/use_seed", methods=["POST"])
+def use_seed(name):
+    """A seed's action depends on context: if you don't yet own that
+    plant, using its seed PLANTS it (creates the plant record). If you
+    already own it, seeds can't be "used" directly — they're spent via
+    /plants/<id>/upgrade_fast_grower or sold via /shop/sell instead."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    item_type = data.get("item_type")
+    d = load_data(name)
+    plant_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
+    if not plant_def:
+        return jsonify({"error": "Unknown seed"}), 400
+    already_owned = any(p["plant_type"] == plant_def["id"] for p in d.get("plants", []))
+    if already_owned:
+        return jsonify({"error": f"You already have a {plant_def['name']}. Spend extra seeds on its Fast Grower upgrade, or sell them in the Market."}), 400
+    if not _inventory_remove(d, item_type, 1):
+        return jsonify({"error": "You don't have that seed"}), 400
+    plant = {
+        "id": gen_id(10), "plant_type": plant_def["id"], "created": now_str(),
+        "fertilizer_stacks": 0, "fast_grower_seed_tiers": 0, "prestige_allocations": {}
+    }
+    d.setdefault("plants", []).append(plant)
+    save_data(name, d)
+    return jsonify({"ok": True, "plant": plant})
 
 
 # ── Charts (seaborn) ──
@@ -2035,6 +3021,10 @@ THEME_PALETTES = {
                  "palette": ["#ff4fc3", "#d626a0", "#7bd6ff", "#4fd68c", "#ffb84f", "#ff5c7a", "#ffd54f", "#c792ea"]},
     "coffee":   {"bg": "#221a14", "panel": "#2c221a", "border": "#4d3c2c", "text": "#f0e4d6", "dim": "#a5907c",
                  "palette": ["#c8965a", "#8a5a2e", "#e0b888", "#7ea15a", "#d9a441", "#c26b4f", "#d1a94e", "#a97c50"]},
+    "aurora":   {"bg": "#06111a", "panel": "#0c1c2a", "border": "#1c3d54", "text": "#d9f5ef", "dim": "#6f9aa5",
+                 "palette": ["#45e8c4", "#7c5cff", "#45c4e8", "#45e8a0", "#ffd166", "#ff6b8b", "#d4ff66", "#8fa8ff"]},
+    "velvet":   {"bg": "#170a17", "panel": "#221129", "border": "#452750", "text": "#f5e3f0", "dim": "#a582a3",
+                 "palette": ["#d946a8", "#7c2d8f", "#f0729e", "#5fbf8f", "#e0a458", "#e0526e", "#e6b84e", "#b874c9"]},
 }
 
 def _theme_colors(theme):
@@ -2669,6 +3659,21 @@ def app_js():
 def styles_css():
     return send_file(Path(__file__).parent / "styles.css")
 
+@app.route("/sprites/<path:subpath>")
+def sprite_file(subpath):
+    """Serves everything under /sprites/<category>/<file> — e.g.
+    /sprites/crops/watermelon0.png, /sprites/gui/item-slot.png,
+    /sprites/nerds/coin_01.png. Drop new art straight into the matching
+    folder next to server.py; no route changes ever needed."""
+    requested = (SPRITES_DIR / subpath).resolve()
+    try:
+        requested.relative_to(SPRITES_DIR.resolve())
+    except ValueError:
+        abort(404)
+    if not requested.exists() or not requested.is_file():
+        abort(404)
+    return send_file(requested)
+
 if __name__ == "__main__":
-    print("StudyTracker v1.3 — http://localhost:8080")
+    print("StudyTracker v2.0 — http://localhost:8080")
     app.run(host="127.0.0.1", port=8080, debug=False)
