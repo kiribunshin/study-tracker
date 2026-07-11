@@ -9,6 +9,7 @@ echo ================================================
 echo    StudyTracker v2.0
 echo    Study Tracking Dashboard
 echo    Live to love. Love to learn. Learn to live.
+echo    Now Featuring: The Botanarium
 echo ================================================
 echo.
 
