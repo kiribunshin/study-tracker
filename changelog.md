@@ -1,3 +1,23 @@
+# v2.1 changes:
+This patch comes with many fixes to bugs in v2.0 as well as inherited bugs from previous versions.
+- Added: Clementine's Book of Wonders now lists all the hours needed for plant levels as well as the significance of their respective bonuses.
+- Added: Plant neglect:
+    - Global neglect: This kicks in when it's been 14 days since the last logged session, applying a 25% reduction to all plant passive Nerds yield.
+    - Specific neglect: A plant that hasn't gotten care (growth hours) in a specific amount of days begins producing Nerds at an extremely reduced rate. This scales with the number of plants you own as to not feel overwhelming.
+- Added: `Finance` - You can see when and where you got all your Nerds.
+- Added: Teacher/Professor absence can now be marked in lessons and the stats will handle it accordingly.
+- Changed: A plant must be selected (specified) in the Botanarium so that study hours count towards its growth hours. Otherwise, either the most recently incremented plant or a random plant will be selected automatically for growth.
+- Changed: The fertilizer is now a temporary system, requiring renewal for its effects to still be implemented.
+- Changed: Made it clearer when adding multiple of the same lesson-type per week.
+- Changed: Renamed Cours/TD/TP to their English alternatives: Lesson/Practical Work/Lab.
+- Fixed: Adding a note as the timer ends should now work - it previously did not save.
+- Fixed: When editing a present note, its current text will be displayed as it would in a normal text editor.
+- Fixed: When an old self-study session is logged, the time is now specified as `Start Time` and should display correctly in the timetable.
+- Fixed: Studying past midnight should now display normally in the timetable.
+- Fixed: "Partial" now appears as yellow under the `Recent Activity` section of the `Dashboard`.
+
+---
+
 # v2.0 - The Botany Update:
 - Added: The Botanarium - A space where the plant lover in you can thrive:
     - Care for plants: You can buy seeds and grow plants through hours studied.

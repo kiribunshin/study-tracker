@@ -454,6 +454,7 @@ tr:hover td { background: var(--accent-soft); }
 .tag-present { background: var(--green); color: #fff; }
 .tag-partial { background: var(--amber); color: #fff; }
 .tag-absent { background: var(--red); color: #fff; }
+.tag-teacher_absent { background: var(--textdim); color: #fff; }
 .tag-done { background: var(--green); color: #fff; }
 .tag-scheduled { background: var(--accent); color: #fff; }
 
@@ -573,6 +574,23 @@ tr:hover td { background: var(--accent-soft); }
     color-mix(in srgb, var(--amber) 8%, transparent) 12px
   );
 }
+/* Teacher-absent lesson slots — the slot still shows (it existed on
+   the schedule) but is visually barred/dimmed to signal it didn't
+   actually happen, the same "diagonal stripe" language as a break
+   block but in a neutral/dim tone instead of amber so it doesn't read
+   as a real completed lesson OR get confused with a timer break. */
+.cal-event.cal-teacher-absent {
+  border-left-color: var(--textdim);
+  opacity: .6;
+  filter: saturate(.4);
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--textdim) 18%, transparent),
+    color-mix(in srgb, var(--textdim) 18%, transparent) 6px,
+    color-mix(in srgb, var(--textdim) 8%, transparent) 6px,
+    color-mix(in srgb, var(--textdim) 8%, transparent) 12px
+  );
+}
 /* Study/break blocks that belong to the same timer session are drawn
    as separate rectangles but are functionally one unit — hovering any
    one of them (see the mouseenter/mouseleave wiring in renderCalendar)
@@ -665,6 +683,14 @@ tr:hover td { background: var(--accent-soft); }
 /* ── Botanarium ── */
 .pixel-sprite { image-rendering: pixelated; display: block; }
 .plant-card { display: flex; flex-direction: column; border-width: 2px; }
+.plant-card.plant-withered .pixel-sprite { filter: grayscale(1) brightness(.92) contrast(.95); }
+.plant-card.plant-selected-growth { box-shadow: 0 0 0 2px var(--green), var(--shadow); }
+.plant-select-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 9px; border-radius: 20px; background: var(--green);
+  color: #06210f; font-size: var(--font-xxs); font-weight: 800; white-space: nowrap;
+}
+.plant-card.plant-withered { opacity: .92; }
 .yield-chip {
   display: flex; align-items: center; gap: 4px;
   padding: 3px 8px; border-radius: 20px; background: var(--bg3);

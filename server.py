@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""StudyTracker v2.0 — Portable study tracking web app."""
-import os, json, time, hashlib, shutil, math, uuid
+"""StudyTracker v2.1 — Portable study tracking web app."""
+import os, json, time, hashlib, shutil, math, uuid, random
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
 from collections import defaultdict
@@ -24,7 +24,9 @@ DEFAULT_DATA = {
     "plants": [],          # owned Botanarium plants — see PLANT_DEFS / compute_plant_state()
     "inventory": [],       # {item_type, qty} stacks — seeds, future sellables, etc.
     "passive_claims": [],  # {id, plant_id, plant_type, date, created, amount, elapsed_hours, weekly_multiplier}
-    "nerds_spent": []      # {id, date, created, item_type, qty, unit_cost, total_cost} — every Nerds purchase
+    "nerds_spent": [],     # {id, date, created, item_type, qty, unit_cost, total_cost} — every Nerds purchase
+    "nerds_earned": [],    # {id, date, created, source, record_id?, level?, mastery_key?, label, amount, detail} — every Nerds gain, logged in real time (see reconcile_nerds_ledger / _log_self_study_gain)
+    "selected_plant_id": None  # which owned plant currently GROWS from study sessions — see /plants/<id>/select
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -64,6 +66,21 @@ ATTENDANCE_XP_PARTIAL = 4
 EXAM_XP_BASE = 20            # awarded for any completed ("done") exam
 EXAM_XP_SCORE_BONUS_MAX = 30 # additional, scaled by score/20 (a 20/20 exam gets the full bonus)
 
+# Attendance statuses. "teacher_absent" (the lesson was cancelled/the
+# teacher didn't show) is deliberately NOT "absent" — it earns no XP
+# (no lesson happened) but also doesn't count against the student in
+# attendance-rate stats/badges/recommendations, since it wasn't their
+# doing. See REC_ATTENDANCE_RATE_WARNING_PCT usage in get_recommendations
+# and the "attendance" badge in compute_badge_progress — both only look
+# at the student's own present/partial/absent, teacher_absent is excluded
+# from those denominators entirely.
+ATTENDANCE_STATUSES = ["present", "partial", "absent", "teacher_absent"]
+
+# Lesson/attendance type codes stay "C"/"TD"/"TP" in stored data (so
+# existing records never need migrating), but display everywhere as
+# Lesson / Practical Work / Lab.
+LESSON_TYPE_LABELS = {"C": "Lesson", "TD": "Practical Work", "TP": "Lab"}
+
 # ── Login / Streak XP ──
 LOGIN_XP_DAILY = 10
 LOGIN_XP_STREAK_BONUS = 50           # awarded INSTEAD of the daily amount every Nth day
@@ -75,6 +92,11 @@ TIERS = ["Bachelor's I", "Bachelor's II", "Bachelor's III", "Master's I", "Maste
          "Master's III", "PhD I", "PhD II", "PhD III", "Laureate"]
 TIER_XP = [30, 80, 180, 350, 650, 1200, 2200, 4000, 7000, 12000]           # XP awarded per badge tier reached
 MASTERY_TIER_XP = [20, 50, 120, 250, 500, 900, 1600, 3000, 5200, 9000]     # XP awarded per mastery tier reached
+# Done-minutes needed (per subject/skill/category) to REACH each mastery
+# tier — shared by compute_mastery() and the Finance Ledger's mastery-
+# crossing simulation (compute_mastery_ledger_entries) so both agree on
+# exactly which day a tier was reached.
+MASTERY_MINUTE_THRESHOLDS = [60, 300, 900, 2400, 6000, 12000, 24000, 45000, 80000, 140000]
 
 # ── Badge definitions — copy-paste a block below to add a new badge.
 # thresholds_* must have exactly 10 ascending values (one per TIERS
@@ -252,14 +274,18 @@ PRESTIGE_BUFF_POINT_INCREMENTS = {
     "hydration": 1.0,      # +1% XP&Nerds (on top of the base 5%) per point
 }
 
-# Fertilizer — bought with Nerds, stacks additively, speeds up growth-
-# hour accrual for ALL of a profile's plants at once (a global boost,
-# not per-plant) up to FERTILIZER_MAX_STACKS. Affects LEVELING UP only —
-# not the passive yield rate (that's what Fast Grower is for).
-FERTILIZER_GROWTH_BONUS_PCT = 10        # +10% growth-hour rate per stack
-FERTILIZER_MAX_STACKS = 5               # cap: +50% growth speed
-FERTILIZER_BASE_COST = 40               # Nerds cost of stack #1
-FERTILIZER_COST_MULTIPLIER = 1.6        # each further stack costs 1.6x the last
+# Fertilizer — bought with Nerds, a TEMPORARY buff (not a permanent
+# stack). One application boosts THIS plant's growth-hour accrual rate
+# for FERTILIZER_DURATION_HOURS from the moment it's bought; after that
+# window it reverts to normal speed and can be bought again any time —
+# there's no cap and no escalating cost, since it's not accumulating
+# anything permanent. Applying it again while still active just
+# refreshes the window back to a full FERTILIZER_DURATION_HOURS from
+# now (not additive/stacking on top of itself). Affects LEVELING UP
+# only — not the passive yield rate (that's what Fast Grower is for).
+FERTILIZER_GROWTH_BONUS_PCT = 20         # +20% growth-hour rate while active
+FERTILIZER_DURATION_HOURS = 24           # how long one application lasts
+FERTILIZER_COST = 45                     # flat Nerds cost, every time
 
 # Seeds — the Market's entry item. First seed of a given plant type
 # plants it (if not already owned); any seed after that can only be
@@ -311,6 +337,34 @@ WEEKLY_YIELD_MIN_MULTIPLIER = 0.01
 WEEKLY_YIELD_MAX_MULTIPLIER = 2.0
 WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE = 0.1   # +10% multiplier per hour studied beyond the lower limit
 
+# Neglect / withering — TWO independent, stacking signals:
+#
+# 1) GLOBAL neglect: no self-study logged AT ALL (any subject/skill) in
+#    PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD days. A soft, purely numeric
+#    penalty applied to every owned plant equally — meant to forgive a
+#    single quiet week (the weekly multiplier already does that) but
+#    respond to a genuine multi-week absence.
+#
+# 2) PLANT-SPECIFIC neglect: THIS plant hasn't accrued at least
+#    PLANT_SPECIFIC_NEGLECT_MIN_HOURS of growth within its own rolling
+#    window. This is the harsh, visible one (wither sprite) — and its
+#    window SCALES WITH how many plants you own, since someone with 30
+#    plants can't realistically give each one weekly attention the way
+#    someone with 1 plant can. The formula is anchored so 1 plant gets
+#    the same ~2-week window as the global check (owning one plant IS
+#    basically the global signal), 3 plants get ~3 weeks each, and 30
+#    plants get ~4 months each — enough rotation room for a real
+#    collection without ever feeling like a daily chore. Reaching the
+#    minimum hours (not just "any" session) is what stops someone from
+#    gaming this with a token 10-minute check-in.
+PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD = 14
+PLANT_GLOBAL_NEGLECT_YIELD_FRACTION = 0.25
+
+PLANT_SPECIFIC_NEGLECT_MIN_HOURS = 1.0
+PLANT_SPECIFIC_NEGLECT_YIELD_FRACTION = 0.05   # stacks multiplicatively with the global fraction above
+PLANT_SPECIFIC_NEGLECT_BASE_DAYS = 10
+PLANT_SPECIFIC_NEGLECT_PER_PLANT_DAYS = 3.6667  # -> ~14d @ 1 plant, ~21d @ 3, ~120d @ 30
+
 # The Botanarium Bank — a separate, PERMANENT progression track (not
 # weekly, never resets) that raises how many Nerds can be claimed in
 # any rolling 24h window, across ALL plants combined. Upgrading a tier
@@ -344,6 +398,13 @@ PLANT_DEFS = [
         "scientific_name": "Citrullus lanatus",
         "sprite_dir": "crops",
         "sprites": ["watermelon0.png", "watermelon1.png", "watermelon2.png", "watermelon3.png", "watermelon4.png"],
+        # NOTE: withering no longer swaps to a separate sprite file (the
+        # old watermelonh.png approach) — that asset is reserved for a
+        # future harvest system instead. A withered plant now shows its
+        # normal current-level sprite with a grayscale CSS filter applied
+        # client-side (see .plant-card.plant-withered .pixel-sprite in
+        # styles.css), so "withered seed" still looks like a seed, just
+        # drained of color, and likewise at every other level.
         "seed_item": "watermelon_seed",
         # Cumulative growth-hours (since acquired, Fertilizer applied)
         # needed to REACH each level. Level 1 is immediate — the plant
@@ -982,10 +1043,14 @@ def get_recommendations(cfg, d):
 
     # Attendance-rate warning (kept — this is a fixed academic policy
     # threshold, not a personalized guess, so a constant is appropriate
-    # here unlike the old difficulty/study-time rule).
+    # here unlike the old difficulty/study-time rule). teacher_absent
+    # records are excluded entirely — a cancelled/no-show lesson isn't
+    # the student's attendance to be judged on.
     attendance_by_subject_events = defaultdict(int)
     attendance_by_subject_present = defaultdict(int)
     for r in d.get("attendance", []):
+        if r.get("status") == "teacher_absent":
+            continue
         sid = r.get("subject_id", "")
         attendance_by_subject_events[sid] += 1
         if r.get("status") == "present":
@@ -1091,6 +1156,10 @@ def undo_delete(name):
         return jsonify({"error": "Unknown record type"}), 400
     if not any(r.get("id") == record.get("id") for r in d[kind]):
         d[kind].append(record)
+        cfg = load_config(name)
+        if kind == "self_study":
+            _log_self_study_gain(cfg, d, record)
+        reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
     return jsonify({"ok": True, "kind": kind, "record": record})
 
@@ -1379,23 +1448,30 @@ def add_self_study(name):
     ensure_profile(name)
     data = request.get_json(force=True)
     record_date = data.get("date", today_str())
+    minutes = int(data.get("minutes", 0))
     # A manually-added record's `created` timestamp doubles as its
-    # Timetable time-of-day anchor (see buildDayEvents in app.js), so it
-    # needs to reflect the person's CHOSEN date/time, not just whichever
-    # instant they happened to click Save — otherwise a backdated entry
-    # would silently show up at "right now" on the Timetable instead of
-    # any sensible time on the date it's actually dated. Falls back to
-    # the real current time if no time was given (e.g. older API
-    # clients, or a future integration that doesn't send one).
+    # Timetable time-of-day anchor (see buildDayEvents in app.js, which
+    # for a record with no `segments` treats `created` as the session's
+    # END and works backward by `minutes` to find its start). The time
+    # typed into the Add Self-Study form is the START time as the person
+    # understands it ("I started studying at 14:00"), so it has to be
+    # converted to that same END-anchored `created` here — storing it
+    # directly as `created` (the old behavior) silently mislabeled every
+    # manual entry's start time as its end time, shifting it later than
+    # it should be on the Timetable. Falls back to the real current time
+    # if no time was given (e.g. older API clients).
     time_str = data.get("time")
     if time_str:
         try:
             hh, mm = time_str.split(":")
-            created = f"{record_date}T{int(hh):02d}:{int(mm):02d}:00"
+            start_dt = datetime.strptime(record_date, "%Y-%m-%d") + __import__("datetime").timedelta(hours=int(hh), minutes=int(mm))
+            end_dt = start_dt + __import__("datetime").timedelta(minutes=minutes)
+            created = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
         except Exception:
             created = now_str()
     else:
         created = now_str()
+    d = load_data(name)
     record = {
         "id": gen_id(12),
         "date": record_date,
@@ -1405,10 +1481,17 @@ def add_self_study(name):
         "difficulty": data.get("difficulty", 5),
         "status": data.get("status", "Done"),  # Done, Partial, Skipped
         "note": data.get("note", ""),
+        # Which plant this session grows — explicit selection wins, else
+        # falls back to whichever plant most recently grew, else a
+        # random owned plant. Never "all of them," never silently none
+        # while any plant is owned. See _resolve_growth_plant_id().
+        "grown_plant_id": _resolve_growth_plant_id(d),
         "created": created
     }
-    d = load_data(name)
     d["self_study"].append(record)
+    cfg = load_config(name)
+    _log_self_study_gain(cfg, d, record)
+    reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
     xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
     xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
@@ -1420,11 +1503,21 @@ def update_self_study(name, rec_id):
     ensure_profile(name)
     data = request.get_json(force=True)
     d = load_data(name)
+    updated_record = None
     for r in d["self_study"]:
         if r["id"] == rec_id:
             r.update(data)
             r["modified"] = now_str()
+            updated_record = r
             break
+    if updated_record:
+        cfg = load_config(name)
+        # The old gain entry (based on the pre-edit minutes/difficulty/
+        # status) is now stale — drop it and log a fresh one from the
+        # updated record, rather than leaving a wrong amount on the books.
+        _remove_ledger_entries(d, "self_study", rec_id)
+        _log_self_study_gain(cfg, d, updated_record)
+        reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
     return jsonify({"ok": True})
 
@@ -1436,6 +1529,8 @@ def delete_self_study(name, rec_id):
     d["self_study"] = [r for r in d["self_study"] if r["id"] != rec_id]
     if removed:
         push_trash(name, "self_study", removed)
+        _remove_ledger_entries(d, "self_study", rec_id)
+        reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True, "undoable": bool(removed)})
 
@@ -1448,15 +1543,16 @@ def add_attendance(name):
         "id": gen_id(12),
         "date": data.get("date", today_str()),
         "subject_id": data.get("subject_id", ""),
-        "type": data.get("type", "C"),  # C, TD, TP
+        "type": data.get("type", "C"),  # C=Lesson, TD=Practical Work, TP=Lab
         "event_label": data.get("event_label", ""),  # e.g. "TD1", "Lab 3"
-        "status": data.get("status", "present"),  # present, partial, absent
+        "status": data.get("status", "present"),  # present, partial, absent, teacher_absent
         "minutes": int(data.get("minutes", 0)),
         "note": data.get("note", ""),
         "created": now_str()
     }
     d = load_data(name)
     d["attendance"].append(record)
+    reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True, "record": record})
 
@@ -1470,6 +1566,7 @@ def update_attendance(name, rec_id):
             r.update(data)
             r["modified"] = now_str()
             break
+    reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True})
 
@@ -1481,6 +1578,7 @@ def delete_attendance(name, rec_id):
     d["attendance"] = [r for r in d["attendance"] if r["id"] != rec_id]
     if removed:
         push_trash(name, "attendance", removed)
+        reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True, "undoable": bool(removed)})
 
@@ -1599,6 +1697,7 @@ def add_exam(name):
         exam["score"] = max(0, min(20, float(exam["score"])))
     d = load_data(name)
     d["exams"].append(exam)
+    reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True, "exam": exam})
 
@@ -1615,6 +1714,7 @@ def update_exam(name, exam_id):
                 e["score"] = max(0, min(20, float(e["score"])))
             e["modified"] = now_str()
             break
+    reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True})
 
@@ -1626,6 +1726,7 @@ def delete_exam(name, exam_id):
     d["exams"] = [e for e in d["exams"] if e["id"] != exam_id]
     if removed:
         push_trash(name, "exams", removed)
+        reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     return jsonify({"ok": True, "undoable": bool(removed)})
 
@@ -1697,8 +1798,9 @@ def timer_stop(name, timer_id):
     ensure_profile(name)
     data = request.get_json(force=True)
     d = load_data(name)
-    xp_earned = 0
-    nerds_earned = 0
+    xp_earned = 0.0
+    nerds_earned = 0.0
+    created_records = []
     for t in d["timers"]:
         if t["id"] == timer_id:
             t["status"] = "completed"
@@ -1706,33 +1808,65 @@ def timer_stop(name, timer_id):
             t["completed_at"] = now_str()
             t["difficulty"] = data.get("difficulty", 5)
             t["self_study_status"] = data.get("self_study_status", "Done")
-            # Auto-create self-study record if requested
+            # Auto-create self-study record(s) if requested. A session
+            # that runs past midnight is split client-side into one
+            # "day bucket" per real calendar day it touched (see
+            # computeDayBuckets() in app.js) — each becomes its OWN
+            # self-study record with its own date, minutes, and slice
+            # of segments, so an overnight session shows up correctly
+            # on BOTH days instead of being mis-dated onto whichever day
+            # the Stop button happened to be pressed on, or silently
+            # losing whichever segment crossed midnight. day_buckets is
+            # optional for backward compatibility (older cached
+            # frontends, or any other API caller) — falls back to the
+            # old single-record-dated-today behavior if absent.
             if data.get("auto_record", True):
-                record = {
-                    "id": gen_id(12),
-                    "date": today_str(),
-                    "subject_id": t.get("subject_id", ""),
-                    "skill_id": t.get("skill_id", ""),
-                    "minutes": t["actual_minutes"],
-                    "difficulty": data.get("difficulty", 5),
-                    "status": data.get("self_study_status", "Done"),
-                    "note": t.get("note", ""),
-                    # Study/break segments from the timer session (free timer
-                    # pause/resume cycles, or Pomodoro work/break phases) —
-                    # used by the Timetable to draw the session as multiple
-                    # visually-distinct but functionally-linked blocks
-                    # instead of one solid rectangle. Optional/empty for
-                    # manual self-study entries, which have no timer.
-                    "segments": data.get("segments", []),
-                    "created": now_str()
-                }
-                d["self_study"].append(record)
-                xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
-                xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
-                nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
+                day_buckets = data.get("day_buckets")
+                if not day_buckets:
+                    day_buckets = [{"date": today_str(), "minutes": t["actual_minutes"], "segments": data.get("segments", [])}]
+                for bucket in day_buckets:
+                    mins = int(bucket.get("minutes", 0))
+                    if mins <= 0:
+                        continue
+                    record = {
+                        "id": gen_id(12),
+                        "date": bucket.get("date", today_str()),
+                        "subject_id": t.get("subject_id", ""),
+                        "skill_id": t.get("skill_id", ""),
+                        "minutes": mins,
+                        "difficulty": data.get("difficulty", 5),
+                        "status": data.get("self_study_status", "Done"),
+                        # BUGFIX: this used to read t.get("note", "") — the
+                        # timer's OWN note field, which is set at
+                        # timer/start and is always empty since the start
+                        # form never collects one. The note the person
+                        # actually types is in the STOP request's rating
+                        # modal payload (see saveSession() in app.js),
+                        # which is `data` here, not `t`.
+                        "note": data.get("note", ""),
+                        # Study/break segments from the timer session (free timer
+                        # pause/resume cycles, or Pomodoro work/break phases) —
+                        # used by the Timetable to draw the session as multiple
+                        # visually-distinct but functionally-linked blocks
+                        # instead of one solid rectangle. Optional/empty for
+                        # manual self-study entries, which have no timer.
+                        "segments": bucket.get("segments", []),
+                        "grown_plant_id": _resolve_growth_plant_id(d),
+                        "created": now_str()
+                    }
+                    d["self_study"].append(record)
+                    created_records.append(record)
             break
+    cfg = load_config(name)
+    for record in created_records:
+        _log_self_study_gain(cfg, d, record)
+    reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
-    return jsonify({"ok": True, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
+    for record in created_records:
+        xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
+        xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
+        nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
+    return jsonify({"ok": True, "xp_earned": round(xp_earned, 1), "nerds_earned": round(nerds_earned, 1), "records_created": len(created_records)})
 
 @app.route("/api/<name>/timer/<timer_id>", methods=["DELETE"])
 def delete_timer(name, timer_id):
@@ -2012,22 +2146,75 @@ def compute_weekly_yield_multiplier(weekly_study_hours):
     frac = weekly_study_hours / lower
     return round(WEEKLY_YIELD_MIN_MULTIPLIER + (1.0 - WEEKLY_YIELD_MIN_MULTIPLIER) * frac, 4)
 
+def _resolve_growth_plant_id(d):
+    """Which plant a NEW self-study session should grow. Explicit
+    selection (d["selected_plant_id"]) always wins if it's still a plant
+    the person owns. If nothing is explicitly selected, growth must
+    still go to exactly ONE plant, never all of them and never silently
+    none (as long as at least one plant is owned) — falls back to
+    whichever plant most recently received growth, so switching away
+    from the Botanarium page and back doesn't reset who's growing.
+    True first-time fallback (no plant has ever grown yet) picks
+    randomly among owned plants rather than defaulting to a fixed one,
+    so no single species is quietly favored."""
+    owned_ids = {p["id"] for p in d.get("plants", [])}
+    if not owned_ids:
+        return None
+    selected = d.get("selected_plant_id")
+    if selected in owned_ids:
+        return selected
+    for r in sorted(d.get("self_study", []), key=lambda x: x.get("created", ""), reverse=True):
+        gpid = r.get("grown_plant_id")
+        if gpid in owned_ids:
+            return gpid
+    return random.choice(list(owned_ids))
+
+def _fertilizer_multiplier_at(plant_record, timestamp_str):
+    """Was Fertilizer active on THIS plant at the moment a given
+    self-study record was created? Fertilizer is a temporary buff (see
+    Control Panel) — plant_record["fertilizer_periods"] is a list of
+    {start, end} ISO windows (one per purchase/refresh), so a session
+    logged outside every window gets no bonus even if fertilizer was
+    active earlier or later."""
+    if not timestamp_str:
+        return 1.0
+    for period in plant_record.get("fertilizer_periods", []):
+        if period.get("start", "") <= timestamp_str <= period.get("end", ""):
+            return 1.0 + FERTILIZER_GROWTH_BONUS_PCT / 100.0
+    return 1.0
+
 def compute_plant_growth_hours(plant_record, d):
-    """Cumulative growth-hours a plant has banked toward leveling up —
-    ALL self-study minutes (any subject/skill; growth is generic, not
-    tied to what you studied) logged since the plant was acquired,
-    quality-weighted the same way as everything else, with Fertilizer's
-    flat rate bonus applied. This determines LEVEL — a completely
+    """Cumulative growth-hours a plant has banked toward leveling up.
+    Growth is no longer split across every owned plant at once — each
+    self-study record is stamped at creation time with the
+    `grown_plant_id` that was resolved for growth at that moment (see
+    _resolve_growth_plant_id() and the stamping in add_self_study/
+    timer_stop), and only minutes stamped for THIS plant (logged since
+    it was acquired) count here. Records saved before this feature
+    existed have no `grown_plant_id` KEY at all (distinct from having
+    the key present but set to None) — those legacy minutes still count
+    toward EVERY plant, preserving whatever progress had already accrued
+    under the old all-plants-grow-at-once behavior, so nobody's existing
+    plants silently regress. Quality-weighted the same way as everything
+    else, with Fertilizer's TEMPORARY per-session rate bonus applied
+    (see _fertilizer_multiplier_at) — unlike before, this is no longer a
+    single flat multiplier for the whole plant; each session only gets
+    the bonus if Fertilizer was active on this plant at the moment that
+    specific session was logged. This determines LEVEL — a completely
     separate track from the weekly passive-yield multiplier above."""
     acquired = plant_record.get("created", "")
-    fert_mult = 1.0 + (plant_record.get("fertilizer_stacks", 0) * FERTILIZER_GROWTH_BONUS_PCT / 100.0)
     mins = 0.0
     for r in d.get("self_study", []):
         created = r.get("created", "")
         if not created or created < acquired:
             continue
-        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done"))
-    return (mins / 60.0) * fert_mult
+        if "grown_plant_id" in r:
+            gpid = r.get("grown_plant_id")
+            if gpid != plant_record["id"]:
+                continue
+        fert_mult = _fertilizer_multiplier_at(plant_record, created)
+        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done")) * fert_mult
+    return mins / 60.0
 
 def compute_plant_level_and_prestige(growth_hours, plant_def):
     """Returns (level 1..PLANT_MAX_LEVEL, prestige_tier 0=none/1../10,
@@ -2069,6 +2256,61 @@ def get_plant_bonus_value(plant_record, plant_def, bonus_id, level):
     value += points * PRESTIGE_BUFF_POINT_INCREMENTS.get(bonus_id, 0)
     return round(value, 2)
 
+def compute_days_since_last_study(d):
+    """Days since the most recent self-study record of ANY kind — the
+    trigger for GLOBAL neglect. None if no study has ever been logged."""
+    dates = [r.get("date", "") for r in d.get("self_study", []) if r.get("date")]
+    if not dates:
+        return None
+    try:
+        last = max(datetime.strptime(dt, "%Y-%m-%d") for dt in dates)
+        return (datetime.strptime(today_str(), "%Y-%m-%d") - last).days
+    except Exception:
+        return None
+
+def is_globally_neglected(d):
+    days = compute_days_since_last_study(d)
+    return days is not None and days >= PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD
+
+def compute_plant_specific_window_days(plant_count):
+    """How many days THIS plant can go without enough growth hours
+    before it specifically withers. Scales with collection size — see
+    the Control Panel comment above PLANT_SPECIFIC_NEGLECT_BASE_DAYS."""
+    n = max(1, plant_count)
+    return round(PLANT_SPECIFIC_NEGLECT_BASE_DAYS + PLANT_SPECIFIC_NEGLECT_PER_PLANT_DAYS * n)
+
+def compute_plant_recent_growth_hours(plant_record, d, window_days):
+    """Growth-hours THIS plant has accrued within the last `window_days`
+    days (not its full since-acquired total — see compute_plant_growth_hours
+    for that). This is what plant-specific neglect is measured against,
+    so a single token session long ago can't keep resetting the clock
+    forever without real recent investment."""
+    acquired = plant_record.get("created", "")
+    try:
+        cutoff = (datetime.strptime(today_str(), "%Y-%m-%d") - __import__("datetime").timedelta(days=window_days)).strftime("%Y-%m-%d")
+    except Exception:
+        cutoff = ""
+    mins = 0.0
+    for r in d.get("self_study", []):
+        created = r.get("created", "")
+        if not created or created < acquired:
+            continue
+        if r.get("date", "") < cutoff:
+            continue
+        if "grown_plant_id" in r:
+            gpid = r.get("grown_plant_id")
+            if gpid != plant_record["id"]:
+                continue
+        fert_mult = _fertilizer_multiplier_at(plant_record, created)
+        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done")) * fert_mult
+    return mins / 60.0
+
+def is_plant_specifically_neglected(plant_record, d):
+    plant_count = len(d.get("plants", []))
+    window_days = compute_plant_specific_window_days(plant_count)
+    recent_hours = compute_plant_recent_growth_hours(plant_record, d, window_days)
+    return recent_hours < PLANT_SPECIFIC_NEGLECT_MIN_HOURS
+
 def compute_plant_state(plant_record, d):
     """Full computed view of one owned plant — everything the frontend
     needs to render its card in one shot."""
@@ -2088,14 +2330,47 @@ def compute_plant_state(plant_record, d):
     color = PLANT_PRESTIGE_COLORS[min(prestige_tier, len(PLANT_PRESTIGE_COLORS)) - 1] if prestige_tier > 0 else PLANT_LEVEL_COLORS[level - 1]
     tier_name = PLANT_PRESTIGE_NAMES[prestige_tier - 1] if prestige_tier > 0 else f"Level {level}"
     claimable, elapsed_hours, weekly_mult, effective_rate = compute_plant_claimable_nerds(plant_record, plant_def, d, level, bonuses)
+    # The visible "wither" state (sprite swap, warning banner) is tied
+    # to the harsher PLANT-SPECIFIC signal, not the softer global one —
+    # global neglect quietly dents every plant's numbers without
+    # changing how any of them look; specific neglect is the one meant
+    # to visibly nag about THIS plant.
+    specifically_neglected = is_plant_specifically_neglected(plant_record, d)
+    globally_neglected = is_globally_neglected(d)
+    # Withering no longer swaps to a separate sprite file — it always
+    # shows the plant's normal current-level sprite; the frontend applies
+    # a grayscale CSS filter when `withered` is true (see .plant-withered
+    # in styles.css), so a withered seed still reads as a seed, just
+    # drained of color, same for every other growth stage.
+    sprite_file = plant_def["sprites"][level - 1]
+    # Fertilizer active/remaining — a temporary buff, not a permanent
+    # stack, so the card needs "is it active right now, and for how much
+    # longer" rather than a stack count.
+    fert_active = False
+    fert_remaining_hours = 0.0
+    now_iso = now_str()
+    for period in plant_record.get("fertilizer_periods", []):
+        if period.get("start", "") <= now_iso <= period.get("end", ""):
+            fert_active = True
+            try:
+                end_dt = datetime.strptime(period["end"], "%Y-%m-%dT%H:%M:%S")
+                fert_remaining_hours = max(0.0, (end_dt - datetime.now()).total_seconds() / 3600.0)
+            except Exception:
+                pass
+            break
     return {
         "id": plant_record["id"], "plant_type": plant_def["id"], "name": plant_def["name"],
         "scientific_name": plant_def["scientific_name"],
-        "sprite": f"/sprites/{plant_def['sprite_dir']}/{plant_def['sprites'][level - 1]}",
+        "sprite": f"/sprites/{plant_def['sprite_dir']}/{sprite_file}",
+        "withered": specifically_neglected, "globally_neglected": globally_neglected,
+        "is_selected_for_growth": d.get("selected_plant_id") == plant_record["id"],
         "level": level, "prestige_tier": prestige_tier, "tier_name": tier_name, "color": color,
         "growth_hours": round(growth_hours, 2),
         "hours_into_level": round(into, 2), "hours_for_next_level": nxt,
-        "fertilizer_stacks": plant_record.get("fertilizer_stacks", 0),
+        "fertilizer_active": fert_active,
+        "fertilizer_remaining_hours": round(fert_remaining_hours, 1),
+        "fertilizer_cost": FERTILIZER_COST,
+        "fertilizer_bonus_pct": FERTILIZER_GROWTH_BONUS_PCT,
         "fast_grower_seed_tiers": plant_record.get("fast_grower_seed_tiers", 0),
         "prestige_allocations": plant_record.get("prestige_allocations") or {},
         "prestige_points_available": max(0, prestige_tier - sum((plant_record.get("prestige_allocations") or {}).values())),
@@ -2110,11 +2385,12 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
     """How many Nerds this plant would pay out if claimed RIGHT NOW —
     base rate for its level, scaled by the weekly study multiplier and
     real hours elapsed since its last claim (capped at
-    PASSIVE_YIELD_MAX_STORAGE_HOURS), then Voluminous/Fast Grower on top.
-    Does NOT apply the Bank's daily cap — that's enforced at claim time
-    (see claim_plant_yield) since it depends on every plant's claims
-    together, not just this one. Also returns the effective Nerds/hour
-    rate (post-multipliers) for display on the card."""
+    PASSIVE_YIELD_MAX_STORAGE_HOURS), then Voluminous/Fast Grower on top,
+    then a hard penalty if the plant has been neglected for too long
+    (see PLANT_NEGLECT_*). Does NOT apply the Bank's daily cap — that's
+    enforced at claim time (see claim_plant_yield) since it depends on
+    every plant's claims together, not just this one. Also returns the
+    effective Nerds/hour rate (post-multipliers) for display on the card."""
     if level is None:
         growth_hours = compute_plant_growth_hours(plant_record, d)
         level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
@@ -2139,6 +2415,10 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
         fast_grower_pct = next((b["value"] for b in bonuses if b["id"] == "fast_grower"), 0.0)
 
     total_mult = (1 + voluminous_pct / 100.0) * (1 + fast_grower_pct / 100.0)
+    if is_globally_neglected(d):
+        total_mult *= PLANT_GLOBAL_NEGLECT_YIELD_FRACTION
+    if is_plant_specifically_neglected(plant_record, d):
+        total_mult *= PLANT_SPECIFIC_NEGLECT_YIELD_FRACTION
     effective_rate = base_rate * weekly_mult * total_mult
     raw = effective_rate * elapsed_hours
     return round(raw, 1), elapsed_hours, weekly_mult, effective_rate
@@ -2397,7 +2677,7 @@ def compute_mastery(cfg, d):
     minutes — leveling a category is really just "level up 2+ skills
     that share a category," so it stacks naturally on top of, not
     instead of, each skill's own mastery XP."""
-    thresholds = [60, 300, 900, 2400, 6000, 12000, 24000, 45000, 80000, 140000]
+    thresholds = MASTERY_MINUTE_THRESHOLDS
     minutes_by_subject = defaultdict(float)
     minutes_by_skill = defaultdict(float)
     for r in d.get("self_study", []):
@@ -2525,6 +2805,264 @@ def title_for_level(level):
             break
     return title
 
+# ═══════════════════════════════════════════════════════════════════
+# ── Finance Ledger (Nerds income/expense history) ──
+# Every entry here is a REAL event logged at the moment it happened —
+# not a historical simulation/guess. Self-study gains are logged the
+# instant a session is saved; level-up and mastery-tier bonuses are
+# logged the instant reconcile_nerds_ledger() notices they were newly
+# crossed (called right after every action that can change XP/mastery);
+# plant claims and Market purchases were already real-time logs
+# (passive_claims / nerds_spent) and are simply read straight through.
+#
+# Edits and deletes are handled by RECONCILING rather than recomputing
+# from scratch: if a self-study record is edited/deleted, its old gain
+# entry is removed and (for edits) replaced with a fresh one; if that
+# change knocks XP/mastery back below a previously-credited level/tier,
+# reconcile_nerds_ledger() logs an explicit reversal entry. This keeps
+# the ledger's running balance always equal to compute_total_nerds()'s
+# live formula-based balance, without ever needing to replay all of
+# history to figure out "what day did this actually happen."
+# ═══════════════════════════════════════════════════════════════════
+
+def _remove_ledger_entries(d, source, record_id):
+    d["nerds_earned"] = [e for e in d.get("nerds_earned", [])
+                          if not (e.get("source") == source and e.get("record_id") == record_id)]
+
+def _log_self_study_gain(cfg, d, record):
+    """Logs (or re-logs, after an edit) the Nerds gain for ONE self-study
+    record, tagged with record_id so it can be found/removed again on
+    edit or delete. Notes explicitly when a plant's Hydration/Refreshing
+    bonus boosted this specific session above the base rate."""
+    mins = record.get("minutes", 0)
+    if mins <= 0:
+        return
+    base = compute_self_study_record_nerds(mins, record.get("difficulty", 5), record.get("status", "Done"))
+    if base <= 0:
+        return
+    _, nerds_mult = compute_plant_session_multipliers(d, mins, record.get("date", ""))
+    amount = round(base * nerds_mult, 1)
+    subj = next((s for s in cfg.get("subjects", []) if s["id"] == record.get("subject_id")), None)
+    skill = next((s for s in cfg.get("skills", []) if s["id"] == record.get("skill_id")), None)
+    name = subj["name"] if subj else (skill["name"] if skill else "Self-Study")
+    detail = f"{mins}min @ difficulty {record.get('difficulty', 5)}/10, {record.get('status', 'Done')}"
+    if nerds_mult > 1.001:
+        detail += f" · Plant bonus applied (+{round((nerds_mult - 1) * 100, 1)}% Nerds)"
+    d.setdefault("nerds_earned", []).append({
+        "id": gen_id(10), "date": record.get("date", ""), "created": record.get("created") or now_str(),
+        "source": "self_study", "record_id": record["id"], "label": f"Self-Study: {name}",
+        "amount": amount, "detail": detail
+    })
+
+def _backfill_self_study_ledger(cfg, d):
+    """One-time catch-up for self-study records that predate this ledger
+    (or a prior sync gap) — logs the gain using the record's OWN true
+    date/created, so it lands on its correct historical day rather than
+    showing up as "today." Idempotent: a record with an existing entry
+    is skipped. Returns True if anything was added."""
+    logged_ids = {e.get("record_id") for e in d.get("nerds_earned", []) if e.get("source") == "self_study"}
+    changed = False
+    for r in d.get("self_study", []):
+        if r.get("id") in logged_ids:
+            continue
+        _log_self_study_gain(cfg, d, r)
+        changed = True
+    return changed
+
+def _ledger_credited_set(d, source, id_field):
+    """Last-entry-wins credited state for a given ledger source/id_field
+    (e.g. source='level_up', id_field='level') — True if the most recent
+    entry for that id was a gain, False if it was a reversal."""
+    state = {}
+    for e in sorted(d.get("nerds_earned", []), key=lambda x: x.get("created", "")):
+        if e.get("source") != source:
+            continue
+        key = e.get(id_field)
+        if key is None:
+            continue
+        state[key] = e.get("amount", 0) > 0
+    return state
+
+def reconcile_nerds_ledger(cfg, d):
+    """Call after ANY action that could change total XP or mastery
+    (self-study/attendance/exam add/edit/delete, login). Compares what's
+    CURRENTLY true (live level, live mastery tiers) against what the
+    ledger has credited so far, and logs the difference: gains for
+    anything newly reached, reversal entries for anything that dropped
+    (e.g. a deleted session knocked someone back a level). Self-healing
+    by design — safe to call as often as needed. Returns True if
+    anything changed (so callers know whether a save is warranted)."""
+    changed = False
+
+    # ── Level-ups ──
+    total_xp = compute_total_xp(d, cfg)
+    level, _, _ = level_from_xp(total_xp)
+    level_state = _ledger_credited_set(d, "level_up", "level")
+    for lv in range(2, level + 1):
+        if not level_state.get(lv, False):
+            d.setdefault("nerds_earned", []).append({
+                "id": gen_id(10), "date": today_str(), "created": now_str(),
+                "source": "level_up", "level": lv, "label": f"Reached Level {lv}",
+                "amount": nerds_for_level(lv), "detail": ""
+            })
+            changed = True
+    for lv, credited in level_state.items():
+        if credited and lv > level:
+            d["nerds_earned"].append({
+                "id": gen_id(10), "date": today_str(), "created": now_str(),
+                "source": "level_up", "level": lv, "label": f"Level {lv} bonus reversed (data changed)",
+                "amount": -nerds_for_level(lv),
+                "detail": "A previously-credited level is no longer reached after an edit or deletion."
+            })
+            changed = True
+
+    # ── Mastery tiers (subject / skill / category) ──
+    mastery_list, _ = compute_mastery(cfg, d)
+    mastery_state = _ledger_credited_set(d, "mastery", "mastery_key")
+    for m in mastery_list:
+        prefix = f"{m['type']}:{m['id']}:"
+        cur_tier = m.get("tier_index", -1)
+        item_credited = sorted(int(k[len(prefix):]) for k, v in mastery_state.items() if k.startswith(prefix) and v)
+        for ti in range(0, cur_tier + 1):
+            if ti not in item_credited:
+                mk = f"{prefix}{ti}"
+                d.setdefault("nerds_earned", []).append({
+                    "id": gen_id(10), "date": today_str(), "created": now_str(),
+                    "source": "mastery", "mastery_key": mk,
+                    "label": f"Mastery: {m['name']} reached {TIERS[ti]}",
+                    "amount": MASTERY_TIER_NERDS[ti], "detail": ""
+                })
+                changed = True
+        for ti in item_credited:
+            if ti > cur_tier:
+                mk = f"{prefix}{ti}"
+                d["nerds_earned"].append({
+                    "id": gen_id(10), "date": today_str(), "created": now_str(),
+                    "source": "mastery", "mastery_key": mk,
+                    "label": f"Mastery tier reversed for {m['name']} (data changed)",
+                    "amount": -MASTERY_TIER_NERDS[ti],
+                    "detail": "A previously-credited tier is no longer reached after an edit or deletion."
+                })
+                changed = True
+
+    return changed
+
+def compute_plant_claim_ledger_entries(d):
+    """Passive Botanarium claims AND Market seed sell-backs both live in
+    d['passive_claims'] (see claim_plant_yield / shop_sell) — already
+    real-time logs, just split apart here for clearer ledger labeling."""
+    plants_by_id = {p["id"]: p for p in d.get("plants", [])}
+    entries = []
+    for c in d.get("passive_claims", []):
+        amount = c.get("amount", 0)
+        if amount <= 0:
+            continue
+        if c.get("plant_id") and c.get("plant_id") in plants_by_id:
+            plant = plants_by_id[c["plant_id"]]
+            plant_def = get_plant_def(plant.get("plant_type"))
+            pname = plant_def["name"] if plant_def else (c.get("plant_type") or "Plant")
+            detail = f"{c.get('elapsed_hours', 0)}h banked, weekly multiplier {c.get('weekly_multiplier', 1)}x"
+            entries.append({
+                "date": c.get("date", ""), "created": c.get("created", ""), "source": "plant_claim",
+                "label": f"{pname} — Passive Yield Claimed", "amount": amount, "detail": detail
+            })
+        else:
+            entries.append({
+                "date": c.get("date", ""), "created": c.get("created", ""), "source": "market_sell",
+                "label": c.get("note") or "Market Sale", "amount": amount, "detail": ""
+            })
+    return entries
+
+def compute_spend_ledger_entries(d):
+    """Every Market/Bank/Fertilizer/Theme purchase — d['nerds_spent'] is
+    already a complete real-time log (see _spend_nerds); this just
+    relabels each entry into something readable."""
+    entries = []
+    theme_labels = {t["id"]: t["label"] for t in THEME_CATALOG}
+    for p in d.get("nerds_spent", []):
+        item_type = p.get("item_type", "")
+        qty = p.get("qty", 1)
+        unit_cost = p.get("unit_cost", 0)
+        total_cost = p.get("total_cost", 0)
+        if item_type == "fertilizer":
+            label = "Fertilizer Applied"
+            source = "fertilizer"
+        elif item_type == "botanarium_bank":
+            label = "Botanarium Bank Upgraded"
+            source = "bank_upgrade"
+        elif item_type.startswith("theme_"):
+            theme_id = item_type[len("theme_"):]
+            label = f"Theme Purchased: {theme_labels.get(theme_id, theme_id)}"
+            source = "theme_purchase"
+        else:
+            plant_def = next((pd for pd in PLANT_DEFS if pd["seed_item"] == item_type), None)
+            item_label = f"{plant_def['name']} Seed" if plant_def else item_type
+            label = f"Bought {qty}x {item_label}"
+            source = "seed_purchase"
+        entries.append({
+            "date": p.get("date", ""), "created": p.get("created", ""), "source": source,
+            "label": label, "amount": -total_cost,
+            "detail": f"{qty}x @ {unit_cost} Nerds each" if qty != 1 else f"{unit_cost} Nerds"
+        })
+    return entries
+
+def compute_nerds_ledger(cfg, d):
+    """Assembles every logged gain and spend into one chronologically-
+    ordered ledger, computes a running balance across it (which always
+    equals compute_total_nerds()'s live balance, since every term in
+    that formula has a matching real-time entry-source here), then
+    groups by calendar day for the Finance page, most-recent day first."""
+    entries = (
+        list(d.get("nerds_earned", []))
+        + compute_plant_claim_ledger_entries(d)
+        + compute_spend_ledger_entries(d)
+    )
+    entries.sort(key=lambda e: (e.get("date", ""), e.get("created", "")))
+    running = 0.0
+    for e in entries:
+        running = round(running + e.get("amount", 0), 1)
+        e["balance_after"] = running
+    final_balance = running
+
+    by_day = {}
+    for e in entries:
+        day = e.get("date", "") or "unknown"
+        bucket = by_day.setdefault(day, {"date": day, "income": 0.0, "expense": 0.0, "entries": []})
+        amt = e.get("amount", 0)
+        if amt >= 0:
+            bucket["income"] = round(bucket["income"] + amt, 1)
+        else:
+            bucket["expense"] = round(bucket["expense"] + amt, 1)
+        bucket["entries"].append(e)
+
+    days = sorted(by_day.values(), key=lambda b: b["date"], reverse=True)
+    for day in days:
+        day["net"] = round(day["income"] + day["expense"], 1)
+        day["entries"].sort(key=lambda e: e.get("created", ""), reverse=True)
+
+    total_income = round(sum(e.get("amount", 0) for e in entries if e.get("amount", 0) >= 0), 1)
+    total_expense = round(sum(e.get("amount", 0) for e in entries if e.get("amount", 0) < 0), 1)
+
+    return {
+        "days": days,
+        "total_income": total_income,
+        "total_expense": total_expense,
+        "net": round(total_income + total_expense, 1),
+        "current_balance": final_balance,
+    }
+
+@app.route("/api/<name>/finance/ledger")
+def finance_ledger(name):
+    ensure_profile(name)
+    cfg = load_config(name)
+    d = load_data(name)
+    changed = _backfill_self_study_ledger(cfg, d)
+    changed = reconcile_nerds_ledger(cfg, d) or changed
+    if changed:
+        save_data(name, d)
+    ledger = compute_nerds_ledger(cfg, d)
+    return jsonify(ledger)
+
 @app.route("/api/<name>/gamification")
 def gamification_status(name):
     ensure_profile(name)
@@ -2580,6 +3118,8 @@ def ping_login(name):
     is_new = today not in logins
     logins.add(today)
     d["logins"] = sorted(logins)
+    if is_new:
+        reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
     login_stats = _login_stats(d)
     return jsonify({"ok": True, "new_today": is_new, **login_stats})
@@ -2677,8 +3217,8 @@ def botanarium_catalog(name):
         "prestige_colors": PLANT_PRESTIGE_COLORS,
         "prestige_names": PLANT_PRESTIGE_NAMES,
         "fertilizer": {
-            "bonus_pct": FERTILIZER_GROWTH_BONUS_PCT, "max_stacks": FERTILIZER_MAX_STACKS,
-            "base_cost": FERTILIZER_BASE_COST, "cost_multiplier": FERTILIZER_COST_MULTIPLIER,
+            "bonus_pct": FERTILIZER_GROWTH_BONUS_PCT, "duration_hours": FERTILIZER_DURATION_HOURS,
+            "cost": FERTILIZER_COST,
         },
         "fast_grower": {
             "base_pct": FAST_GROWER_BASE_PCT, "upgrade_pct": FAST_GROWER_SEED_UPGRADE_PCT,
@@ -2703,6 +3243,7 @@ def list_plants(name):
     claimed_24h = compute_rolling_24h_claimed(d)
     return jsonify({
         "plants": [s for s in states if s],
+        "selected_plant_id": d.get("selected_plant_id"),
         "weekly_study_hours": round(weekly_hours, 2),
         "weekly_yield_multiplier": compute_weekly_yield_multiplier(weekly_hours),
         "bank": bank,
@@ -2712,22 +3253,37 @@ def list_plants(name):
 
 @app.route("/api/<name>/plants/<plant_id>/fertilize", methods=["POST"])
 def fertilize_plant(name, plant_id):
+    """Buys ONE Fertilizer application: a flat Nerds cost, purely a
+    temporary boost to how fast THIS plant's study minutes convert into
+    growth-hours (e.g. +20% means 2 hours of studying bank as if it were
+    2.4 hours toward leveling) for FERTILIZER_DURATION_HOURS. It does
+    NOT change the Nerds cost/value of anything else — there's no other
+    purchasable plant upgrade with a cost tied to this. Buying again
+    while still active just refreshes the window back to a full
+    FERTILIZER_DURATION_HOURS from now, rather than stacking multiple
+    simultaneous bonuses."""
     ensure_profile(name)
     d = load_data(name)
     plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
     if not plant:
         return jsonify({"error": "Plant not found"}), 404
-    stacks = plant.get("fertilizer_stacks", 0)
-    if stacks >= FERTILIZER_MAX_STACKS:
-        return jsonify({"error": "Fertilizer is already maxed for this plant"}), 400
-    cost = round(FERTILIZER_BASE_COST * (FERTILIZER_COST_MULTIPLIER ** stacks), 1)
+    cost = FERTILIZER_COST
     balance = compute_current_balance(name, d)
     if balance < cost:
         return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
-    plant["fertilizer_stacks"] = stacks + 1
+    now_dt = datetime.now()
+    until_dt = now_dt + __import__("datetime").timedelta(hours=FERTILIZER_DURATION_HOURS)
+    plant.setdefault("fertilizer_periods", []).append({
+        "start": now_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "end": until_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    })
     _spend_nerds(d, "fertilizer", 1, cost)
     save_data(name, d)
-    return jsonify({"ok": True, "fertilizer_stacks": plant["fertilizer_stacks"], "cost": cost})
+    return jsonify({
+        "ok": True, "cost": cost,
+        "active_until": until_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "bonus_pct": FERTILIZER_GROWTH_BONUS_PCT
+    })
 
 @app.route("/api/<name>/plants/<plant_id>/upgrade_fast_grower", methods=["POST"])
 def upgrade_fast_grower(name, plant_id):
@@ -2952,11 +3508,37 @@ def use_seed(name):
         return jsonify({"error": "You don't have that seed"}), 400
     plant = {
         "id": gen_id(10), "plant_type": plant_def["id"], "created": now_str(),
-        "fertilizer_stacks": 0, "fast_grower_seed_tiers": 0, "prestige_allocations": {}
+        "fertilizer_periods": [], "fast_grower_seed_tiers": 0, "prestige_allocations": {}
     }
     d.setdefault("plants", []).append(plant)
+    # Auto-select the very first plant ever planted so a fresh Botanarium
+    # doesn't silently grow nothing until the person discovers the Select
+    # button — subsequent plants are never auto-selected (planting a
+    # second plant shouldn't yank growth away from whichever one the
+    # person already chose).
+    if d.get("selected_plant_id") is None:
+        d["selected_plant_id"] = plant["id"]
     save_data(name, d)
     return jsonify({"ok": True, "plant": plant})
+
+@app.route("/api/<name>/plants/<plant_id>/select", methods=["POST"])
+def select_plant_for_growth(name, plant_id):
+    """Sets which single owned plant currently receives growth-hours
+    from logged study sessions (see grown_plant_id stamping in
+    add_self_study/timer_stop). Toggles off (selects none) if the same
+    plant is selected again, so a person can also choose to deliberately
+    pause all growth."""
+    ensure_profile(name)
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    if d.get("selected_plant_id") == plant_id:
+        d["selected_plant_id"] = None
+    else:
+        d["selected_plant_id"] = plant_id
+    save_data(name, d)
+    return jsonify({"ok": True, "selected_plant_id": d.get("selected_plant_id")})
 
 
 # ── Charts (seaborn) ──
@@ -3393,6 +3975,7 @@ def _compute_stats_payload(cfg, d):
     attendance_present = 0
     attendance_partial = 0
     attendance_absent = 0
+    attendance_teacher_absent = 0  # not the student's fault — tracked separately, never counted as an absence
     attendance_minutes_by_subject = {}
     attendance_by_type = {"C": 0, "TD": 0, "TP": 0}
 
@@ -3411,6 +3994,8 @@ def _compute_stats_payload(cfg, d):
             attendance_partial += 1
             attendance_minutes_by_subject[sname] = attendance_minutes_by_subject.get(sname, 0) + mins
             attendance_by_type[atype] = attendance_by_type.get(atype, 0) + mins
+        elif status == "teacher_absent":
+            attendance_teacher_absent += 1
         else:
             attendance_absent += 1
 
@@ -3607,6 +4192,7 @@ def _compute_stats_payload(cfg, d):
             "present": attendance_present,
             "partial": attendance_partial,
             "absent": attendance_absent,
+            "teacher_absent": attendance_teacher_absent,
             "total_events": attendance_present + attendance_partial + attendance_absent,
             "minutes_by_subject": attendance_minutes_by_subject,
             "by_type": attendance_by_type
@@ -3675,5 +4261,5 @@ def sprite_file(subpath):
     return send_file(requested)
 
 if __name__ == "__main__":
-    print("StudyTracker v2.0 — http://localhost:8080")
+    print("StudyTracker v2.1 — http://localhost:8080")
     app.run(host="127.0.0.1", port=8080, debug=False)

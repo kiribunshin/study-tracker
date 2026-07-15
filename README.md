@@ -33,3 +33,21 @@ Flask backend, vanilla JS/HTML/CSS frontend, no framework bloat. Runs locally vi
 - Changed: Skill Categories are now more meaningful than just text: They can be assigned or selected through a drop down and are now part of the progression system, gaining hours from all the skills that fall under their jurisdiction (i.e. French and Japanese would both contribute to the progression of a Languages category).
 - Changed: Adding an older self-study record now prompts you for the time the study session was had, and defaults to the current hour and minute.
 - Fixed: At times, the website would require a manual refresh to register changes to any gamification-related data, added a `loadConfigAndGamification()` helper that is wired into `Add Subject`, `Add Skill`, `Add Category`, `Delete Subject` and `Delete Skill`. Progression should now update immediately and seamlessly.
+
+#### v2.1 changes:
+This patch comes with many fixes to bugs in v2.0 as well as inherited bugs from previous versions.
+- Added: Clementine's Book of Wonders now lists all the hours needed for plant levels as well as the significance of their respective bonuses.
+- Added: Plant neglect:
+    - Global neglect: This kicks in when it's been 14 days since the last logged session, applying a 25% reduction to all plant passive Nerds yield.
+    - Specific neglect: A plant that hasn't gotten care (growth hours) in a specific amount of days begins producing Nerds at an extremely reduced rate. This scales with the number of plants you own as to not feel overwhelming.
+- Added: `Finance` - You can see when and where you got all your Nerds.
+- Added: Teacher/Professor absence can now be marked in lessons and the stats will handle it accordingly.
+- Changed: A plant must be selected (specified) in the Botanarium so that study hours count towards its growth hours. Otherwise, either the most recently incremented plant or a random plant will be selected automatically for growth.
+- Changed: The fertilizer is now a temporary system, requiring renewal for its effects to still be implemented.
+- Changed: Made it clearer when adding multiple of the same lesson-type per week.
+- Changed: Renamed Cours/TD/TP to their English alternatives: Lesson/Practical Work/Lab.
+- Fixed: Adding a note as the timer ends should now work - it previously did not save.
+- Fixed: When editing a present note, its current text will be displayed as it would in a normal text editor.
+- Fixed: When an old self-study session is logged, the time is now specified as `Start Time` and should display correctly in the timetable.
+- Fixed: Studying past midnight should now display normally in the timetable.
+- Fixed: "Partial" now appears as yellow under the `Recent Activity` section of the `Dashboard`.

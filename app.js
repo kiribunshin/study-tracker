@@ -1,4 +1,4 @@
-/* StudyTracker v2.0 — Frontend */
+/* StudyTracker v2.1 — Frontend */
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -56,6 +56,13 @@ function el(tag, attrs = {}, children = []) {
     // Setting them as DOM properties instead respects actual truthiness,
     // so passing disabled:false correctly leaves the element enabled.
     else if (typeof v === 'boolean') e[k] = v;
+    // <textarea> renders from its text content / .value property, NOT
+    // the "value" HTML attribute (that only works for <input>/<select>).
+    // setAttribute('value', ...) on a textarea is silently a no-op
+    // visually, which was making every pre-filled textarea (e.g. the
+    // Edit Self-Study note field) show up blank even though the data
+    // was correctly passed in.
+    else if (k === 'value' && tag === 'textarea') { e.value = v; }
     else e.setAttribute(k, v);
   }
   for (const c of [].concat(children)) {
@@ -66,6 +73,12 @@ function el(tag, attrs = {}, children = []) {
 function fmt(n, d = 1) { return Number(n).toFixed(d); }
 function fmtHours(mins) { return fmt(mins / 60, 1); }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// Lesson/attendance type codes stay "C"/"TD"/"TP" in stored data (no
+// migration needed), but display everywhere as Lesson / Practical Work
+// / Lab. Use lessonTypeLabel(code) anywhere a raw code would otherwise
+// be shown to the person.
+const LESSON_TYPE_LABELS = { C: 'Lesson', TD: 'Practical Work', TP: 'Lab' };
+function lessonTypeLabel(code) { return LESSON_TYPE_LABELS[code] || code; }
 function nowStr() { return new Date().toISOString().slice(0, 19); }
 function localDateStr(d = new Date()) {
   const year = d.getFullYear();
@@ -725,6 +738,7 @@ async function render() {
       case 'inventory': await renderInventory(c); break;
       case 'stats': await renderStats(c); break;
       case 'progression': await renderProgression(c); break;
+      case 'finance': await renderFinance(c); break;
       case 'settings': await renderSettings(c); break;
     }
   } catch (e) {
@@ -816,7 +830,7 @@ async function renderDashboard(c) {
           el('td', { text: r.date }),
           el('td', { text: name }),
           el('td', { text: r.minutes + 'min' }),
-          el('td', {}, el('span', { class: `tag tag-done`, text: r.status }))
+          el('td', {}, el('span', { class: `tag tag-${r.status === 'Done' ? 'done' : r.status === 'Partial' ? 'partial' : 'absent'}`, text: r.status }))
         ]);
       }))
     ]) : el('div', { class: 'text-dim text-sm', text: 'No activity yet.' })
@@ -885,7 +899,9 @@ function serializeSegments() {
   // Convert to the shape the backend stores: HH:MM local wall-clock
   // start/end, dropping any sub-minute noise (e.g. an instant
   // pause/resume misclick) so the Timetable doesn't get cluttered with
-  // slivers too thin to be meaningful.
+  // slivers too thin to be meaningful. Kept for any single-day-only
+  // caller; sessions that might cross midnight should use
+  // computeDayBuckets() instead (see below).
   return TS.segments
     .filter(s => s.end)
     .map(s => ({
@@ -894,6 +910,59 @@ function serializeSegments() {
       end: `${String(s.end.getHours()).padStart(2, '0')}:${String(s.end.getMinutes()).padStart(2, '0')}`
     }))
     .filter(s => s.start !== s.end);
+}
+
+// A session that runs past midnight has segments whose real start/end
+// are on two different calendar DATES, but HH:MM-only strings can't
+// express that — a segment like "23:50 -> 00:45" would previously
+// decode as end (45) < start (1430) and get silently dropped by the
+// Timetable's "end > start" sanity filter, which is exactly why the
+// second work block in an overnight session used to vanish entirely
+// instead of showing up split across both days. This splits every
+// segment at each midnight it crosses, so each PIECE is a normal
+// same-day HH:MM range — a piece that runs to exactly midnight is
+// written as "24:00" (arithmetically 1440, past the last real minute
+// of the day), which the Timetable already clips cleanly at the
+// bottom of that day's column with no special-casing needed.
+function splitSegmentsByDay(segments) {
+  const byDay = {};
+  segments.filter(s => s.end).forEach(seg => {
+    let curStart = new Date(seg.start);
+    const segEnd = new Date(seg.end);
+    let guard = 0;
+    while (curStart < segEnd && guard < 30) {
+      guard++;
+      const dayStr = localDateStr(curStart);
+      const nextMidnight = new Date(curStart.getFullYear(), curStart.getMonth(), curStart.getDate() + 1, 0, 0, 0);
+      const pieceEnd = segEnd < nextMidnight ? segEnd : nextMidnight;
+      const startMin = curStart.getHours() * 60 + curStart.getMinutes();
+      const crossesMidnight = pieceEnd.getTime() === nextMidnight.getTime();
+      const endMin = crossesMidnight ? 24 * 60 : (pieceEnd.getHours() * 60 + pieceEnd.getMinutes());
+      if (endMin > startMin) {
+        const startStr = `${String(Math.floor(startMin / 60)).padStart(2, '0')}:${String(startMin % 60).padStart(2, '0')}`;
+        const endStr = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+        (byDay[dayStr] = byDay[dayStr] || []).push({ type: seg.type, start: startStr, end: endStr });
+      }
+      curStart = pieceEnd;
+    }
+  });
+  return byDay;
+}
+
+// Turns the current session's segments into one bucket PER CALENDAR
+// DAY it actually touched — each bucket gets its own date, its own
+// study-minute total, and its own slice of segments, so a session that
+// runs past midnight saves (and displays) correctly on BOTH days
+// instead of being silently mis-dated or partially dropped.
+function computeDayBuckets() {
+  const byDay = splitSegmentsByDay(TS.segments);
+  const buckets = [];
+  for (const [date, segs] of Object.entries(byDay)) {
+    const studyMin = segs.filter(s => s.type === 'study').reduce((sum, s) => sum + Math.max(0, timeToMinutes(s.end) - timeToMinutes(s.start)), 0);
+    if (studyMin > 0) buckets.push({ date, minutes: Math.round(studyMin), segments: segs });
+  }
+  buckets.sort((a, b) => a.date.localeCompare(b.date));
+  return buckets;
 }
 
 // ── Mini timer badge (topbar) ──
@@ -1070,11 +1139,13 @@ function renderTimerWidget() {
       statusDiv.innerHTML = `<span style="color:var(--red)">Session wasn't tracked on the server — nothing to save.</span>`;
       return;
     }
-    // Snapshot segments now, synchronously, before any await — TS.segments
-    // only ever changes on the next user-triggered start/pause/resume,
-    // which can't happen mid-await in single-threaded JS, but capturing
-    // it up front keeps the intent explicit either way.
-    const sessionSegments = serializeSegments();
+    // Snapshot day buckets now, synchronously, before any await —
+    // TS.segments only ever changes on the next user-triggered start/
+    // pause/resume, which can't happen mid-await in single-threaded JS,
+    // but capturing it up front keeps the intent explicit either way.
+    // A session that crossed midnight produces MULTIPLE buckets, one
+    // per real calendar day it touched.
+    const dayBuckets = computeDayBuckets();
     if (actualMin <= 0) {
       // Nothing was actually studied (e.g. every phase was skipped
       // near-instantly) — close out the timer without fabricating a
@@ -1094,11 +1165,11 @@ function renderTimerWidget() {
       const payload = {
         planned_minutes: TS.timerPlanned, actual_minutes: actualMin,
         difficulty: rating.difficulty, self_study_status: rating.status,
-        note: rating.note, auto_record: true, segments: sessionSegments
+        note: rating.note, auto_record: true, day_buckets: dayBuckets
       };
       try {
         const resp = await api(`/api/${currentProfile}/timer/${TS.activeTimerId}/stop`, { method: 'POST', body: JSON.stringify(payload) });
-        statusDiv.innerHTML = `<span style="color:var(--green)">✓ Saved: ${actualMin}min</span>`;
+        statusDiv.innerHTML = `<span style="color:var(--green)">✓ Saved: ${actualMin}min${dayBuckets.length > 1 ? ` across ${dayBuckets.length} days` : ''}</span>`;
         await loadData();
         await maybeShowLevelUp({ skipXpToast: true });
         render();
@@ -1557,16 +1628,23 @@ async function renderTimetable(c) {
         // there (they may have self-studied instead, which already
         // shows up separately), so don't clutter the calendar with a
         // lesson that didn't happen for them.
-        const markedAbsent = (d.attendance || []).some(a =>
-          a.subject_id === sub.id && a.date === dateStr && a.type === schType && a.status === 'absent'
+        const attRecord = (d.attendance || []).find(a =>
+          a.subject_id === sub.id && a.date === dateStr && a.type === schType &&
+          (a.status === 'absent' || a.status === 'teacher_absent')
         );
-        if (markedAbsent) return;
+        if (attRecord && attRecord.status === 'absent') return;
+        // Teacher absence isn't the student's absence — the lesson is
+        // kept visible (not hidden) but styled as incomplete/barred, the
+        // same visual language as a break block, so it still reads as
+        // "this slot existed" without looking like a normal completed
+        // lesson.
+        const isTeacherAbsent = !!(attRecord && attRecord.status === 'teacher_absent');
         const start = timeToMinutes(sch.start || '08:00');
         const end = timeToMinutes(sch.end || sch.start || '09:00');
         timed.push({
           start, end: Math.max(end, start + 15),
-          label: `${sub.name}`, sub: schType,
-          cls: schType.toLowerCase(),
+          label: isTeacherAbsent ? `${sub.name} (Teacher Absent)` : `${sub.name}`, sub: lessonTypeLabel(schType),
+          cls: isTeacherAbsent ? 'teacher-absent' : schType.toLowerCase(),
           color: sub.color, kind: 'subject', ref: { sub, sch }, dateStr
         });
       });
@@ -1874,14 +1952,86 @@ async function renderTimetable(c) {
   renderAll();
 }
 
+// Lets a subject have MORE than one weekly slot of the same type — e.g.
+// a Lesson on both Monday and Friday. The backend already stores
+// `schedule` as a plain list of {day,type,start,end} entries with no
+// uniqueness constraint; this modal is what actually lets someone add
+// a second (third, ...) slot instead of being limited to the single
+// slot picked at subject creation.
+function showManageScheduleModal(subject) {
+  let slots = [...(subject.schedule || [])];
+
+  function renderSlotsList() {
+    if (!slots.length) return el('div', { class: 'text-dim text-sm mb-8', text: 'No weekly slots yet — add one below.' });
+    return el('div', { class: 'mb-16' }, slots.map((sc, i) => el('div', {
+      class: 'row', style: 'justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)'
+    }, [
+      el('span', { class: 'text-sm', text: `${sc.day[0].toUpperCase()}${sc.day.slice(1)} · ${lessonTypeLabel(sc.type)} · ${sc.start}–${sc.end}` }),
+      el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: () => { slots.splice(i, 1); rerender(); } })
+    ])));
+  }
+
+  const daySel = el('select', {}, [
+    el('option', { value: 'monday', text: 'Monday' }), el('option', { value: 'tuesday', text: 'Tuesday' }),
+    el('option', { value: 'wednesday', text: 'Wednesday' }), el('option', { value: 'thursday', text: 'Thursday' }),
+    el('option', { value: 'friday', text: 'Friday' }), el('option', { value: 'saturday', text: 'Saturday' }),
+    el('option', { value: 'sunday', text: 'Sunday' })
+  ]);
+  const typeSel = el('select', {}, [
+    el('option', { value: 'C', text: 'Lesson' }), el('option', { value: 'TD', text: 'Practical Work' }), el('option', { value: 'TP', text: 'Lab' })
+  ]);
+  const startInput = el('input', { value: '08:00' });
+  const endInput = el('input', { value: '09:30' });
+
+  let container;
+  function rerender() {
+    const fresh = buildContent();
+    container.replaceWith(fresh);
+    container = fresh;
+  }
+
+  function buildContent() {
+    return el('div', {}, [
+      el('div', { class: 'modal-header' }, [
+        el('div', { class: 'modal-title', text: `Weekly Schedule — ${subject.name}` }),
+        el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+      ]),
+      el('div', { class: 'text-dim text-sm mb-8', text: 'A subject can have several slots per week — including the same type on different days (e.g. Lesson on Monday AND Friday).' }),
+      renderSlotsList(),
+      el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;align-items:flex-end' }, [
+        el('div', {}, [el('label', { text: 'Day' }), daySel]),
+        el('div', {}, [el('label', { text: 'Type' }), typeSel]),
+        el('div', {}, [el('label', { text: 'Start' }), startInput]),
+        el('div', {}, [el('label', { text: 'End' }), endInput]),
+        el('button', { class: 'btn btn-sm btn-outline', text: '+ Add Slot', onclick: () => {
+          if (timeToMinutes(endInput.value) <= timeToMinutes(startInput.value)) { alert('End time must be after start time'); return; }
+          slots.push({ day: daySel.value, type: typeSel.value, start: startInput.value, end: endInput.value });
+          rerender();
+        } })
+      ]),
+      el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
+        el('button', { class: 'btn', text: 'Save Schedule', onclick: async () => {
+          try {
+            await api(`/api/${currentProfile}/subjects/${subject.id}`, { method: 'PUT', body: JSON.stringify({ schedule: slots }) });
+            closeModal(); await loadConfig(); render();
+          } catch (e) { alert(e.message); }
+        }})
+      ])
+    ]);
+  }
+
+  container = buildContent();
+  showModal(container);
+}
+
 function showAddSubjectModal() {
   // Quick add subject to timetable
   const cfg = cachedConfig || { academic_years: [] };
   const nameInput = el('input', { placeholder: 'Subject name' });
   const typeSel = el('select', {}, [
-    el('option', { value: 'C', text: 'Cours (C)' }),
-    el('option', { value: 'TD', text: 'TD' }),
-    el('option', { value: 'TP', text: 'TP' })
+    el('option', { value: 'C', text: 'Lesson' }),
+    el('option', { value: 'TD', text: 'Practical Work' }),
+    el('option', { value: 'TP', text: 'Lab' })
   ]);
   const daySel = el('select', {}, [
     el('option', { value: 'monday', text: 'Monday' }),
@@ -2071,7 +2221,7 @@ function showAddSelfStudyModal() {
     ]),
     el('div', { class: 'row' }, [
       el('div', { class: 'flex-1' }, [el('label', { text: 'Date' }), dateInput]),
-      el('div', { class: 'flex-1' }, [el('label', { text: 'Time' }), timeInput])
+      el('div', { class: 'flex-1' }, [el('label', { text: 'Start Time' }), timeInput])
     ]),
     el('label', { text: 'Subject / Skill' }), subjSel,
     el('label', { text: 'Minutes' }), minutesInput,
@@ -2183,9 +2333,9 @@ async function renderAttendance(c) {
       return el('tr', {}, [
         el('td', { text: r.date }),
         el('td', { text: subj?.name || '—' }),
-        el('td', {}, el('span', { class: `tag tag-${r.type.toLowerCase()}`, text: r.type })),
+        el('td', {}, el('span', { class: `tag tag-${r.type.toLowerCase()}`, text: lessonTypeLabel(r.type) })),
         el('td', { text: r.event_label || '—' }),
-        el('td', {}, el('span', { class: `tag tag-${r.status}`, text: r.status })),
+        el('td', {}, el('span', { class: `tag tag-${r.status}`, text: r.status === 'teacher_absent' ? 'Teacher Absent' : r.status })),
         el('td', { text: r.minutes + 'min' }),
         el('td', {}, el('button', { class: 'btn btn-sm btn-outline', text: '✏️', onclick: () => editAttendance(r) }))
       ]);
@@ -2212,15 +2362,16 @@ function showAddAttendanceModal() {
     ...(cachedConfig?.subjects || []).map(s => el('option', { value: s.id, text: s.name }))
   ]);
   const typeSel = el('select', {}, [
-    el('option', { value: 'C', text: 'Cours (C)' }),
-    el('option', { value: 'TD', text: 'TD' }),
-    el('option', { value: 'TP', text: 'TP' })
+    el('option', { value: 'C', text: 'Lesson' }),
+    el('option', { value: 'TD', text: 'Practical Work' }),
+    el('option', { value: 'TP', text: 'Lab' })
   ]);
   const eventInput = el('input', { placeholder: 'e.g. TD1, Lab 3' });
   const statusSel = el('select', {}, [
     el('option', { value: 'present', text: 'Present' }),
     el('option', { value: 'partial', text: 'Partial' }),
-    el('option', { value: 'absent', text: 'Absent' })
+    el('option', { value: 'absent', text: 'Absent' }),
+    el('option', { value: 'teacher_absent', text: 'Teacher Absent (lesson cancelled)' })
   ]);
   statusSel.value = defaultExceptionStatus();
   const minutesInput = el('input', { type: 'number', value: '90', min: '0' });
@@ -2261,7 +2412,8 @@ function showAddAttendanceModal() {
 function showQuickAttendanceModal(subject, schedule, dateStr) {
   const statusSel = el('select', {}, [
     el('option', { value: 'present', text: 'Present' }),
-    el('option', { value: 'absent', text: 'Absent' })
+    el('option', { value: 'absent', text: 'Absent' }),
+    el('option', { value: 'teacher_absent', text: 'Teacher Absent (lesson cancelled)' })
   ]);
   statusSel.value = defaultExceptionStatus();
   const minutesInput = el('input', { type: 'number', value: Math.max(15, (timeToMinutes(schedule.end || schedule.start || '09:00') - timeToMinutes(schedule.start || '08:00')) || 90), min: '0' });
@@ -2270,7 +2422,7 @@ function showQuickAttendanceModal(subject, schedule, dateStr) {
       el('div', { class: 'modal-title', text: 'Mark Attendance' }),
       el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
     ]),
-    el('div', { class: 'text-sm text-dim mb-8', text: `${subject.name} • ${schedule.type || 'C'} • ${dateStr}` }),
+    el('div', { class: 'text-sm text-dim mb-8', text: `${subject.name} • ${lessonTypeLabel(schedule.type || 'C')} • ${dateStr}` }),
     el('label', { text: 'Status' }), statusSel,
     el('label', { text: 'Minutes' }), minutesInput,
     el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
@@ -2283,7 +2435,7 @@ function showQuickAttendanceModal(subject, schedule, dateStr) {
               date: dateStr,
               subject_id: subject.id,
               type: schedule.type || 'C',
-              event_label: `${subject.name} ${schedule.type || 'C'}`,
+              event_label: `${subject.name} ${lessonTypeLabel(schedule.type || 'C')}`,
               status: statusSel.value,
               minutes: parseInt(minutesInput.value) || 0
             })
@@ -2300,7 +2452,8 @@ function editAttendance(record) {
   const statusSel = el('select', {}, [
     el('option', { value: 'present', text: 'Present' }),
     el('option', { value: 'partial', text: 'Partial' }),
-    el('option', { value: 'absent', text: 'Absent' })
+    el('option', { value: 'absent', text: 'Absent' }),
+    el('option', { value: 'teacher_absent', text: 'Teacher Absent (lesson cancelled)' })
   ]);
   statusSel.value = record.status;
   const minutesInput = el('input', { type: 'number', value: record.minutes, min: '0' });
@@ -2362,7 +2515,7 @@ async function renderExams(c) {
     ])),
     el('tbody', {}, records.map(r => {
       const subj = cfg.subjects.find(s => s.id === r.subject_id);
-      const typeLabels = { written: 'Written', tp_exam: 'TP Exam', oral: 'Oral' };
+      const typeLabels = { written: 'Written', tp_exam: 'Lab Exam', oral: 'Oral' };
       const scoreDisplay = r.score !== null && r.score !== undefined ? `${r.score}/20` : (r.ranking ? `(${r.ranking})` : '—');
       return el('tr', {}, [
         el('td', { text: r.date }),
@@ -2387,7 +2540,7 @@ function showAddExamModal() {
   const nameInput = el('input', { placeholder: 'Exam name (e.g. Midterm 1)' });
   const typeSel = el('select', {}, [
     el('option', { value: 'written', text: 'Written Exam' }),
-    el('option', { value: 'tp_exam', text: 'TP Exam (Lab)' }),
+    el('option', { value: 'tp_exam', text: 'Lab Exam' }),
     el('option', { value: 'oral', text: 'Oral Exam' })
   ]);
   const startTimeInput = el('input', { value: '08:00' });
@@ -2445,7 +2598,7 @@ function editExam(record) {
   const nameInput = el('input', { value: record.name || '' });
   const typeSel = el('select', {}, [
     el('option', { value: 'written', text: 'Written Exam' }),
-    el('option', { value: 'tp_exam', text: 'TP Exam (Lab)' }),
+    el('option', { value: 'tp_exam', text: 'Lab Exam' }),
     el('option', { value: 'oral', text: 'Oral Exam' })
   ]);
   typeSel.value = record.type || 'written';
@@ -2518,7 +2671,7 @@ async function renderEvents(c) {
     el('tbody', {}, records.map(r => el('tr', {}, [
       el('td', { text: r.date }),
       el('td', { text: r.name }),
-      el('td', { text: r.type }),
+      el('td', { text: lessonTypeLabel(r.type) }),
       el('td', { text: `${r.start_time || ''}–${r.end_time || ''}` }),
       el('td', { text: r.minutes ? r.minutes + 'min' : '—' }),
       el('td', {}, el('span', { class: `tag tag-${r.status === 'done' ? 'done' : 'scheduled'}`, text: r.status })),
@@ -2769,10 +2922,11 @@ async function renderBotanarium(c) {
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: 'ℹ️ How Plant Growth Works' }),
     el('div', { class: 'col', style: 'gap:8px;font-size:var(--font-s)' }, [
-      el('div', {}, [el('strong', { text: 'Growth: ' }), el('span', { text: 'Every plant levels up (1 through 5) purely from hours of studying/working since you acquired it — no watering, no separate action. Fertilizer (bought with Nerds) speeds this up.' })]),
+      el('div', {}, [el('strong', { text: 'Growth: ' }), el('span', { text: 'Only ONE plant grows at a time — whichever one you\'ve tapped "Select for Growth" on. Every minute you study while it\'s selected banks toward its next level (1 through 5). Fertilizer is a temporary buff (bought with Nerds) that boosts growth-hour accrual for 24 hours, then wears off — buy it again any time.' })]),
       el('div', {}, [el('strong', { text: 'Bonuses: ' }), el('span', { text: 'Each level permanently unlocks one bonus. Colors on the card border always mean the same level across every plant.' })]),
       el('div', {}, [el('strong', { text: 'Passive Yield: ' }), el('span', { text: 'Every plant generates Nerds passively over real time, claimable any time — up to 24 hours\' worth banks up, the rest is lost, so check back regularly. The rate scales with how much you\'ve studied THIS week (a slow week still gives a trickle, never zero).' })]),
       el('div', {}, [el('strong', { text: 'Prestige: ' }), el('span', { text: 'Once a plant hits Level 5, continued study hours build toward Prestige tiers instead. Each tier grants one point to permanently boost any one of the plant\'s 5 bonuses.' })]),
+      el('div', {}, [el('strong', { text: 'Neglect: ' }), el('span', { text: 'Two separate signals. Go too long with NO self-study at all, and every plant\'s yield dips a bit (a soft, forgiving nudge). Go too long WITHOUT REAL GROWTH TIME on one specific plant, and that plant visibly wilts and its yield nearly stops — a token session won\'t stop this, it takes real hours. The safe window per plant grows the more plants you own, so a big collection stays realistic to rotate through.' })]),
       el('div', {}, [el('strong', { text: 'Seeds: ' }), el('span', { text: 'A plant\'s first seed plants it. Any extra seeds (bought, or occasionally earned from that plant\'s own bonuses) can only upgrade its Fast Grower bonus, or be sold in the Market.' })]),
     ]),
     el('div', { class: 'row', style: 'gap:14px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)' }, [
@@ -2795,11 +2949,14 @@ function BOTANARIUM_BANK_NEXT_CAP_HINT(catalog, nextLevel) {
 }
 
 function renderPlantCard(p, catalog) {
-  const card = el('div', { class: 'stat-card plant-card', style: `border-color:${p.color};text-align:left` });
+  const card = el('div', { class: `stat-card plant-card${p.withered ? ' plant-withered' : ''}${p.is_selected_for_growth ? ' plant-selected-growth' : ''}`, style: `border-color:${p.color};text-align:left` });
   const header = el('div', { class: 'row', style: 'gap:12px;align-items:flex-start' }, [
     el('img', { src: p.sprite, class: 'pixel-sprite', style: 'width:72px;height:72px;flex-shrink:0', onerror: (e) => { e.target.style.display = 'none'; } }),
     el('div', { class: 'flex-1' }, [
-      el('div', { style: 'font-weight:800;font-size:1.05rem', text: p.name }),
+      el('div', { class: 'row', style: 'gap:6px;align-items:center;flex-wrap:wrap' }, [
+        el('div', { style: 'font-weight:800;font-size:1.05rem', text: p.name }),
+        p.is_selected_for_growth ? el('span', { class: 'plant-select-badge', text: '🌱 Growing' }) : null
+      ]),
       el('div', { class: 'text-dim text-sm', style: 'font-style:italic', text: p.scientific_name }),
       el('div', { style: `display:inline-block;margin-top:4px;padding:2px 9px;border-radius:20px;background:${p.color}22;border:1px solid ${p.color};color:${p.color};font-weight:700;font-size:var(--font-xxs)`, text: p.tier_name })
     ]),
@@ -2808,6 +2965,28 @@ function renderPlantCard(p, catalog) {
     ])
   ]);
   card.appendChild(header);
+
+  // Select-for-Growth — exactly ONE plant grows from logged study
+  // sessions at a time (see _resolve_growth_plant_id server-side).
+  // Toggling this is the only way to deliberately choose which one.
+  card.appendChild(el('button', {
+    class: `btn btn-sm mt-8 ${p.is_selected_for_growth ? '' : 'btn-outline'}`,
+    text: p.is_selected_for_growth ? '✓ Selected for Growth' : 'Select for Growth',
+    onclick: async () => {
+      try { await api(`/api/${currentProfile}/plants/${p.id}/select`, { method: 'POST' }); render(); }
+      catch (e) { alert(e.message); }
+    }
+  }));
+
+  if (p.withered) {
+    const extra = p.globally_neglected ? ' On top of that, you haven\'t studied at all recently, which dents every plant\'s yield too.' : '';
+    card.appendChild(el('div', { class: 'recommendation warning mt-8', style: 'margin-bottom:0' }, [
+      el('span', { text: '🥀' }),
+      el('span', { text: `Wilted — this plant hasn't gotten enough study time recently. Its passive yield is cut to a fraction until you give it real attention again.${extra}` })
+    ]));
+  } else if (p.globally_neglected) {
+    card.appendChild(el('div', { class: 'text-dim text-sm mt-8', text: 'ℹ️ No self-study logged in a while — every plant\'s yield is temporarily reduced until you study again.' }));
+  }
 
   // Growth bar
   if (p.hours_for_next_level) {
@@ -2851,14 +3030,18 @@ function renderPlantCard(p, catalog) {
   ])));
   card.appendChild(bonusList);
 
-  // Actions: Fertilize, Fast Grower upgrade, Prestige allocation
+  // Actions: Fertilize (temporary buff), Fast Grower upgrade, Prestige allocation
   const actions = el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-top:10px' });
-  if (p.fertilizer_stacks < catalog.fertilizer.max_stacks) {
-    const cost = Math.round(catalog.fertilizer.base_cost * Math.pow(catalog.fertilizer.cost_multiplier, p.fertilizer_stacks) * 10) / 10;
+  if (p.fertilizer_active) {
+    actions.appendChild(el('div', { class: 'text-sm', style: 'display:flex;align-items:center;gap:6px;color:var(--green);font-weight:700' }, [
+      el('span', { text: '🧪' }),
+      el('span', { text: `Fertilized — +${p.fertilizer_bonus_pct}% growth for ${fmt(p.fertilizer_remaining_hours, 1)}h more` })
+    ]));
+  } else {
     actions.appendChild(el('button', { class: 'btn btn-sm btn-outline', onclick: async () => {
       try { await api(`/api/${currentProfile}/plants/${p.id}/fertilize`, { method: 'POST' }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
       catch (e) { alert(e.message); }
-    } }, [el('span', { text: `Fertilize (${p.fertilizer_stacks}/${catalog.fertilizer.max_stacks}) ` }), coinIcon(12), el('span', { text: cost })]));
+    } }, [el('span', { text: `Fertilize (+${p.fertilizer_bonus_pct}% growth, 24h) ` }), coinIcon(12), el('span', { text: p.fertilizer_cost })]));
   }
   const fgBonus = p.bonuses.find(b => b.id === 'fast_grower');
   if (fgBonus && fgBonus.unlocked && p.fast_grower_seed_tiers < catalog.fast_grower.max_tiers) {
@@ -2936,7 +3119,25 @@ function renderBookIndex(book) {
   document.getElementById('modalContent').classList.add('book-modal-content');
 }
 
-function renderBookEntry(book, entry) {
+function renderBookGrowthGuide(plantDef, catalog) {
+  const thresholds = plantDef.level_hours_thresholds || [];
+  return el('div', { class: 'card', style: 'margin-top:18px' }, [
+    el('div', { class: 'card-title', text: '🌱 Growth Guide (in-game)' }),
+    el('table', {}, [
+      el('thead', {}, el('tr', {}, [el('th', { text: 'Level' }), el('th', { text: 'Hours to Reach' }), el('th', { text: 'Bonus Unlocked' })])),
+      el('tbody', {}, (plantDef.level_bonus_defs || []).map((b, i) => el('tr', {}, [
+        el('td', {}, el('span', { style: `color:${(catalog.level_colors || [])[i] || 'inherit'};font-weight:700`, text: `Level ${b.level}` })),
+        el('td', { text: `${thresholds[i] ?? '?'}h` }),
+        el('td', { text: `${b.label} — +${b.base_value}${b.unit} (${b.desc})` })
+      ])))
+    ])
+  ]);
+}
+
+async function renderBookEntry(book, entry) {
+  const catalog = entry.plant_id ? await loadBotanariumCatalog() : null;
+  const plantDef = catalog ? (catalog.catalog || []).find(p => p.id === entry.plant_id) : null;
+
   const content = el('div', { class: 'book-modal book-entry' }, [
     el('div', { class: 'modal-header' }, [
       el('div', { class: 'modal-title', text: '📖 Clementine\'s Book of Wonders' }),
@@ -2967,7 +3168,8 @@ function renderBookEntry(book, entry) {
         el('h3', { text: 'Fun Facts' }),
         el('ul', { class: 'book-fact-list' }, entry.fun_facts.map(f => el('li', { text: f })))
       ])
-    ])
+    ]),
+    plantDef ? renderBookGrowthGuide(plantDef, catalog) : null
   ]);
   showModal(content);
   document.getElementById('modalContent').classList.add('book-modal-content');
@@ -3239,7 +3441,7 @@ async function renderStats(c) {
           el('table', {}, [
             el('tbody', {}, Object.entries(stats.attendance.by_type).map(([t, m]) =>
               el('tr', {}, [
-                el('td', {}, el('span', { class: `tag tag-${t.toLowerCase()}`, text: t })),
+                el('td', {}, el('span', { class: `tag tag-${t.toLowerCase()}`, text: lessonTypeLabel(t) })),
                 el('td', { text: fmtHours(m) + 'h' })
               ])
             ))
@@ -3251,9 +3453,11 @@ async function renderStats(c) {
             el('tbody', {}, [
               el('tr', {}, [el('td', {}, el('span', { class: 'tag tag-present', text: 'Present' })), el('td', { text: stats.attendance.present })]),
               el('tr', {}, [el('td', {}, el('span', { class: 'tag tag-partial', text: 'Partial' })), el('td', { text: stats.attendance.partial })]),
-              el('tr', {}, [el('td', {}, el('span', { class: 'tag tag-absent', text: 'Absent' })), el('td', { text: stats.attendance.absent })])
+              el('tr', {}, [el('td', {}, el('span', { class: 'tag tag-absent', text: 'Absent' })), el('td', { text: stats.attendance.absent })]),
+              stats.attendance.teacher_absent > 0 ? el('tr', {}, [el('td', {}, el('span', { class: 'tag tag-teacher_absent', text: 'Teacher Absent' })), el('td', { text: stats.attendance.teacher_absent })]) : null
             ])
-          ])
+          ]),
+          stats.attendance.teacher_absent > 0 ? el('div', { class: 'text-dim text-sm mt-8', text: 'Teacher-absent lessons aren\'t counted toward your attendance rate.' }) : null
         ])
       ])
     ]));
@@ -3470,6 +3674,78 @@ async function renderStats(c) {
 // ═══════════════════════════════════════════
 // PROGRESSION
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// FINANCE (Nerds income/expense ledger)
+// ═══════════════════════════════════════════
+const FINANCE_SOURCE_ICONS = {
+  self_study: '📖', plant_claim: '🌿', market_sell: '💰',
+  level_up: '⭐', mastery: '🎓', fertilizer: '🧪',
+  bank_upgrade: '🏦', theme_purchase: '🎨', seed_purchase: '🌱'
+};
+
+async function renderFinance(c) {
+  c.innerHTML = '<div class="text-center text-dim" style="padding:40px">Loading Finance Ledger...</div>';
+  let ledger;
+  try {
+    ledger = await api(`/api/${currentProfile}/finance/ledger`);
+  } catch (e) {
+    c.innerHTML = `<div class="card"><p>Error loading the Finance Ledger: ${esc(e.message)}</p></div>`;
+    return;
+  }
+
+  c.innerHTML = '';
+  c.appendChild(el('h2', { style: 'margin-bottom:16px', text: '💰 Finance Ledger' }));
+  c.appendChild(el('div', { class: 'text-dim text-sm mb-16', text: 'Every Nerds gain and spend, exactly as it happened — self-study sessions, level-ups, mastery tiers, plant claims, and Market purchases, grouped by day like a real statement. Entries marked with 🌿 had a plant bonus applied.' }));
+
+  const grid = el('div', { class: 'stats-grid' });
+  grid.appendChild(el('div', { class: 'stat-card' }, [
+    coinIcon(20), el('div', { class: 'stat-value', style: 'margin-top:6px', text: fmt(ledger.current_balance, 1) }),
+    el('div', { class: 'stat-label', text: 'Current Balance' })
+  ]));
+  grid.appendChild(el('div', { class: 'stat-card' }, [
+    el('div', { class: 'stat-value', style: 'color:var(--green)', text: '+' + fmt(ledger.total_income, 1) }),
+    el('div', { class: 'stat-label', text: 'Total Earned (all time)' })
+  ]));
+  grid.appendChild(el('div', { class: 'stat-card' }, [
+    el('div', { class: 'stat-value', style: 'color:var(--red)', text: fmt(ledger.total_expense, 1) }),
+    el('div', { class: 'stat-label', text: 'Total Spent (all time)' })
+  ]));
+  c.appendChild(grid);
+
+  if (!ledger.days.length) {
+    c.appendChild(el('div', { class: 'card text-dim text-center', style: 'padding:40px', text: 'No Nerds activity yet. Log a self-study session or claim a plant to get started.' }));
+    return;
+  }
+
+  ledger.days.forEach(day => {
+    const dayCard = el('div', { class: 'card fade-in' });
+    dayCard.appendChild(el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px' }, [
+      el('div', { class: 'card-title', style: 'margin-bottom:0', text: day.date }),
+      el('div', { class: 'row', style: 'gap:14px' }, [
+        day.income > 0 ? el('span', { class: 'text-sm', style: 'color:var(--green);font-weight:700', text: `+${fmt(day.income, 1)}` }) : null,
+        day.expense < 0 ? el('span', { class: 'text-sm', style: 'color:var(--red);font-weight:700', text: fmt(day.expense, 1) }) : null,
+        el('span', { class: 'text-sm text-dim', text: `Net: ${day.net >= 0 ? '+' : ''}${fmt(day.net, 1)}` })
+      ])
+    ]));
+    dayCard.appendChild(el('table', {}, [
+      el('tbody', {}, day.entries.map(en => {
+        const icon = FINANCE_SOURCE_ICONS[en.source] || '•';
+        const positive = en.amount >= 0;
+        return el('tr', {}, [
+          el('td', { style: 'width:26px', text: icon }),
+          el('td', {}, [
+            el('div', { text: en.label }),
+            en.detail ? el('div', { class: 'text-dim text-sm', text: en.detail }) : null
+          ]),
+          el('td', { class: 'text-right', style: `font-weight:700;color:${positive ? 'var(--green)' : 'var(--red)'};white-space:nowrap`, text: `${positive ? '+' : ''}${fmt(en.amount, 1)}` }),
+          el('td', { class: 'text-right text-dim text-sm', style: 'white-space:nowrap', text: fmt(en.balance_after, 1) })
+        ]);
+      }))
+    ]));
+    c.appendChild(dayCard);
+  });
+}
+
 async function renderProgression(c) {
   c.innerHTML = '';
   c.appendChild(el('h2', { style: 'margin-bottom:16px', text: '🏆 Progression' }));
@@ -3700,9 +3976,9 @@ async function renderSettings(c) {
         el('option', { value: 'sunday', text: 'Sunday' })
       ]),
       el('select', { id: 'newSubType', style: 'width:auto' }, [
-        el('option', { value: 'C', text: 'Cours (C)' }),
-        el('option', { value: 'TD', text: 'TD' }),
-        el('option', { value: 'TP', text: 'TP' })
+        el('option', { value: 'C', text: 'Lesson' }),
+        el('option', { value: 'TD', text: 'Practical Work' }),
+        el('option', { value: 'TP', text: 'Lab' })
       ]),
       el('input', { id: 'newSubStart', type: 'time', value: '08:00', style: 'width:120px' }),
       el('input', { id: 'newSubEnd', type: 'time', value: '09:30', style: 'width:120px' }),
@@ -3738,12 +4014,15 @@ async function renderSettings(c) {
           el('td', { text: s.name }),
           el('td', { text: s.difficulty + '/10' }),
           el('td', { class: 'text-sm text-dim', text: yr ? yr.label : '—' }),
-          el('td', { class: 'text-sm text-dim', text: (s.schedule || []).map(sc => `${sc.day} ${sc.type}`).join(', ') || '—' }),
-          el('td', {}, el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
-            if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session, attendance record, exam, and file linked to this subject too — including all mastery progress earned for it. This cannot be undone.`)) return;
-            await api(`/api/${currentProfile}/subjects/${s.id}`, { method: 'DELETE' });
-            await loadConfigAndGamification(); render();
-          } }))
+          el('td', { class: 'text-sm text-dim', text: (s.schedule || []).map(sc => `${sc.day} ${lessonTypeLabel(sc.type)}`).join(', ') || '—' }),
+          el('td', {}, el('div', { class: 'btn-group' }, [
+            el('button', { class: 'btn btn-sm btn-outline', text: '📅', title: 'Manage schedule (add more than one slot per week)', onclick: () => showManageScheduleModal(s) }),
+            el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
+              if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session, attendance record, exam, and file linked to this subject too — including all mastery progress earned for it. This cannot be undone.`)) return;
+              await api(`/api/${currentProfile}/subjects/${s.id}`, { method: 'DELETE' });
+              await loadConfigAndGamification(); render();
+            } })
+          ]))
         ]);
           }))
         ])
