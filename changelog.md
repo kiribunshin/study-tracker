@@ -1,3 +1,17 @@
+# v2.2.0 changes:
+This patch brings a whopping 31 new plants, now reaching a total of 32. Some bugs were patched.
+- Added: Over 31 new plants with distinct bonuses and mechanics aiming for maximum uniqueness.
+- Added: Plant Harvest: You can now harvest fruit from all of your plants once they are fully matured and every ~5 growth hours. (Susceptible to change - aka reductions - through specific plant buffs.) 
+- Added: `Plant Collections`: Collect multiple plants of the same category and level them up to their max level to earn a powerful permanent buff.
+- Added: `Inventory Slots`: You now start with 20 inventory slots and can purchase more slots with increasing amounts of Nerds. Any event that would use up an inventory slot now gets outright refused when all inventory slots are full.
+- Changed: Exposed the version variable at the top of app.js and server.py for easier maintenance.  
+
+There are still a few bugs (stretched out textures, missing fruit textures, raw variables written in frontend instead of formatted text) but I wanted to push this out so the main features are there quicker.  
+
+A lot of plants are planned for the future so stay tuned.
+
+---
+
 # v2.1 changes:
 This patch comes with many fixes to bugs in v2.0 as well as inherited bugs from previous versions.
 - Added: Clementine's Book of Wonders now lists all the hours needed for plant levels as well as the significance of their respective bonuses.

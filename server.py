@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""StudyTracker v2.1 — Portable study tracking web app."""
+"""StudyTracker — Portable study tracking web app."""
 import os, json, time, hashlib, shutil, math, uuid, random
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 from werkzeug.utils import secure_filename
+
+# ═══════════════════════════════════════════════════════════════════
+# ── VERSION ── Bump this whenever you ship a meaningful change. It's
+# the single source of truth for the backend's version — shown in the
+# startup console line below and exposed at GET /api/version for the
+# frontend (see APP_VERSION in app.js) to read and display, so the two
+# never drift apart or need editing in two places by hand.
+# ═══════════════════════════════════════════════════════════════════
+APP_VERSION = "2.2.0"
 
 app = Flask(__name__)
 
@@ -242,12 +251,33 @@ MASTERY_TIER_NERDS = [15, 40, 95, 200, 400, 720, 1280, 2400, 4160, 7200]
 # Sprite stage N (watermelonN.png) maps directly to Level N+1 — e.g.
 # watermelon0.png (a freshly-planted seed) IS Level 1; watermelon4.png
 # (full maturity) IS Level 5. sprites[level-1] always gives the right file.
-PLANT_MAX_LEVEL = 5
+PLANT_MAX_LEVEL = 5   # legacy ceiling — kept only as the array size for PLANT_LEVEL_COLORS.
+                       # Actual per-plant max level is plant_max_level(plant_def)
+                       # (= len(level_bonus_defs)). Watermelon has 5 levels; every
+                       # plant added since has 4 — both work through the same code.
+
+def plant_max_level(plant_def):
+    return len(plant_def["level_bonus_defs"])
 
 # Visual/identity color per growth level (1..PLANT_MAX_LEVEL) — used on
 # every plant card, the level chip, and the Book of Wonders so the same
 # color always means the same level at a glance, across every plant.
 PLANT_LEVEL_COLORS = ["#8bc34a", "#5a9e3d", "#2e7d32", "#f9a825", "#e64a19"]
+
+# ── Harvest system (max-level plants only) ──
+# Once a plant reaches its max level, it can additionally be HARVESTED
+# for a text-only Fruit item (separate from passive Nerds yield) every
+# HARVEST_GROWTH_HOURS_INTERVAL growth-hours it accrues past reaching
+# max level. Harvesting locks that plant's growth-hour accrual (toward
+# its NEXT harvest only — passive Nerds yield keeps working normally)
+# for HARVEST_LOCKOUT_HOURS, during which its sprite swaps to
+# "<sprites_dir>/<id>h.png" (the depleted/fruit-less look) instead of
+# its normal max-level sprite. A harvest is REFUSED (not queued, not
+# overflowed) if there's no inventory slot free for a brand new fruit
+# type — see the inventory-slot economy below.
+HARVEST_GROWTH_HOURS_INTERVAL = 5.0
+HARVEST_LOCKOUT_HOURS = 1.0
+FRUIT_SELL_PRICE = 90   # flat Nerds sell price for any plant's fruit item, uniform for now
 
 # Prestige tiers (past PLANT_MAX_LEVEL) reuse the SAME 10-tier color
 # ladder as badges/mastery — one consistent "achievement color" language
@@ -267,11 +297,22 @@ PLANT_PRESTIGE_HOURS_EXPONENT = 1.5
 # of a plant's 5 level-bonuses to permanently increase its magnitude by
 # the increment below. Points can stack into the same bonus repeatedly.
 PRESTIGE_BUFF_POINT_INCREMENTS = {
-    "refreshing": 1.0,     # +1% XP (on top of the base 5%) per point
-    "voluminous": 0.5,     # +0.5% (on top of the base 2%) per point
-    "seedy": 0.5,          # +0.5% chance (on top of the base 4%) per point
-    "fast_grower": 1.0,    # +1% passive yield rate (on top of base+seed-upgrades) per point
-    "hydration": 1.0,      # +1% XP&Nerds (on top of the base 5%) per point
+    "refreshing": 1.0,      # +1% XP (on top of the base 5%) per point
+    "voluminous": 0.5,      # +0.5% claimable Nerds per point
+    "seedy": 0.5,           # +0.5% seed-drop chance per point
+    "fast_grower": 1.0,     # +1% passive yield rate per point
+    "hydration": 1.0,       # +1% XP&Nerds (summer) per point
+    "frosty": 1.0,          # +1% XP&Nerds (winter) per point — real cold-storage/frost-sweetened crops only
+    "dawn_grower": 1.0,     # +1% XP&Nerds (sessions started before DAWN_GROWER_HOUR_CUTOFF) per point
+    "dusk_grower": 1.0,     # +1% XP&Nerds (sessions started at/after DUSK_GROWER_HOUR_CUTOFF) per point
+    "spicy": 0.15,          # +0.15% XP&Nerds PER DIFFICULTY POINT (so effectively up to +1.5% at difficulty 10) per prestige point
+    "bountiful": 0.5,       # +0.5% reduction to this plant's harvest-hours requirement per point
+    "hardy": 1.0,           # +1% softening of this plant's specific-neglect yield penalty per point
+    "warden": 0.5,          # +0.5 extra day added to this plant's specific-neglect window per point
+    "fruitful": 0.5,        # +0.5% chance of a bonus second fruit on harvest per point
+    "stocky": 0.5,          # +0.5 extra passive-yield storage-cap hour for this plant per point
+    "thrifty": 1.0,         # +1% Fertilizer cost reduction for this plant per point
+    "richseed": 1.0,        # +1% seed sell-price bonus for this plant's seed per point
 }
 
 # Fertilizer — bought with Nerds, a TEMPORARY buff (not a permanent
@@ -308,7 +349,92 @@ FAST_GROWER_SEED_TIER_BASE_COST = 1
 # calendar months, Northern-hemisphere default. Adjust freely per your
 # own hemisphere/preference.
 SUMMER_MONTHS = [6, 7, 8]
+WINTER_MONTHS = [12, 1, 2]
+SPRING_MONTHS = [3, 4, 5]
+AUTUMN_MONTHS = [9, 10, 11]              # adjust freely per hemisphere/preference, same note as SUMMER_MONTHS
 REFRESHING_MIN_SESSION_MINUTES = 90     # Refreshing only applies to sessions at/above this length
+DAWN_GROWER_HOUR_CUTOFF = 8              # sessions STARTING before this hour count as "dawn"
+DUSK_GROWER_HOUR_CUTOFF = 20             # sessions STARTING at/after this hour count as "dusk"
+
+# ── Plant Collections ──
+# A "collection" is a themed group of plant IDs (e.g. every potato
+# variety). When EVERY plant in a collection is owned AND at/above the
+# collection's required_level, the collection grants a flat, YEAR-ROUND
+# (not season-gated) XP%/Nerds% bonus to every self-study session —
+# stacking additively with any active seasonal plant bonuses. Multiple
+# completed collections stack.
+PLANT_COLLECTIONS = [
+    {
+        "id": "potato_collection", "label": "Potato Cellar",
+        "plant_ids": ['russetpotato', 'yukongoldpotato', 'peruvianpurplepotato', 'sweetpotato', 'cassava'],
+        "required_level": 4,
+        "domain_bonus_ids": ['voluminous', 'bountiful', 'hardy'], "domain_boost_pct": 25,
+        "desc": "All 5 potato-family plants at max level. Amplifies EVERY owned potato-family plant's own Voluminous, Bountiful, and Hardy bonus values by +25% — the whole cellar reinforces each plant's bulk yield and keeping quality.",
+    },
+    {
+        "id": "root_collection", "label": "Root Cellar",
+        "plant_ids": ['daikonradish', 'carrot', 'parsnip', 'radish', 'beet', 'turnip', 'rutabaga'],
+        "required_level": 4,
+        "domain_bonus_ids": ['frosty', 'hardy', 'warden'], "domain_boost_pct": 25,
+        "desc": "All 7 root vegetables at max level. Amplifies every owned root vegetable's own Frosty, Hardy, and Warden bonus values by +25% — a full winter cellar keeps every root colder and longer.",
+    },
+    {
+        "id": "allium_collection", "label": "Allium Braid",
+        "plant_ids": ['garlic', 'sweetonion', 'redonion', 'whiteonion', 'greenonion'],
+        "required_level": 4,
+        "domain_bonus_ids": ['hardy', 'thrifty', 'richseed'], "domain_boost_pct": 25,
+        "desc": "All 5 alliums at max level. Amplifies every owned allium's own Hardy, Thrifty, and Richseed bonus values by +25% — a full braid of alliums keeps and multiplies together.",
+    },
+    {
+        "id": "pepper_collection", "label": "Pepper Rack",
+        "plant_ids": ['habanero', 'greenbellpepper', 'redbellpepper', 'orangebellpepper', 'yellowbellpepper', 'hotpepper'],
+        "required_level": 4,
+        "domain_bonus_ids": ['spicy', 'seedy', 'hydration'], "domain_boost_pct": 25,
+        "desc": "All 6 peppers at max level. Amplifies every owned pepper's own Spicy, Seedy, and Hydration bonus values by +25% (bell peppers have no Spicy bonus to amplify, so they benefit through Hydration/Seedy instead).",
+    },
+    {
+        "id": "melon_collection", "label": "Melon Patch",
+        "plant_ids": ['honeydewmelon', 'cantaloupemelon'],
+        "required_level": 4,
+        "domain_bonus_ids": ['hydration', 'fruitful'], "domain_boost_pct": 25,
+        "desc": "Both melons at max level. Amplifies both melons' own Hydration and Fruitful bonus values by +25%.",
+    },
+    {
+        "id": "squash_collection", "label": "Squash Harvest",
+        "plant_ids": ['acornsquash', 'crooknecksquash', 'pumpkin', 'butternutsquash'],
+        "required_level": 4,
+        "domain_bonus_ids": ['hardy', 'stocky', 'bountiful'], "domain_boost_pct": 25,
+        "desc": "All 4 squashes at max level. Amplifies every owned squash's own Hardy, Stocky, and Bountiful bonus values by +25%.",
+    },
+    {
+        "id": "corn_collection", "label": "Corn Crib",
+        "plant_ids": ['sweetcorn', 'flintcorn'],
+        "required_level": 4,
+        "domain_bonus_ids": ['fast_grower', 'fruitful', 'richseed'], "domain_boost_pct": 25,
+        "desc": "Both corn varieties at max level. Amplifies both corn plants' own Fast Grower, Fruitful, and Richseed bonus values by +25%.",
+    },
+    {
+        "id": "full_garden", "label": "The Full Garden",
+        "plant_ids": ['russetpotato', 'yukongoldpotato', 'peruvianpurplepotato', 'sweetpotato', 'cassava', 'daikonradish', 'carrot', 'parsnip', 'radish', 'beet', 'turnip', 'rutabaga', 'garlic', 'sweetonion', 'redonion', 'whiteonion', 'greenonion', 'habanero', 'greenbellpepper', 'redbellpepper', 'orangebellpepper', 'yellowbellpepper', 'hotpepper', 'honeydewmelon', 'cantaloupemelon', 'acornsquash', 'crooknecksquash', 'pumpkin', 'butternutsquash', 'sweetcorn', 'flintcorn', 'watermelon'],
+        "required_level": 4,
+        "flat_xp_pct": 10.0, "flat_nerds_pct": 10.0,
+        "desc": "Every single plant in the Botanarium at max level (Watermelon counts at its own max, Level 5). The one universal capstone reward, since it spans every domain at once: a flat +10% XP and +10% Nerds on every self-study session, stacking on top of every active family collection.",
+    },
+]
+
+# ── Inventory slot economy ──
+# Starts at INVENTORY_SLOT_COUNT free slots. Additional slots are
+# purchased with Nerds, each one progressively more expensive than the
+# last (same "everything derived from an event log, nothing a mutable
+# counter" philosophy as the rest of the economy — purchased slot count
+# is simply the count of "inventory_slot" entries in nerds_spent).
+# When inventory is full and something NEW would need its own new slot
+# (a fresh item type never held before), that action is REFUSED outright
+# — buying a seed, a passive Seedy-bonus seed-drop, or a Harvest all
+# check for space first and do not silently overflow or discard.
+INVENTORY_SLOT_BASE_COST = 500
+INVENTORY_SLOT_COST_GROWTH = 1.35
+INVENTORY_SLOT_MAX_PURCHASES = 40
 
 # ── Passive Yield (every plant/tree, at every level, generates Nerds
 # passively over real time — this is the "Claim" button on each card) ──
@@ -333,7 +459,6 @@ PASSIVE_YIELD_MAX_STORAGE_HOURS = 24
 # lower limit intentionally matches the existing "hours5" weekly quest
 # threshold — the same "solid study week" benchmark used everywhere else.
 WEEKLY_YIELD_LOWER_LIMIT_HOURS = 5
-WEEKLY_YIELD_MIN_MULTIPLIER = 0.01
 WEEKLY_YIELD_MAX_MULTIPLIER = 2.0
 WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE = 0.1   # +10% multiplier per hour studied beyond the lower limit
 
@@ -406,6 +531,7 @@ PLANT_DEFS = [
         # styles.css), so "withered seed" still looks like a seed, just
         # drained of color, and likewise at every other level.
         "seed_item": "watermelon_seed",
+        "fruit_name": "Watermelon Fruit",
         # Cumulative growth-hours (since acquired, Fertilizer applied)
         # needed to REACH each level. Level 1 is immediate — the plant
         # starts there the moment it's planted. ~100h total to fully
@@ -415,15 +541,419 @@ PLANT_DEFS = [
         "level_hours_thresholds": [0, 12, 30, 58, 100],
         "level_bonus_defs": [
             {"level": 1, "id": "refreshing", "label": "Refreshing", "base_value": 5.0, "unit": "%",
-             "desc": "Gives a bonus to session XP for long, deep-focus sessions during summer."},
+             "desc": "Triggers only on self-study sessions of 90+ minutes, and only in June, July, or August. Adds +5% to that single session's earned XP (does not affect Nerds)."},
             {"level": 2, "id": "voluminous", "label": "Voluminous", "base_value": 2.0, "unit": "%",
-             "desc": "Increases this plant's final claimable passive Nerds amount."},
+             "desc": "Applies every time you press Claim on this plant. Multiplies the final claimable Nerds amount by +2%."},
             {"level": 3, "id": "seedy", "label": "Seedy", "base_value": 4.0, "unit": "%",
-             "desc": "A small chance, each time you Claim, to also yield a Watermelon Seed."},
+             "desc": "Rolled independently on every Claim of this plant's passive yield: a 4% chance to also add 1 Watermelon Seed to your inventory, on top of the Nerds claimed."},
             {"level": 4, "id": "fast_grower", "label": "Fast Grower", "base_value": 1.0, "unit": "%",
-             "desc": "Increases this plant's passive Nerds yield rate. Upgradeable further by spending Watermelon Seeds."},
+             "desc": "Adds +1% to this plant's base passive Nerds-per-hour rate. Stacks additively with each Fast Grower seed-upgrade tier bought on the plant's card (up to 5 tiers, +1% each)."},
             {"level": 5, "id": "hydration", "label": "Hydration", "base_value": 5.0, "unit": "%",
-             "desc": "Gives a bonus to both XP and Nerds for every study session during summer."},
+             "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5% to BOTH the XP and the Nerds earned from that session."},
+        ],
+    },
+
+    {
+        "id": "russetpotato", "name": "Russet Potato", "scientific_name": "Solanum tuberosum",
+        "sprite_dir": "crops",
+        "sprites": ["russetpotato1.png", "russetpotato2.png", "russetpotato3.png", "russetpotato4.png"],
+        "seed_item": "russetpotato_seed", "fruit_name": "Russet Potato",
+        "level_hours_thresholds": [0, 7.8, 20.8, 65.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Starchy Bulk", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3% — Russets are bred specifically for high starch mass per tuber."},
+            {"level": 2, "id": "bountiful", "label": "Many Tubers Per Hill", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) — a single seed potato produces several tubers underground."},
+            {"level": 3, "id": "hardy", "label": "Root Cellar Classic", "base_value": 15.0, "unit": "%", "desc": "Softens (never removes) this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +15% relative to the base."},
+            {"level": 4, "id": "fast_grower", "label": "Field Crop", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
+        ],
+    },
+    {
+        "id": "yukongoldpotato", "name": "Yukon Gold Potato", "scientific_name": "Solanum tuberosum",
+        "sprite_dir": "crops",
+        "sprites": ["yukongoldpotato1.png", "yukongoldpotato2.png", "yukongoldpotato3.png", "yukongoldpotato4.png"],
+        "seed_item": "yukongoldpotato_seed", "fruit_name": "Yukon Gold Potato",
+        "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Buttery Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
+            {"level": 2, "id": "bountiful", "label": "Reliable Cropper", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) — bred specifically for consistent, heavy yields."},
+            {"level": 3, "id": "fast_grower", "label": "Early Maturing", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate — Yukon Gold is a genuinely early-maturing cultivar compared to most potatoes."},
+            {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
+        ],
+    },
+    {
+        "id": "peruvianpurplepotato", "name": "Peruvian Purple Potato", "scientific_name": "Solanum tuberosum",
+        "sprite_dir": "crops",
+        "sprites": ["peruvianpurplepotato1.png", "peruvianpurplepotato2.png", "peruvianpurplepotato3.png", "peruvianpurplepotato4.png"],
+        "seed_item": "peruvianpurplepotato_seed", "fruit_name": "Peruvian Purple Potato",
+        "level_hours_thresholds": [0, 8.4, 22.4, 70.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "seedy", "label": "Andean Genetic Diversity", "base_value": 5.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 5% chance to also add 1 seed of this plant's type to your inventory — reflecting the thousands of native Andean potato landraces still maintained today."},
+            {"level": 2, "id": "voluminous", "label": "Anthocyanin-Dense", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 3, "id": "hardy", "label": "High-Altitude Hardiness", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +20% relative to the base — bred for millennia against frost and poor Andean soils."},
+            {"level": 4, "id": "bountiful", "label": "Terraced Cultivar", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+        ],
+    },
+    {
+        "id": "sweetpotato", "name": "Sweet Potato", "scientific_name": "Ipomoea batatas",
+        "sprite_dir": "crops",
+        "sprites": ["sweetpotato1.png", "sweetpotato2.png", "sweetpotato3.png", "sweetpotato4.png"],
+        "seed_item": "sweetpotato_seed", "fruit_name": "Sweet Potato",
+        "level_hours_thresholds": [0, 8.2, 21.8, 68.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Warm-Season Grower", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned — sweet potato is a genuine warm-season crop, planted after the last frost and grown through peak summer heat, unlike a true potato."},
+            {"level": 2, "id": "fruitful", "label": "Twin Tuber", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit — a single sweet potato plant commonly produces multiple tubers of harvestable size."},
+            {"level": 3, "id": "bountiful", "label": "Generous Vine", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
+            {"level": 4, "id": "fast_grower", "label": "Vigorous Vine", "base_value": 2.0, "unit": "%", "desc": "Adds +2% to this plant's base passive Nerds-per-hour rate."},
+        ],
+    },
+    {
+        "id": "cassava", "name": "Cassava", "scientific_name": "Manihot esculenta",
+        "sprite_dir": "crops",
+        "sprites": ["cassava1.png", "cassava2.png", "cassava3.png", "cassava4.png"],
+        "seed_item": "cassava_seed", "fruit_name": "Cassava Root",
+        "level_hours_thresholds": [0, 10.2, 27.2, 85.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Drought Tolerant", "base_value": 30.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty by far the most of any plant in the Botanarium. Multiplies the neglect yield fraction by +30% relative to the base — cassava genuinely survives drought and poor soil better than nearly any other staple crop."},
+            {"level": 2, "id": "thrifty", "label": "Minimal-Input Crop", "base_value": 20.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 20% — cassava is famously grown with little agricultural input, thriving where other staples fail."},
+            {"level": 3, "id": "bountiful", "label": "Staple Root Crop", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
+            {"level": 4, "id": "voluminous", "label": "Calorie-Dense Tuber", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
+        ],
+    },
+    {
+        "id": "daikonradish", "name": "Daikon Radish", "scientific_name": "Raphanus sativus",
+        "sprite_dir": "crops",
+        "sprites": ["daikonradish1.png", "daikonradish2.png", "daikonradish3.png", "daikonradish4.png"],
+        "seed_item": "daikonradish_seed", "fruit_name": "Daikon Radish",
+        "level_hours_thresholds": [0, 5.4, 15.7, 45.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Quick Sprouter", "base_value": 3.5, "unit": "%", "desc": "Adds +3.5% to this plant's base passive Nerds-per-hour rate — one of the fastest passive-ramp bonuses in the Botanarium."},
+            {"level": 2, "id": "bountiful", "label": "Fast Turnaround", "base_value": 6.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 6% (rounded, floor 1h)."},
+            {"level": 3, "id": "frosty", "label": "Cold-Sweetened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 4, "id": "dawn_grower", "label": "Morning Harvest", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned — daikon is traditionally pulled in the cool early morning before the soil warms."},
+        ],
+    },
+    {
+        "id": "carrot", "name": "Carrot", "scientific_name": "Daucus carota subsp. sativus",
+        "sprite_dir": "crops",
+        "sprites": ["carrot1.png", "carrot2.png", "carrot3.png", "carrot4.png"],
+        "seed_item": "carrot_seed", "fruit_name": "Carrot",
+        "level_hours_thresholds": [0, 6.6, 19.2, 55.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "frosty", "label": "Sweetens After Frost", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +4.5% to both the XP and the Nerds earned — cold genuinely converts a carrot's stored starch into sugar."},
+            {"level": 2, "id": "fast_grower", "label": "Reliable Grower", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 3, "id": "bountiful", "label": "Root Cluster", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
+            {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
+        ],
+    },
+    {
+        "id": "parsnip", "name": "Parsnip", "scientific_name": "Pastinaca sativa",
+        "sprite_dir": "crops",
+        "sprites": ["parsnip1.png", "parsnip2.png", "parsnip3.png", "parsnip4.png"],
+        "seed_item": "parsnip_seed", "fruit_name": "Parsnip",
+        "level_hours_thresholds": [0, 7.4, 21.7, 62.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "frosty", "label": "True Winter Root", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +6.5% to both the XP and the Nerds earned — the strongest winter bonus of any plant, reflecting parsnip's tradition of being deliberately left in the ground until AFTER the first hard frost."},
+            {"level": 2, "id": "warden", "label": "Overwintered In Ground", "base_value": 4.0, "unit": "days", "desc": "Adds 4 flat extra days to this plant's specific-neglect window before yield starts dipping — parsnips are traditionally left untouched in the soil for weeks at a time through winter."},
+            {"level": 3, "id": "hardy", "label": "Cellar-Stored", "base_value": 12.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +12% relative to the base."},
+            {"level": 4, "id": "voluminous", "label": "Nutty Sweetness", "base_value": 2.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2%."},
+        ],
+    },
+    {
+        "id": "radish", "name": "Radish", "scientific_name": "Raphanus sativus",
+        "sprite_dir": "crops",
+        "sprites": ["radish1.png", "radish2.png", "radish3.png", "radish4.png"],
+        "seed_item": "radish_seed", "fruit_name": "Radish",
+        "level_hours_thresholds": [0, 4.8, 14.0, 40.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Fastest Grower", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — the single fastest passive-ramp bonus of any plant in the Botanarium, reflecting the radish's real-world speed to harvest (as little as 3-4 weeks)."},
+            {"level": 2, "id": "bountiful", "label": "Rapid Cycle", "base_value": 8.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 8% (rounded, floor 1h) — the strongest harvest-hour reduction of any plant."},
+            {"level": 3, "id": "seedy", "label": "Prolific Bolt-to-Seed", "base_value": 3.5, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 3.5% chance to also add 1 Radish Seed to your inventory — radishes bolt to seed notoriously fast if left unharvested."},
+            {"level": 4, "id": "voluminous", "label": "Crisp Bite", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
+        ],
+    },
+    {
+        "id": "beet", "name": "Beet", "scientific_name": "Beta vulgaris",
+        "sprite_dir": "crops",
+        "sprites": ["beet1.png", "beet2.png", "beet3.png", "beet4.png"],
+        "seed_item": "beet_seed", "fruit_name": "Beet",
+        "level_hours_thresholds": [0, 7.0, 20.3, 58.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Deep Pigment", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% — reflecting the dense betalain pigments beets are prized for."},
+            {"level": 2, "id": "hardy", "label": "Root Cellar Storage", "base_value": 12.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +12% relative to the base."},
+            {"level": 3, "id": "bountiful", "label": "Dual Harvest", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) — both root and greens are traditionally harvested from a single plant."},
+            {"level": 4, "id": "frosty", "label": "Cold-Tolerant Root", "base_value": 3.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +3% to both the XP and the Nerds earned."},
+        ],
+    },
+    {
+        "id": "turnip", "name": "Turnip", "scientific_name": "Brassica rapa",
+        "sprite_dir": "crops",
+        "sprites": ["turnip1.png", "turnip2.png", "turnip3.png", "turnip4.png"],
+        "seed_item": "turnip_seed", "fruit_name": "Turnip",
+        "level_hours_thresholds": [0, 6.0, 17.5, 50.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "frosty", "label": "Frost-Hardy", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "fast_grower", "label": "Quick Root", "base_value": 2.5, "unit": "%", "desc": "Adds +2.5% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 3, "id": "bountiful", "label": "Ancient Staple", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
+            {"level": 4, "id": "warden", "label": "Livestock Fodder Reserve", "base_value": 2.5, "unit": "days", "desc": "Adds 2.5 flat extra days to this plant's specific-neglect window — turnips were historically stockpiled as an emergency winter food/fodder reserve."},
+        ],
+    },
+    {
+        "id": "rutabaga", "name": "Rutabaga", "scientific_name": "Brassica napus",
+        "sprite_dir": "crops",
+        "sprites": ["rutabaga1.png", "rutabaga2.png", "rutabaga3.png", "rutabaga4.png"],
+        "seed_item": "rutabaga_seed", "fruit_name": "Rutabaga",
+        "level_hours_thresholds": [0, 7.2, 21.0, 60.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "frosty", "label": "Swede's Chill", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5.5% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "hardy", "label": "Sub-Zero Survivor", "base_value": 18.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +18% relative to the base."},
+            {"level": 3, "id": "stocky", "label": "Exceptional Keeper", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap (on top of the shared 24h default) — rutabaga is one of the longest-storing root vegetables that exists."},
+            {"level": 4, "id": "bountiful", "label": "Slow-Grown Yield", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+        ],
+    },
+    {
+        "id": "garlic", "name": "Garlic", "scientific_name": "Allium sativum",
+        "sprite_dir": "crops",
+        "sprites": ["garlic1.png", "garlic2.png", "garlic3.png", "garlic4.png"],
+        "seed_item": "garlic_seed", "fruit_name": "Garlic",
+        "level_hours_thresholds": [0, 8.6, 25.2, 72.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Antimicrobial Bulb", "base_value": 28.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +28% relative to the base — garlic's real-world reputation for keeping (and repelling pests) shows up here as the strongest Hardy bonus of any allium."},
+            {"level": 2, "id": "thrifty", "label": "Low-Maintenance Crop", "base_value": 15.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 15% — garlic is traditionally planted and largely left alone until harvest."},
+            {"level": 3, "id": "richseed", "label": "Prized Seed Cloves", "base_value": 8.0, "unit": "%", "desc": "This plant's seeds sell for +8% more in the Market — garlic 'seed' (cloves reserved for replanting) has always commanded a premium over eating garlic."},
+            {"level": 4, "id": "seedy", "label": "Bulb Division", "base_value": 4.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4% chance to also add 1 Garlic Seed to your inventory."},
+        ],
+    },
+    {
+        "id": "sweetonion", "name": "Sweet Onion", "scientific_name": "Allium cepa",
+        "sprite_dir": "crops",
+        "sprites": ["sweetonion1.png", "sweetonion2.png", "sweetonion3.png", "sweetonion4.png"],
+        "seed_item": "sweetonion_seed", "fruit_name": "Sweet Onion",
+        "level_hours_thresholds": [0, 7.0, 20.3, 58.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Layered Bulb", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 2, "id": "fast_grower", "label": "Mild Cultivar", "base_value": 2.5, "unit": "%", "desc": "Adds +2.5% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 3, "id": "bountiful", "label": "Field-Grown", "base_value": 3.5, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3.5% (rounded, floor 1h)."},
+            {"level": 4, "id": "dusk_grower", "label": "Evening-Cured Bulb", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING at/after 20:00, any time of year. Adds +2% to both the XP and the Nerds earned — sweet onions are traditionally topped and cured in the cooler evening air to avoid sunscald on their thin skin, since (unlike other onions) they don't store well enough to be casual about harvest timing."},
+        ],
+    },
+    {
+        "id": "redonion", "name": "Red Onion", "scientific_name": "Allium cepa",
+        "sprite_dir": "crops",
+        "sprites": ["redonion1.png", "redonion2.png", "redonion3.png", "redonion4.png"],
+        "seed_item": "redonion_seed", "fruit_name": "Red Onion",
+        "level_hours_thresholds": [0, 7.2, 21.0, 60.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Anthocyanin Layers", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
+            {"level": 2, "id": "hardy", "label": "Firm Storage", "base_value": 14.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +14% relative to the base."},
+            {"level": 3, "id": "richseed", "label": "Pungent Seed Value", "base_value": 5.0, "unit": "%", "desc": "This plant's seeds sell for +5% more in the Market."},
+            {"level": 4, "id": "bountiful", "label": "Reliable Bulb", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+        ],
+    },
+    {
+        "id": "whiteonion", "name": "White Onion", "scientific_name": "Allium cepa",
+        "sprite_dir": "crops",
+        "sprites": ["whiteonion1.png", "whiteonion2.png", "whiteonion3.png", "whiteonion4.png"],
+        "seed_item": "whiteonion_seed", "fruit_name": "White Onion",
+        "level_hours_thresholds": [0, 6.6, 19.2, 55.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Crisp Layers", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 2, "id": "voluminous", "label": "Sharp Bite", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
+            {"level": 3, "id": "bountiful", "label": "Papery Skin", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
+            {"level": 4, "id": "thrifty", "label": "Low-Input Crop", "base_value": 10.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 10.0%."},
+        ],
+    },
+    {
+        "id": "greenonion", "name": "Green Onion", "scientific_name": "Allium fistulosum",
+        "sprite_dir": "crops",
+        "sprites": ["greenonion1.png", "greenonion2.png", "greenonion3.png", "greenonion4.png"],
+        "seed_item": "greenonion_seed", "fruit_name": "Green Onion",
+        "level_hours_thresholds": [0, 4.6, 13.3, 38.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Fastest Allium", "base_value": 5.0, "unit": "%", "desc": "Adds +5% to this plant's base passive Nerds-per-hour rate — the fastest-ramping allium bonus, reflecting how quickly green onion regrows after cutting."},
+            {"level": 2, "id": "bountiful", "label": "Cut-and-Come-Again", "base_value": 9.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 9% (rounded, floor 1h) — the strongest reduction among alliums, echoing the real plant's ability to regrow from its base after trimming."},
+            {"level": 3, "id": "dawn_grower", "label": "Fresh-Cut Morning Stalks", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned."},
+            {"level": 4, "id": "voluminous", "label": "Mild Stalk", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
+        ],
+    },
+    {
+        "id": "habanero", "name": "Habanero Pepper", "scientific_name": "Capsicum chinense",
+        "sprite_dir": "crops",
+        "sprites": ["habanero1.png", "habanero2.png", "habanero3.png", "habanero4.png"],
+        "seed_item": "habanero_seed", "fruit_name": "Habanero Fruit",
+        "level_hours_thresholds": [0, 7.9, 21.1, 66.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "spicy", "label": "Scoville Peak", "base_value": 0.5, "unit": "% per difficulty point", "desc": "Adds +0.5% XP AND +0.5% Nerds to a session PER POINT of that session's difficulty rating (so +5% at difficulty 10/10, +2.5% at difficulty 5/10) — habanero is among the hottest commonly cultivated peppers, and this scales with how 'hard' the session was rather than its length or the calendar."},
+            {"level": 2, "id": "voluminous", "label": "Concentrated Oils", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4%."},
+            {"level": 3, "id": "seedy", "label": "Prolific Seed Pod", "base_value": 4.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4% chance to also add 1 Habanero Seed to your inventory."},
+            {"level": 4, "id": "hydration", "label": "Warm-Season Fruit", "base_value": 3.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +3% to both the XP and the Nerds earned — peppers are a genuine warm-season crop."},
+        ],
+    },
+    {
+        "id": "greenbellpepper", "name": "Green Bell Pepper", "scientific_name": "Capsicum annuum",
+        "sprite_dir": "crops",
+        "sprites": ["greenbellpepper1.png", "greenbellpepper2.png", "greenbellpepper3.png", "greenbellpepper4.png"],
+        "seed_item": "greenbellpepper_seed", "fruit_name": "Green Bell Pepper",
+        "level_hours_thresholds": [0, 6.6, 17.6, 55.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Early Harvest", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate — green bells are simply an unripe harvest of the same fruit that becomes red/yellow/orange later, so this plant matures its yield fastest of the bell pepper family."},
+            {"level": 2, "id": "voluminous", "label": "Crisp Flesh", "base_value": 2.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2%."},
+            {"level": 3, "id": "bountiful", "label": "Unripe Harvest", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) — picked before full ripeness, exactly like the real fruit."},
+            {"level": 4, "id": "richseed", "label": "Seed Stock Value", "base_value": 4.0, "unit": "%", "desc": "This plant's seeds sell for +4.0% more in the Market."},
+        ],
+    },
+    {
+        "id": "redbellpepper", "name": "Red Bell Pepper", "scientific_name": "Capsicum annuum",
+        "sprite_dir": "crops",
+        "sprites": ["redbellpepper1.png", "redbellpepper2.png", "redbellpepper3.png", "redbellpepper4.png"],
+        "seed_item": "redbellpepper_seed", "fruit_name": "Red Bell Pepper",
+        "level_hours_thresholds": [0, 7.4, 19.8, 62.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "voluminous", "label": "Sweet & Sugar-Rich", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4% — reflecting the roughly doubled sugar content a fully ripened pepper develops versus its green, unripe form."},
+            {"level": 2, "id": "hydration", "label": "Fully Ripened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 3, "id": "seedy", "label": "Vitamin-Dense Seed Pod", "base_value": 3.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 3% chance to also add 1 Red Bell Pepper Seed to your inventory."},
+            {"level": 4, "id": "bountiful", "label": "Patient Ripening", "base_value": 2.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 2% (rounded, floor 1h) — the smallest reduction of any bell pepper, since a fully red pepper is deliberately left longer on the vine."},
+        ],
+    },
+    {
+        "id": "orangebellpepper", "name": "Orange Bell Pepper", "scientific_name": "Capsicum annuum",
+        "sprite_dir": "crops",
+        "sprites": ["orangebellpepper1.png", "orangebellpepper2.png", "orangebellpepper3.png", "orangebellpepper4.png"],
+        "seed_item": "orangebellpepper_seed", "fruit_name": "Orange Bell Pepper",
+        "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Sun-Ripened", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4.5% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "voluminous", "label": "Balanced Sweetness", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 3, "id": "bountiful", "label": "Mid-Ripening", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+            {"level": 4, "id": "fast_grower", "label": "Vivid Carotenoids", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
+        ],
+    },
+    {
+        "id": "yellowbellpepper", "name": "Yellow Bell Pepper", "scientific_name": "Capsicum annuum",
+        "sprite_dir": "crops",
+        "sprites": ["yellowbellpepper1.png", "yellowbellpepper2.png", "yellowbellpepper3.png", "yellowbellpepper4.png"],
+        "seed_item": "yellowbellpepper_seed", "fruit_name": "Yellow Bell Pepper",
+        "level_hours_thresholds": [0, 7.0, 18.6, 58.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Golden Ripeness", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "fast_grower", "label": "Bright Carotenoids", "base_value": 2.0, "unit": "%", "desc": "Adds +2% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 3, "id": "voluminous", "label": "Mild Sweetness", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
+            {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
+        ],
+    },
+    {
+        "id": "hotpepper", "name": "Hot Pepper", "scientific_name": "Capsicum annuum",
+        "sprite_dir": "crops",
+        "sprites": ["hotpepper1.png", "hotpepper2.png", "hotpepper3.png", "hotpepper4.png"],
+        "seed_item": "hotpepper_seed", "fruit_name": "Hot Pepper",
+        "level_hours_thresholds": [0, 7.7, 20.5, 64.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "spicy", "label": "Genuine Heat", "base_value": 0.3, "unit": "% per difficulty point", "desc": "Adds +0.3% XP AND +0.3% Nerds to a session PER POINT of that session's difficulty rating (so +3% at difficulty 10/10) — a real cayenne/serrano-type heat, milder than habanero's, so this scales more gently."},
+            {"level": 2, "id": "seedy", "label": "Heat-Concentrated Seeds", "base_value": 4.5, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4.5% chance to also add 1 Hot Pepper Seed to your inventory."},
+            {"level": 3, "id": "voluminous", "label": "Fiery Yield", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
+        ],
+    },
+    {
+        "id": "honeydewmelon", "name": "Honeydew Melon", "scientific_name": "Cucumis melo",
+        "sprite_dir": "crops",
+        "sprites": ["honeydewmelon1.png", "honeydewmelon2.png", "honeydewmelon3.png", "honeydewmelon4.png"],
+        "seed_item": "honeydewmelon_seed", "fruit_name": "Honeydew Melon",
+        "level_hours_thresholds": [0, 9.4, 25.0, 78.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Near-Pure Water Content", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +6.5% to both the XP and the Nerds earned — honeydew is roughly 90% water, giving it the strongest hydration bonus of any melon."},
+            {"level": 2, "id": "fruitful", "label": "Vining Abundance", "base_value": 3.0, "unit": "%", "desc": "On harvest, an independent 3% chance to yield a bonus SECOND fruit alongside the normal one."},
+            {"level": 3, "id": "voluminous", "label": "Pale Sweet Flesh", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
+            {"level": 4, "id": "stocky", "label": "Waxy Skin Seal", "base_value": 4.0, "unit": "hours", "desc": "Adds +4 hours to this plant's own passive-yield storage cap — honeydew's smooth, waxy rind slows moisture loss better than a netted melon's."},
+        ],
+    },
+    {
+        "id": "cantaloupemelon", "name": "Cantaloupe Melon", "scientific_name": "Cucumis melo",
+        "sprite_dir": "crops",
+        "sprites": ["cantaloupemelon1.png", "cantaloupemelon2.png", "cantaloupemelon3.png", "cantaloupemelon4.png"],
+        "seed_item": "cantaloupemelon_seed", "fruit_name": "Cantaloupe Melon",
+        "level_hours_thresholds": [0, 9.1, 24.3, 76.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Netted Ripeness", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5.5% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "fruitful", "label": "Musky Abundance", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit alongside the normal one — the strongest bonus-fruit chance among melons."},
+            {"level": 3, "id": "voluminous", "label": "Orange Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% — reflecting cantaloupe's dense beta-carotene concentration."},
+            {"level": 4, "id": "bountiful", "label": "Aromatic Ripening", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+        ],
+    },
+    {
+        "id": "acornsquash", "name": "Acorn Squash", "scientific_name": "Cucurbita pepo",
+        "sprite_dir": "crops",
+        "sprites": ["acornsquash1.png", "acornsquash2.png", "acornsquash3.png", "acornsquash4.png"],
+        "seed_item": "acornsquash_seed", "fruit_name": "Acorn Squash",
+        "level_hours_thresholds": [0, 9.6, 25.6, 80.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Thick Rind Storage", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +20% relative to the base — acorn squash is a classic long-storing winter squash."},
+            {"level": 2, "id": "stocky", "label": "Hard-Shell Reserve", "base_value": 5.0, "unit": "hours", "desc": "Adds +5 hours to this plant's own passive-yield storage cap."},
+            {"level": 3, "id": "voluminous", "label": "Nutty Flesh", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 4, "id": "bountiful", "label": "Ribbed Fruit", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
+        ],
+    },
+    {
+        "id": "crooknecksquash", "name": "Crookneck Squash", "scientific_name": "Cucurbita pepo",
+        "sprite_dir": "crops",
+        "sprites": ["crooknecksquash1.png", "crooknecksquash2.png", "crooknecksquash3.png", "crooknecksquash4.png"],
+        "seed_item": "crooknecksquash_seed", "fruit_name": "Crookneck Squash",
+        "level_hours_thresholds": [0, 6.2, 16.6, 52.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "fast_grower", "label": "Prolific Summer Squash", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — summer squash varieties are famous for outproducing nearly every other home garden crop."},
+            {"level": 2, "id": "bountiful", "label": "Rapid Regrowth", "base_value": 7.5, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 7.5% (rounded, floor 1h)."},
+            {"level": 3, "id": "fruitful", "label": "Overproducing Vine", "base_value": 4.0, "unit": "%", "desc": "On harvest, an independent 4% chance to yield a bonus SECOND fruit — the highest bonus-fruit chance of any plant, matching crookneck's real reputation for burying gardeners in squash."},
+            {"level": 4, "id": "voluminous", "label": "Curved Neck", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
+        ],
+    },
+    {
+        "id": "pumpkin", "name": "Pumpkin", "scientific_name": "Cucurbita pepo",
+        "sprite_dir": "crops",
+        "sprites": ["pumpkin1.png", "pumpkin2.png", "pumpkin3.png", "pumpkin4.png"],
+        "seed_item": "pumpkin_seed", "fruit_name": "Pumpkin",
+        "level_hours_thresholds": [0, 11.4, 30.4, 95.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Hard Rind", "base_value": 24.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +24% relative to the base — pumpkins are among the best-storing squash varieties, keeping for months."},
+            {"level": 2, "id": "bountiful", "label": "Massive Fruit", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h)."},
+            {"level": 3, "id": "stocky", "label": "Autumn Harvest Reserve", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap — the largest Stocky bonus of any plant, matching real pumpkin's exceptional keeping ability."},
+            {"level": 4, "id": "fruitful", "label": "Vine-Sprawling", "base_value": 2.0, "unit": "%", "desc": "On harvest, an independent 2% chance to yield a bonus SECOND fruit alongside the normal one."},
+        ],
+    },
+    {
+        "id": "butternutsquash", "name": "Butternut Squash", "scientific_name": "Cucurbita moschata",
+        "sprite_dir": "crops",
+        "sprites": ["butternutsquash1.png", "butternutsquash2.png", "butternutsquash3.png", "butternutsquash4.png"],
+        "seed_item": "butternutsquash_seed", "fruit_name": "Butternut Squash",
+        "level_hours_thresholds": [0, 9.8, 26.2, 82.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Excellent Keeper", "base_value": 22.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +22% relative to the base — butternut squash is famous for storing many months without spoiling."},
+            {"level": 2, "id": "voluminous", "label": "Dense Sweet Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
+            {"level": 3, "id": "stocky", "label": "Smooth-Rind Reserve", "base_value": 5.0, "unit": "hours", "desc": "Adds +5 hours to this plant's own passive-yield storage cap."},
+            {"level": 4, "id": "warden", "label": "Cellar Reserve", "base_value": 2.0, "unit": "days", "desc": "Adds 2.0 flat extra days to this plant's specific-neglect window before yield starts dipping."},
+        ],
+    },
+    {
+        "id": "sweetcorn", "name": "Sweet Corn", "scientific_name": "Zea mays subsp. mays (saccharata group)",
+        "sprite_dir": "crops",
+        "sprites": ["sweetcorn1.png", "sweetcorn2.png", "sweetcorn3.png", "sweetcorn4.png"],
+        "seed_item": "sweetcorn_seed", "fruit_name": "Sweet Corn",
+        "level_hours_thresholds": [0, 8.9, 23.7, 74.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hydration", "label": "Milky Kernels", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5% to both the XP and the Nerds earned — sweet corn is famously a peak-summer crop, best eaten within hours of picking."},
+            {"level": 2, "id": "fast_grower", "label": "Rapid Stalk Growth", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate."},
+            {"level": 3, "id": "fruitful", "label": "Twin Ears", "base_value": 2.5, "unit": "%", "desc": "On harvest, an independent 2.5% chance to yield a bonus SECOND fruit alongside the normal one — some corn stalks genuinely produce a second, smaller ear."},
+            {"level": 4, "id": "voluminous", "label": "Sugar-Rich", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+        ],
+    },
+    {
+        "id": "flintcorn", "name": "Flint Corn", "scientific_name": "Zea mays subsp. mays (indurata group)",
+        "sprite_dir": "crops",
+        "sprites": ["flintcorn1.png", "flintcorn2.png", "flintcorn3.png", "flintcorn4.png"],
+        "seed_item": "flintcorn_seed", "fruit_name": "Flint Corn",
+        "level_hours_thresholds": [0, 10.8, 28.8, 90.0],
+        "level_bonus_defs": [
+            {"level": 1, "id": "hardy", "label": "Hard Outer Shell", "base_value": 26.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +26% relative to the base — the hardest kernel of any plant here, and the most storage-resistant."},
+            {"level": 2, "id": "richseed", "label": "Historic Seed Grain", "base_value": 6.0, "unit": "%", "desc": "This plant's seeds sell for +6% more in the Market — flint corn (Indian corn) has long been valued and carefully selected as seed stock."},
+            {"level": 3, "id": "voluminous", "label": "Colorful Kernels", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
+            {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
         ],
     },
 ]
@@ -527,6 +1057,782 @@ BOOK_ENTRIES = [
             "159 kg) — bigger than most adult humans.",
             "In parts of the world, watermelon rind is stir-fried as a vegetable rather than discarded "
             "or pickled, valued for its mild flavor and crisp texture.",
+        ],
+    },
+
+    {
+        "plant_id": "russetpotato",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Russet Potato",
+        "scientific_name": "Solanum tuberosum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/russetpotatobotanarium.png",
+        "summary": "A starchy, thick-skinned potato variety bred for baking, frying, and mashing — the most widely grown potato cultivar in the United States.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Solanum"),
+            ("Species", "S. tuberosum"),
+        ],
+        "history": "The Russet Burbank variety was developed by American horticulturist Luther Burbank in 1872 from a chance seedling of the Early Rose potato, bred to be more blight-resistant after the Irish famine decades earlier. Its high starch, low moisture content made it especially well suited to frying, driving adoption by the fast-food industry through the 20th century. Idaho became closely associated with the variety thanks to volcanic, well-drained soil and cool nights, though Russets are now grown across many temperate regions.",
+        "fun_facts": [
+            "Russets are about 80% water and roughly 18% starch by weight, giving them their characteristically fluffy baked texture.",
+            "Luther Burbank sold the rights to his original russet seedling for just $150 before it became one of the most commercially significant potato varieties in history.",
+            "The netted, russeted skin is a natural trait, not damage — it develops as a corky layer over the growing season.",
+            "A single Russet plant can produce several tubers underground from one seed potato, which is why potatoes are propagated by planting pieces of tuber, not true seed.",
+        ],
+    },
+    {
+        "plant_id": "yukongoldpotato",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Yukon Gold Potato",
+        "scientific_name": "Solanum tuberosum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/yukongoldpotatobotanarium.png",
+        "summary": "A yellow-fleshed, thin-skinned potato prized for its naturally buttery flavor and all-purpose texture, equally suited to boiling, roasting, and mashing.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Solanum"),
+            ("Species", "S. tuberosum"),
+        ],
+        "history": "Yukon Gold was developed in Canada at the University of Guelph, released in 1980 after a breeding program begun in the 1960s crossing a North American white potato with a wild South American yellow-fleshed variety. It was one of the first yellow potatoes widely marketed in North America, and its buttery taste made it an immediate commercial success.",
+        "fun_facts": [
+            "The variety's yellow flesh comes from naturally occurring carotenoids, the same pigment family responsible for orange in carrots.",
+            "Yukon Gold was named after the Yukon Territory, chosen for a 'gold rush' association despite no direct growing connection to the region.",
+            "Because of its lower starch, higher moisture profile compared to a Russet, Yukon Golds hold their shape better when boiled.",
+            "It remains one of very few potato varieties trademarked and named by its breeding institution rather than released as an open cultivar.",
+        ],
+    },
+    {
+        "plant_id": "peruvianpurplepotato",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Peruvian Purple Potato",
+        "scientific_name": "Solanum tuberosum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/peruvianpurplepotatobotanarium.png",
+        "summary": "A deep-purple-fleshed potato descended directly from Andean landrace varieties, valued both for its striking color (from anthocyanin pigments) and its role as a living link to the crop's original domestication.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Solanum"),
+            ("Species", "S. tuberosum (Andigena group)"),
+        ],
+        "history": "The potato was first domesticated in the Andes of modern-day Peru and Bolivia roughly 7,000-10,000 years ago, with thousands of distinct native varieties still cultivated by Andean farmers today, of which purple-fleshed types are among the most visually distinct. Grown historically above 3,000 meters, these landraces were selected over millennia for hardiness against frost and poor soils rather than uniformity.",
+        "fun_facts": [
+            "Peru alone is estimated to cultivate over 4,000 native potato varieties, many still grown only in small mountain communities.",
+            "The purple color comes from anthocyanins, antioxidant pigments also found in blueberries and red cabbage.",
+            "Andean farmers historically freeze-dried potatoes at high altitude (alternating sun exposure and night frost) to make 'chuño', one of the oldest food preservation methods still practiced today.",
+            "The International Potato Center in Lima maintains a genebank preserving thousands of native Andean potato varieties against genetic loss.",
+        ],
+    },
+    {
+        "plant_id": "sweetpotato",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Sweet Potato",
+        "scientific_name": "Ipomoea batatas",
+        "family": "Convolvulaceae",
+        "image": "/sprites/crops/sweetpotatobotanarium.png",
+        "summary": "A sweet, orange- or purple-fleshed root vegetable in the morning glory family — botanically unrelated to the true potato despite the shared name.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Convolvulaceae"),
+            ("Genus", "Ipomoea"),
+            ("Species", "I. batatas"),
+        ],
+        "history": "Sweet potatoes were domesticated in Central or South America at least 5,000 years ago and had already spread across Polynesia before European contact, a puzzle that has long interested botanists studying pre-Columbian trans-Pacific contact. Portuguese and Spanish traders later carried it to Africa, India, and Southeast Asia in the 16th century, where it became a staple valued for thriving in poor soils.",
+        "fun_facts": [
+            "Despite the name, sweet potatoes are not related to potatoes at all — potatoes are nightshades, sweet potatoes are morning glories.",
+            "The orange color comes from beta-carotene, the same provitamin-A pigment that colors carrots.",
+            "Sweet potatoes reaching Polynesia centuries before European contact is one of the strongest pieces of evidence for pre-Columbian contact between Polynesia and South America.",
+            "In the U.S., sweet potatoes are frequently mislabeled 'yams' in supermarkets — true yams are a botanically distinct, starchier African and Asian crop rarely sold in North America.",
+        ],
+    },
+    {
+        "plant_id": "cassava",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Cassava",
+        "scientific_name": "Manihot esculenta",
+        "family": "Euphorbiaceae",
+        "image": "/sprites/crops/cassavabotanarium.png",
+        "summary": "A starchy, drought-tolerant tuberous root, one of the most important staple crops in the tropics — the source of tapioca — able to survive in poor soils where few other crops can.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Malpighiales"),
+            ("Family", "Euphorbiaceae"),
+            ("Genus", "Manihot"),
+            ("Species", "M. esculenta"),
+        ],
+        "history": "Cassava was domesticated in South America, likely in the southern Amazon basin, several thousand years ago, and was carried to Africa by Portuguese traders in the 16th century, where it since became a dietary staple across much of the continent due to its tolerance for drought and marginal soil. It ranks among the most calorie-efficient crops per hectare in the world, though bitter varieties require careful processing to remove naturally occurring cyanogenic compounds before eating.",
+        "fun_facts": [
+            "Cassava is the third-largest source of dietary carbohydrates in the tropics worldwide, after rice and maize.",
+            "Bitter cassava varieties contain cyanogenic glycosides and must be soaked, fermented, or cooked to remove them before eating.",
+            "Tapioca pearls, used in bubble tea and puddings, are made from extracted cassava starch.",
+            "Because it can be left in the ground for extended periods without spoiling, cassava has historically served as an emergency food reserve during droughts and famines.",
+        ],
+    },
+    {
+        "plant_id": "daikonradish",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Daikon Radish",
+        "scientific_name": "Raphanus sativus",
+        "family": "Brassicaceae",
+        "image": "/sprites/crops/daikonradishbotanarium.png",
+        "summary": "A long, mild white radish widely used across East Asian cuisine — fast-growing and among the largest radish varieties, sometimes reaching over a foot in length.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Brassicales"),
+            ("Family", "Brassicaceae"),
+            ("Genus", "Raphanus"),
+            ("Species", "R. sativus"),
+        ],
+        "history": "Daikon was cultivated in China as early as the 7th century BCE before spreading to Japan, where it became especially deeply embedded in cuisine and folk medicine. Its name (from the Japanese for 'big root') reflects its scale compared to smaller European radish varieties, and it remains one of the most widely cultivated vegetables in Japan today.",
+        "fun_facts": [
+            "A mature daikon can weigh several kilograms, dwarfing the small red radishes common in Western salads.",
+            "It's rich in digestive enzymes, particularly amylase, part of why it's traditionally served alongside fatty or fried foods in Japanese cuisine.",
+            "Pickled daikon (takuan) is one of the most common pickles in Japanese cuisine.",
+            "Despite belonging to the same family as broccoli and cabbage, daikon has a peppery bite from the same glucosinolate compounds shared across brassicas.",
+        ],
+    },
+    {
+        "plant_id": "carrot",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Carrot",
+        "scientific_name": "Daucus carota subsp. sativus",
+        "family": "Apiaceae",
+        "image": "/sprites/crops/carrotbotanarium.png",
+        "summary": "A crisp, sweet taproot cultivated worldwide, most familiar in its orange form though originally domesticated in shades of purple and yellow.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Apiales"),
+            ("Family", "Apiaceae"),
+            ("Genus", "Daucus"),
+            ("Species", "D. carota"),
+        ],
+        "history": "Carrots were first domesticated in Central Asia (modern-day Afghanistan) around the 10th century, originally in purple and yellow varieties. The now-dominant orange carrot is generally believed to have been selectively bred in the Netherlands around the 17th century, favored for its higher beta-carotene content and mild flavor, and went on to become the globally standard color through Dutch trade networks.",
+        "fun_facts": [
+            "Wild carrot ancestors were bitter and woody — thousands of years of selective breeding produced the sweet, crisp texture eaten today.",
+            "The popular claim that carrots improve night vision originated from WWII British propaganda exaggerating their benefit to obscure early radar technology.",
+            "A carrot's orange color comes from beta-carotene, which the body converts into vitamin A.",
+            "Purple and yellow carrot varieties never disappeared — they're still grown today and are gaining renewed popularity in specialty markets.",
+        ],
+    },
+    {
+        "plant_id": "parsnip",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Parsnip",
+        "scientific_name": "Pastinaca sativa",
+        "family": "Apiaceae",
+        "image": "/sprites/crops/parsnipbotanarium.png",
+        "summary": "A pale, sweet root related to the carrot, traditionally left in the ground through winter frosts, which convert its stored starches to sugar and dramatically improve its flavor.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Apiales"),
+            ("Family", "Apiaceae"),
+            ("Genus", "Pastinaca"),
+            ("Species", "P. sativa"),
+        ],
+        "history": "Parsnips were cultivated across Europe since Roman times, and served as one of the primary starchy staples in European diets before the potato's arrival from the Americas displaced it in popularity from the 16th century onward. It remains a traditional winter vegetable across the UK and Northern Europe, closely associated with Christmas and cold-weather cooking.",
+        "fun_facts": [
+            "Frost genuinely does sweeten a parsnip — cold temperatures trigger the root to convert starches into sugars as a natural antifreeze mechanism.",
+            "Before the potato became widespread, the parsnip was one of Europe's primary carbohydrate staples for centuries.",
+            "Wild parsnip sap can cause skin burns in sunlight (phytophotodermatitis) — a trait shared with some of its wild Apiaceae relatives.",
+            "Its close botanical relation to the carrot is visible in the similarly shaped taproot and shared family, Apiaceae.",
+        ],
+    },
+    {
+        "plant_id": "radish",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Radish",
+        "scientific_name": "Raphanus sativus",
+        "family": "Brassicaceae",
+        "image": "/sprites/crops/radishbotanarium.png",
+        "summary": "A small, crisp, peppery root vegetable and one of the fastest-maturing garden crops, often ready to harvest within a few weeks of sowing.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Brassicales"),
+            ("Family", "Brassicaceae"),
+            ("Genus", "Raphanus"),
+            ("Species", "R. sativus"),
+        ],
+        "history": "The radish's exact origin is debated, with candidate regions spanning Southeast Asia through the Mediterranean, but it was already well established in ancient Egypt, Greece, and Rome, where it was valued as a cheap, fast-growing food source for laborers.",
+        "fun_facts": [
+            "A radish can go from seed to harvest in as little as 3-4 weeks, making it one of the fastest vegetables to grow.",
+            "The peppery bite comes from glucosinolates, the same defensive compound family found in mustard, horseradish, and wasabi.",
+            "Ancient Egyptian records suggest radishes (along with garlic and onions) were a staple ration fed to laborers building the pyramids.",
+            "Radish varieties come in far more than the common red-and-white type, including black, purple, and the giant Japanese daikon.",
+        ],
+    },
+    {
+        "plant_id": "beet",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Beet",
+        "scientific_name": "Beta vulgaris",
+        "family": "Amaranthaceae",
+        "image": "/sprites/crops/beetbotanarium.png",
+        "summary": "A deep red-purple root vegetable, closely related to Swiss chard and sugar beet, valued for its earthy sweetness and vivid betalain pigments.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Caryophyllales"),
+            ("Family", "Amaranthaceae"),
+            ("Genus", "Beta"),
+            ("Species", "B. vulgaris"),
+        ],
+        "history": "Beets were cultivated in the Mediterranean as early as classical antiquity, initially valued mainly for their edible leafy tops rather than the root. Selective breeding in Germany during the 18th century developed high-sugar beet varieties, which eventually gave rise to the sugar beet — an entirely separate industrial crop from the same species that today supplies a large share of the world's sugar.",
+        "fun_facts": [
+            "Sugar beets and the beets eaten as a vegetable are the same species, Beta vulgaris, just bred for very different traits.",
+            "Beeturia — pink or red urine after eating beets — occurs in a genetically determined subset of the population.",
+            "Beet greens are edible and closely related botanically (and nutritionally) to Swiss chard, bred from the same wild ancestor.",
+            "Ancient Romans and Greeks primarily consumed beet leaves, not the root, which only became a valued food itself much later.",
+        ],
+    },
+    {
+        "plant_id": "turnip",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Turnip",
+        "scientific_name": "Brassica rapa",
+        "family": "Brassicaceae",
+        "image": "/sprites/crops/turnipbotanarium.png",
+        "summary": "A round, white-and-purple-skinned root vegetable, one of the oldest cultivated brassicas, historically a staple crop across Europe and Asia before the potato's spread.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Brassicales"),
+            ("Family", "Brassicaceae"),
+            ("Genus", "Brassica"),
+            ("Species", "B. rapa"),
+        ],
+        "history": "Turnips have been cultivated for at least 4,000 years and were a dietary staple across ancient Rome, medieval Europe, and China long before the potato arrived from the Americas. Their tolerance for poor soil and cold climates made them a reliable subsistence crop, historically doubling as livestock fodder through harsh Northern European winters.",
+        "fun_facts": [
+            "Turnips were the original jack-o'-lantern in Irish and Scottish folklore, carved before the tradition shifted to pumpkins after emigration to North America.",
+            "Both the root and the leafy greens (turnip greens) are commonly eaten, especially in Southern U.S. and Chinese cuisine.",
+            "The turnip and Chinese cabbage share the same species, Brassica rapa, despite looking completely different.",
+            "Historically, turnips were a critical famine-relief crop across Europe due to how reliably they grew in poor, cold soil.",
+        ],
+    },
+    {
+        "plant_id": "rutabaga",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Rutabaga",
+        "scientific_name": "Brassica napus",
+        "family": "Brassicaceae",
+        "image": "/sprites/crops/rutabagabotanarium.png",
+        "summary": "A hybrid root vegetable between turnip and wild cabbage, known as 'swede' in the UK, valued for its dense flesh and exceptional cold tolerance.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Brassicales"),
+            ("Family", "Brassicaceae"),
+            ("Genus", "Brassica"),
+            ("Species", "B. napus"),
+        ],
+        "history": "The rutabaga is believed to have arisen in Scandinavia or Russia sometime in the late medieval period as a natural cross between the turnip and cabbage, first formally documented by Swiss botanist Gaspard Bauhin in 1620. Its cold hardiness made it especially valuable in Northern European agriculture, and it became strongly associated with Sweden in British usage, where it's still commonly called a 'swede' today.",
+        "fun_facts": [
+            "Rutabaga is a naturally occurring hybrid species (Brassica napus), combining the genomes of turnip and cabbage.",
+            "It's called 'swede' in British English, short for 'Swedish turnip'.",
+            "Rutabagas can be stored for months in cold, dark conditions without significant spoilage, making them a traditional winter root cellar staple.",
+            "During WWI and WWII food shortages in parts of Europe, rutabaga became a heavily relied-upon (and often resented) subsistence food.",
+        ],
+    },
+    {
+        "plant_id": "garlic",
+        "category": "herbs_spices", "subcategory": "culinary_herbs",
+        "common_name": "Garlic",
+        "scientific_name": "Allium sativum",
+        "family": "Amaryllidaceae",
+        "image": "/sprites/crops/garlicbotanarium.png",
+        "summary": "A pungent bulb in the onion family, cultivated for over 5,000 years and used across nearly every culinary tradition in the world, as well as historically for its purported medicinal properties.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Asparagales"),
+            ("Family", "Amaryllidaceae"),
+            ("Genus", "Allium"),
+            ("Species", "A. sativum"),
+        ],
+        "history": "Garlic's cultivation traces back to Central Asia, with documented use in ancient Egypt, where it was fed to laborers building the pyramids and even found placed in the tomb of Tutankhamun. It spread along trade routes into the Mediterranean, India, and China, historically valued as much for its believed protective and medicinal properties as for its flavor.",
+        "fun_facts": [
+            "The pungent smell and flavor come from allicin, a sulfur compound only formed when garlic's cells are damaged (crushed or chopped).",
+            "Ancient Greek Olympic athletes reportedly consumed garlic before competition, one of history's earliest documented 'performance' foods.",
+            "A single garlic bulb typically contains 10-20 individual cloves, each capable of growing into a full new plant if planted.",
+            "The vampire-repelling folklore associated with garlic in European tradition persists today primarily through popular fiction.",
+        ],
+    },
+    {
+        "plant_id": "sweetonion",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Sweet Onion",
+        "scientific_name": "Allium cepa",
+        "family": "Amaryllidaceae",
+        "image": "/sprites/crops/sweetonionbotanarium.png",
+        "summary": "A mild, low-sulfur onion variety — Vidalia and Walla Walla are well-known examples — bred and grown for eating raw without the sharp bite of standard onions.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Asparagales"),
+            ("Family", "Amaryllidaceae"),
+            ("Genus", "Allium"),
+            ("Species", "A. cepa"),
+        ],
+        "history": "Sweet onion varieties owe their mildness largely to the low-sulfur soil of the specific regions where they're traditionally grown, such as Vidalia, Georgia, or the Walla Walla Valley in Washington State — the same cultivar grown in different soil produces a noticeably sharper onion, which is why these regional names became legally protected designations.",
+        "fun_facts": [
+            "Vidalia onions are protected by Georgia state law and federal marketing order — only onions grown in a specific 20-county region can legally be labeled 'Vidalia'.",
+            "Sweetness in these varieties comes less from actual sugar content and more from LOW pyruvate, the sulfur-compound precursor responsible for onion sharpness and eye-watering.",
+            "Walla Walla sweet onions trace their seed lineage back to a sweet onion variety brought from Corsica, France, over a century ago.",
+            "Because of their high water and low sulfur content, sweet onions don't store as long as standard yellow onions.",
+        ],
+    },
+    {
+        "plant_id": "redonion",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Red Onion",
+        "scientific_name": "Allium cepa",
+        "family": "Amaryllidaceae",
+        "image": "/sprites/crops/redonionbotanarium.png",
+        "summary": "A sharp, purple-red-skinned onion valued as much for its color as its bite, commonly eaten raw in salads and pickled preparations.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Asparagales"),
+            ("Family", "Amaryllidaceae"),
+            ("Genus", "Allium"),
+            ("Species", "A. cepa"),
+        ],
+        "history": "Red onion varieties have been selectively bred over centuries from the same wild Central Asian Allium cepa ancestor as yellow and white onions, with the deep pigmentation prized both for culinary presentation and, in some regions, for its higher antioxidant concentration relative to paler varieties.",
+        "fun_facts": [
+            "The purple-red pigment comes from anthocyanins, concentrated mostly in the outer rings and skin rather than evenly through the flesh.",
+            "Pickling red onion in vinegar not only mellows its bite but also visibly brightens its color due to a pH-driven anthocyanin reaction.",
+            "Red onions are generally more pungent when raw than sweet onion varieties, but mellow significantly when cooked.",
+            "Like all true onions, red onion bulbs are technically a modified underground stem structure made of layered leaf bases, not a root.",
+        ],
+    },
+    {
+        "plant_id": "whiteonion",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "White Onion",
+        "scientific_name": "Allium cepa",
+        "family": "Amaryllidaceae",
+        "image": "/sprites/crops/whiteonionbotanarium.png",
+        "summary": "A sharp, clean-flavored onion with thin, papery white skin, especially prominent in Mexican and Latin American cuisine.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Asparagales"),
+            ("Family", "Amaryllidaceae"),
+            ("Genus", "Allium"),
+            ("Species", "A. cepa"),
+        ],
+        "history": "White onions were among the earliest onion types cultivated, closely resembling the wild ancestral form before yellow and red pigmented varieties were selectively developed. They remain the standard onion of choice across much of Mexico and the American Southwest.",
+        "fun_facts": [
+            "White onions generally have a sharper, more pungent raw flavor than yellow onions, but cook down to a cleaner, less sweet result.",
+            "They're the traditional onion of choice in most Mexican cuisine, especially for fresh salsas and garnishes.",
+            "White onion skins were historically used as a natural dye source, producing a pale yellow-tan color.",
+            "Compared to red or yellow onions, white onions tend to have a shorter storage life once cured.",
+        ],
+    },
+    {
+        "plant_id": "greenonion",
+        "category": "fruits_vegetables", "subcategory": "root_vegetables",
+        "common_name": "Green Onion",
+        "scientific_name": "Allium fistulosum",
+        "family": "Amaryllidaceae",
+        "image": "/sprites/crops/greenonionbotanarium.png",
+        "summary": "A slender, mild allium harvested for its hollow green stalks and white base before a bulb fully forms — known as scallions or spring onions depending on region.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Asparagales"),
+            ("Family", "Amaryllidaceae"),
+            ("Genus", "Allium"),
+            ("Species", "A. fistulosum"),
+        ],
+        "history": "Green onion (Allium fistulosum) is botanically distinct from the common bulb onion, and has been cultivated in China for thousands of years as a fundamental aromatic in East Asian cooking, remaining one of the most widely used vegetables across Chinese, Japanese, and Korean cuisine today.",
+        "fun_facts": [
+            "Green onions will regrow from just the root end if placed in water — a widely shared kitchen trick that works because the growing point sits at the base, not the tip.",
+            "Scallions, green onions, and spring onions are often used interchangeably in casual speech but can refer to slightly different harvest stages or species depending on region.",
+            "Unlike bulb onions, Allium fistulosum rarely forms a true underground bulb at all.",
+            "It's one of the most fundamental aromatics in Chinese cuisine, referenced in cooking texts going back over a thousand years.",
+        ],
+    },
+    {
+        "plant_id": "habanero",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Habanero Pepper",
+        "scientific_name": "Capsicum chinense",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/habanerobotanarium.png",
+        "summary": "One of the hottest commonly cultivated chili peppers, typically rated between 100,000-350,000 Scoville Heat Units, prized in Caribbean and Yucatecan cuisine for both its heat and distinct fruity aroma.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. chinense"),
+        ],
+        "history": "Despite the species name 'chinense' (Latin for 'of China'), habaneros actually originated in the Amazon basin of South America before spreading through Mexico and the Caribbean, where they became strongly associated with Yucatecan cuisine. The misleading species name dates to an 18th-century botanist who mistakenly believed the plant originated in China after examining specimens grown there.",
+        "fun_facts": [
+            "The Scoville scale, used to measure a pepper's heat, was developed in 1912 by pharmacist Wilbur Scoville, originally using a dilution taste-test method.",
+            "Habaneros are often noted for a distinct fruity, floral aroma that persists even at very high heat levels.",
+            "The heat comes from capsaicin, concentrated most heavily in the white pith (placenta) inside the pepper, not the seeds themselves as commonly believed.",
+            "The Yucatan Peninsula in Mexico remains one of the world's most strongly habanero-associated culinary regions, especially in salsas paired with citrus.",
+        ],
+    },
+    {
+        "plant_id": "greenbellpepper",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Green Bell Pepper",
+        "scientific_name": "Capsicum annuum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/greenbellpepperbotanarium.png",
+        "summary": "A crisp, mild, unripe bell pepper — grassy and slightly bitter compared to its own fully ripened red, yellow, and orange forms.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. annuum"),
+        ],
+        "history": "Bell peppers are a cultivar group of Capsicum annuum, domesticated in Mexico and Central America thousands of years ago, bred specifically to lack the capsaicin production found in the plant's hotter relatives. The green stage is simply the unripe fruit — every bell pepper starts green and, left on the plant longer, will ripen through yellow or orange into red.",
+        "fun_facts": [
+            "Green, yellow, orange, and red bell peppers frequently come from the exact same plant — the color reflects ripeness stage, not different varieties.",
+            "Because it's harvested unripe, green bell pepper has notably less vitamin C and sugar than the same fruit left to ripen to red.",
+            "Bell peppers are one of the few Capsicum cultivars bred to be entirely free of capsaicin, the compound responsible for chili heat.",
+            "The lower price of green bell peppers compared to red ones directly reflects a shorter growing time on the plant.",
+        ],
+    },
+    {
+        "plant_id": "redbellpepper",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Red Bell Pepper",
+        "scientific_name": "Capsicum annuum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/redbellpepperbotanarium.png",
+        "summary": "The fully ripened form of the bell pepper — sweeter and more nutrient-dense than its green, unripe counterpart, having spent extra weeks on the vine developing sugar.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. annuum"),
+        ],
+        "history": "As with green bell pepper, the red form comes from the same Capsicum annuum plant simply left to fully ripen. The additional weeks on the vine allow chlorophyll to break down and carotenoid pigments to dominate, turning the fruit red while its sugar content roughly doubles compared to the green stage.",
+        "fun_facts": [
+            "Red bell peppers contain roughly twice the vitamin C of green bell peppers from the same plant, simply from being left to fully ripen.",
+            "The shift from green to red is driven by chlorophyll breaking down and carotenoid pigments becoming dominant.",
+            "A pepper left on the vine longer to ripen fully is inherently a lower-yield, higher-cost crop for farmers, reflected in retail pricing.",
+            "Bell peppers are technically a fruit botanically (they develop from a flower and contain seeds), despite being sold as a vegetable.",
+        ],
+    },
+    {
+        "plant_id": "orangebellpepper",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Orange Bell Pepper",
+        "scientific_name": "Capsicum annuum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/orangebellpepperbotanarium.png",
+        "summary": "A ripening stage of bell pepper between yellow and red, valued for a balance of sweetness and mild fruitiness with a distinct vivid-orange carotenoid coloring.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. annuum"),
+        ],
+        "history": "Like all colored bell peppers, the orange stage reflects a specific point in the plant's natural ripening sequence, and some cultivars are specifically bred to peak and hold at orange rather than continuing on to red.",
+        "fun_facts": [
+            "Orange bell peppers get their color from a mix of carotenoid pigments distinct from the ones dominant in pure red or yellow stages.",
+            "Some bell pepper cultivars are bred specifically to ripen to and hold at orange, rather than simply being 'caught' mid-ripening toward red.",
+            "Orange bell peppers generally test slightly sweeter than yellow, while remaining less sweet than fully red ones.",
+            "Multi-colored pepper packs sold in supermarkets are usually the same cultivar harvested at different, deliberately staggered ripening points.",
+        ],
+    },
+    {
+        "plant_id": "yellowbellpepper",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Yellow Bell Pepper",
+        "scientific_name": "Capsicum annuum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/yellowbellpepperbotanarium.png",
+        "summary": "A ripening stage of bell pepper between green and orange, milder and slightly sweeter than green with a bright, sunny color popular in mixed-pepper produce packs.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. annuum"),
+        ],
+        "history": "Yellow bell pepper occupies an intermediate point in the same green-to-red ripening sequence as the rest of the bell pepper family, and some cultivars are specifically selected to stabilize at yellow.",
+        "fun_facts": [
+            "Yellow bell peppers are, gram for gram, noticeably higher in vitamin C than green bell peppers, though slightly less than red.",
+            "The transition from green to yellow to orange to red follows a consistent pigment-shift sequence as chlorophyll breaks down.",
+            "Yellow bell pepper became commercially common in the U.S. and Europe later than green or red, gaining wide grocery shelf presence mainly from the 1980s-90s onward.",
+            "Like other bell peppers, the yellow variety contains essentially no capsaicin, making it entirely non-spicy.",
+        ],
+    },
+    {
+        "plant_id": "hotpepper",
+        "category": "fruits_vegetables", "subcategory": "nightshades",
+        "common_name": "Hot Pepper",
+        "scientific_name": "Capsicum annuum",
+        "family": "Solanaceae",
+        "image": "/sprites/crops/hotpepperbotanarium.png",
+        "summary": "A general-purpose spicy chili pepper cultivar (such as cayenne or serrano types), grown for genuine heat rather than the sweetness bred into bell peppers from the same species.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Solanales"),
+            ("Family", "Solanaceae"),
+            ("Genus", "Capsicum"),
+            ("Species", "C. annuum"),
+        ],
+        "history": "Capsicum annuum is an enormously diverse species spanning both the sweet, capsaicin-free bell peppers and many of the world's most common hot chili varieties, all descended from wild chili ancestors domesticated in Mexico thousands of years ago. Christopher Columbus's voyages brought chili peppers to Europe in the late 15th century, and from there they spread with remarkable speed across Africa and Asia.",
+        "fun_facts": [
+            "Despite popular belief that chili peppers are native to India or Southeast Asia, they didn't reach those regions until after Columbus's voyages in the late 1400s.",
+            "Capsaicin evolved in wild chilies primarily as a deterrent against mammals, while birds (which disperse the seeds) are largely insensitive to it.",
+            "The Scoville scale ranks hot peppers by heat, with common hot pepper varieties like cayenne typically falling in the 30,000-50,000 SHU range.",
+            "Capsaicin triggers the same heat-sensing receptor (TRPV1) that responds to actual physical heat, which is why spicy food genuinely feels 'hot' to the nervous system.",
+        ],
+    },
+    {
+        "plant_id": "honeydewmelon",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Honeydew Melon",
+        "scientific_name": "Cucumis melo",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/honeydewmelonbotanarium.png",
+        "summary": "A smooth, pale-green-skinned melon with sweet, light-green flesh, part of the same species as cantaloupe despite the very different appearance.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucumis"),
+            ("Species", "C. melo"),
+        ],
+        "history": "Honeydew is a cultivar of Cucumis melo, likely originating in Africa or the Middle East before spreading through cultivation across the Mediterranean and eventually Asia. It became widely commercially grown in the United States starting in the early 20th century, particularly in California and Arizona.",
+        "fun_facts": [
+            "Honeydew and cantaloupe are the same species, Cucumis melo, differing mainly in cultivar group rather than being distinct species.",
+            "A ripe honeydew typically has a subtly waxy, slightly tacky skin rather than a rough netted texture like cantaloupe.",
+            "Honeydew is roughly 90% water by weight, among the higher water contents of any commonly eaten fruit.",
+            "Unlike some melons, honeydew doesn't continue ripening much after being picked, so it's typically harvested closer to full ripeness.",
+        ],
+    },
+    {
+        "plant_id": "cantaloupemelon",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Cantaloupe Melon",
+        "scientific_name": "Cucumis melo",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/cantaloupemelonbotanarium.png",
+        "summary": "A fragrant, orange-fleshed melon with rough, netted skin, named after the Italian town of Cantalupo where it was reportedly first cultivated in Europe.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucumis"),
+            ("Species", "C. melo"),
+        ],
+        "history": "True cantaloupe (Cucumis melo var. cantalupensis) is traditionally distinguished from the netted 'muskmelon' commonly sold as cantaloupe in North America, though the two names are used interchangeably in everyday speech. The fruit is believed to have originated in Africa or the Middle East before making its way to Europe.",
+        "fun_facts": [
+            "The cantaloupe commonly sold in North America is technically a muskmelon (Cucumis melo var. reticulatus) — true European cantaloupe has smoother, ribbed (not netted) skin.",
+            "Its distinctive aroma comes from volatile ester compounds that intensify as the fruit ripens.",
+            "Cantaloupe's orange flesh is rich in beta-carotene, the same pigment responsible for the color of carrots.",
+            "Unlike honeydew, cantaloupe continues to ripen somewhat after harvest, developing more sugar and aroma over a few days at room temperature.",
+        ],
+    },
+    {
+        "plant_id": "acornsquash",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Acorn Squash",
+        "scientific_name": "Cucurbita pepo",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/acornsquashbotanarium.png",
+        "summary": "A small, ribbed winter squash with dark green skin and sweet, nutty orange flesh, named for its resemblance to an oversized acorn.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucurbita"),
+            ("Species", "C. pepo"),
+        ],
+        "history": "Acorn squash is a variety of Cucurbita pepo, a species domesticated in Mesoamerica thousands of years ago alongside beans and maize as part of the 'Three Sisters' companion-planting tradition practiced by many Indigenous peoples of North America. Despite the name 'winter squash,' it's actually harvested in autumn — the term refers to its long storage life through winter, not its growing season.",
+        "fun_facts": [
+            "'Winter squash' refers to storage life, not growing season — acorn squash is planted in spring and harvested in fall, then stored through winter thanks to its hard rind.",
+            "It's part of the same species, Cucurbita pepo, as zucchini and pumpkin, despite looking quite different.",
+            "Acorn squash was among the crops grown in the Indigenous 'Three Sisters' system, planted alongside corn (for the vine to climb) and beans (which fix nitrogen in the soil).",
+            "Unlike many squash varieties, acorn squash doesn't peel easily even when cooked, which is why it's traditionally served halved and scooped rather than peeled.",
+        ],
+    },
+    {
+        "plant_id": "crooknecksquash",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Crookneck Squash",
+        "scientific_name": "Cucurbita pepo",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/crooknecksquashbotanarium.png",
+        "summary": "A yellow, curved-neck summer squash with tender, edible skin, harvested young and unripe — unlike winter squashes, it doesn't store well and is meant to be eaten fresh.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucurbita"),
+            ("Species", "C. pepo"),
+        ],
+        "history": "Crookneck squash is one of the oldest documented squash varieties in North America, with archaeological and historical evidence placing its cultivation by Indigenous peoples well before European contact. It's a 'summer squash', meaning it's harvested immature with a soft, edible rind, in contrast to 'winter squash' varieties like acorn or butternut.",
+        "fun_facts": [
+            "Summer squash (like crookneck) and winter squash (like acorn or butternut) can be the exact same species, Cucurbita pepo — the difference is purely how mature the fruit is when picked.",
+            "Crookneck squash plants are famously prolific, often producing more fruit per plant across a season than gardeners can use.",
+            "Its curved neck shape is a genetically distinct trait bred into this squash type.",
+            "Because its skin is thin and tender, crookneck squash spoils much faster than hard-shelled winter squash and is best eaten within about a week of harvest.",
+        ],
+    },
+    {
+        "plant_id": "pumpkin",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Pumpkin",
+        "scientific_name": "Cucurbita pepo",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/pumpkinbotanarium.png",
+        "summary": "A large, orange winter squash, cultivated for millennia in the Americas and closely tied to modern harvest-season traditions, from jack-o'-lanterns to pumpkin pie.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucurbita"),
+            ("Species", "C. pepo"),
+        ],
+        "history": "Pumpkins are among the oldest domesticated plants in the Americas, with archaeological evidence of cultivation in Mexico dating back over 7,000 years, predating even maize. They were part of the Indigenous 'Three Sisters' companion-planting system alongside corn and beans, and were later adopted by European settlers, eventually becoming strongly associated with North American autumn harvest traditions.",
+        "fun_facts": [
+            "The largest competitively grown pumpkins can exceed 1,000 kilograms — giant pumpkin varieties are specifically bred for size rather than flavor.",
+            "Most canned 'pumpkin puree' sold commercially in the U.S. is actually made from a different, denser-fleshed squash variety, not the large carving pumpkins used for jack-o'-lanterns.",
+            "Carving pumpkins for Halloween traces back to an older Irish and Scottish tradition of carving turnips, which shifted to the more abundant pumpkin after emigration to North America.",
+            "Every part of the pumpkin is technically edible, including the skin, flesh, seeds, leaves, and flowers.",
+        ],
+    },
+    {
+        "plant_id": "butternutsquash",
+        "category": "fruits_vegetables", "subcategory": "cucurbits",
+        "common_name": "Butternut Squash",
+        "scientific_name": "Cucurbita moschata",
+        "family": "Cucurbitaceae",
+        "image": "/sprites/crops/butternutsquashbotanarium.png",
+        "summary": "An elongated, tan-skinned winter squash with sweet, dense orange flesh, one of the best-storing squash varieties and a common base for autumn soups.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Eudicots"),
+            ("Order", "Cucurbitales"),
+            ("Family", "Cucurbitaceae"),
+            ("Genus", "Cucurbita"),
+            ("Species", "C. moschata"),
+        ],
+        "history": "Butternut squash was developed relatively recently by American plant breeder Charles Leggett in the 1940s, crossing existing squash varieties to create a sweeter, smoother-textured, easier-to-peel alternative to older winter squash types. It belongs to Cucurbita moschata, a species separate from acorn and pumpkin's Cucurbita pepo, generally noted for superior storage life and disease resistance.",
+        "fun_facts": [
+            "Butternut squash is a relatively modern cultivar, developed in Massachusetts in the 1940s rather than an ancient variety like pumpkin or acorn squash.",
+            "It belongs to a different squash species (Cucurbita moschata) than pumpkin and acorn squash (Cucurbita pepo), despite similar culinary uses.",
+            "Properly cured and stored, butternut squash can keep for several months at room temperature without spoiling.",
+            "Its smooth, cylindrical shape makes it notably easier to peel with a standard vegetable peeler than most other winter squash.",
+        ],
+    },
+    {
+        "plant_id": "sweetcorn",
+        "category": "fruits_vegetables", "subcategory": "legumes",
+        "common_name": "Sweet Corn",
+        "scientific_name": "Zea mays subsp. mays (saccharata group)",
+        "family": "Poaceae",
+        "image": "/sprites/crops/sweetcornbotanarium.png",
+        "summary": "A sugar-rich maize variety bred to be eaten fresh at an immature kernel stage, rather than dried and ground like field corn.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Poales"),
+            ("Family", "Poaceae"),
+            ("Genus", "Zea"),
+            ("Species", "Z. mays"),
+        ],
+        "history": "Maize was domesticated from wild teosinte grass in southern Mexico roughly 9,000 years ago, becoming one of the most transformative crops in human history. Sweet corn specifically is a genetic mutation of standard field corn discovered and cultivated by Indigenous peoples of the northeastern woodlands, first documented by European settlers in the 18th century.",
+        "fun_facts": [
+            "Sweet corn is genetically distinct from field corn due to a recessive gene that prevents sugar from converting to starch as quickly.",
+            "Corn kernels begin converting sugar to starch the moment they're picked, which is why fresh-picked sweet corn tastes noticeably sweeter than corn that's been stored for days.",
+            "Maize is believed to have been domesticated from teosinte, a wild grass whose cob looks almost nothing like modern corn.",
+            "The 'Three Sisters' companion planting method paired corn with climbing beans and ground-covering squash.",
+        ],
+    },
+    {
+        "plant_id": "flintcorn",
+        "category": "fruits_vegetables", "subcategory": "legumes",
+        "common_name": "Flint Corn",
+        "scientific_name": "Zea mays subsp. mays (indurata group)",
+        "family": "Poaceae",
+        "image": "/sprites/crops/flintcornbotanarium.png",
+        "summary": "A hard-kernelled maize variety — also known as Indian corn — prized for its long storage life and striking multicolored kernels, closer in form to the maize varieties first cultivated by Indigenous peoples of the Americas.",
+        "classification": [
+            ("Kingdom", "Plantae"),
+            ("Clade", "Angiosperms"),
+            ("Clade", "Monocots"),
+            ("Order", "Poales"),
+            ("Family", "Poaceae"),
+            ("Genus", "Zea"),
+            ("Species", "Z. mays"),
+        ],
+        "history": "Flint corn represents one of the older maize types still commonly grown, named for kernels hard enough to resemble flint stone, and was historically valued for grinding into cornmeal and for its exceptional storage life compared to soft, sugar-rich sweet corn.",
+        "fun_facts": [
+            "The name 'flint corn' comes from its unusually hard outer kernel layer, tough enough to be compared to flint stone.",
+            "Because it stores far longer than sweet corn, flint corn was historically a critical staple grain crop rather than a fresh-eating vegetable.",
+            "Its multicolored kernels come from naturally occurring anthocyanin and carotenoid pigment variation, not artificial selection for color alone.",
+            "Flint corn is genetically and functionally much closer to the maize varieties first domesticated and relied upon by Indigenous peoples of the Americas than modern sweet corn is.",
         ],
     },
 ]
@@ -1493,7 +2799,7 @@ def add_self_study(name):
     _log_self_study_gain(cfg, d, record)
     reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
-    xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
+    xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
     xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
     nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
     return jsonify({"ok": True, "record": record, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
@@ -1863,7 +3169,7 @@ def timer_stop(name, timer_id):
     reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
     for record in created_records:
-        xp_mult, nerds_mult = compute_plant_session_multipliers(d, record["minutes"], record["date"])
+        xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
         xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
         nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
     return jsonify({"ok": True, "xp_earned": round(xp_earned, 1), "nerds_earned": round(nerds_earned, 1), "records_created": len(created_records)})
@@ -2015,7 +3321,7 @@ def compute_total_xp(d, cfg=None):
         diff = r.get("difficulty", 5)
         status = r.get("status", "Done")
         mult = _self_study_status_mult(status)
-        xp_mult, _ = compute_plant_session_multipliers(d, mins, r.get("date", ""))
+        xp_mult, _ = compute_plant_session_multipliers(d, r)
         xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult * xp_mult
     for r in d.get("attendance", []):
         if r.get("status") == "present":
@@ -2094,7 +3400,7 @@ def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
     drift out of sync with what actually happened."""
     nerds = 0.0
     for r in d.get("self_study", []):
-        _, nerds_mult = compute_plant_session_multipliers(d, r.get("minutes", 0), r.get("date", ""))
+        _, nerds_mult = compute_plant_session_multipliers(d, r)
         nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done")) * nerds_mult
     if level is not None:
         nerds += compute_levelup_nerds(level)
@@ -2131,20 +3437,17 @@ def compute_weekly_study_hours(d, week=None):
     return mins / 60.0
 
 def compute_weekly_yield_multiplier(weekly_study_hours):
-    """0 hours studied this week -> a trickle (WEEKLY_YIELD_MIN_MULTIPLIER).
-    Hours climbing toward WEEKLY_YIELD_LOWER_LIMIT_HOURS ramp linearly up
-    to a full 1.0x. Studying BEYOND that keeps climbing the multiplier
-    (rewarding a genuinely strong week), capped at WEEKLY_YIELD_MAX_MULTIPLIER
-    so passive income can never spiral past a modest ceiling."""
+    """A pure REWARD, no longer a penalty — the neglect system already
+    handles under-studying. At or under WEEKLY_YIELD_LOWER_LIMIT_HOURS
+    this week: normal 1.0x. Every hour beyond that adds
+    WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE to the multiplier, capped at
+    WEEKLY_YIELD_MAX_MULTIPLIER."""
     lower = WEEKLY_YIELD_LOWER_LIMIT_HOURS
-    if weekly_study_hours <= 0:
-        return WEEKLY_YIELD_MIN_MULTIPLIER
-    if weekly_study_hours >= lower:
-        over = weekly_study_hours - lower
-        bonus = min(WEEKLY_YIELD_MAX_MULTIPLIER - 1.0, over * WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE)
-        return round(1.0 + bonus, 4)
-    frac = weekly_study_hours / lower
-    return round(WEEKLY_YIELD_MIN_MULTIPLIER + (1.0 - WEEKLY_YIELD_MIN_MULTIPLIER) * frac, 4)
+    if weekly_study_hours <= lower:
+        return 1.0
+    over = weekly_study_hours - lower
+    bonus = min(WEEKLY_YIELD_MAX_MULTIPLIER - 1.0, over * WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE)
+    return round(1.0 + bonus, 4)
 
 def _resolve_growth_plant_id(d):
     """Which plant a NEW self-study session should grow. Explicit
@@ -2217,21 +3520,24 @@ def compute_plant_growth_hours(plant_record, d):
     return mins / 60.0
 
 def compute_plant_level_and_prestige(growth_hours, plant_def):
-    """Returns (level 1..PLANT_MAX_LEVEL, prestige_tier 0=none/1../10,
-    hours_into_current_level, hours_needed_for_next / None if maxed)."""
+    """Returns (level 1..plant_max_level(plant_def), prestige_tier
+    0=none/1../10, hours_into_current_level, hours_needed_for_next / None
+    if maxed). Max level is PER-PLANT — Watermelon has 5, every plant
+    added since has 4."""
     thresholds = plant_def["level_hours_thresholds"]
+    max_level = plant_max_level(plant_def)
     level = 1
     for i, t in enumerate(thresholds):
         if growth_hours >= t:
             level = i + 1
         else:
             break
-    if level < PLANT_MAX_LEVEL:
+    if level < max_level:
         into = growth_hours - thresholds[level - 1]
         nxt = thresholds[level] - thresholds[level - 1]
         return level, 0, into, nxt
     # Fully grown — check Prestige tiers on the hours ABOVE max-level threshold.
-    overflow = growth_hours - thresholds[PLANT_MAX_LEVEL - 1]
+    overflow = growth_hours - thresholds[max_level - 1]
     prestige_tier = 0
     for n in range(1, len(PLANT_PRESTIGE_NAMES) + 1):
         need = int(PLANT_PRESTIGE_HOURS_BASE * (n ** PLANT_PRESTIGE_HOURS_EXPONENT))
@@ -2241,10 +3547,16 @@ def compute_plant_level_and_prestige(growth_hours, plant_def):
             break
     return level, prestige_tier, overflow, None
 
-def get_plant_bonus_value(plant_record, plant_def, bonus_id, level):
+def get_plant_bonus_value(plant_record, plant_def, bonus_id, level, d=None):
     """Current effective magnitude of one named bonus, including any
-    Prestige buff points allocated to it and (fast_grower only) its
-    seed-upgrade tiers. Returns 0 if the bonus's level hasn't been
+    Prestige buff points allocated to it, (fast_grower only) its
+    seed-upgrade tiers, and — when `d` is provided — any active Plant
+    Collection that names this exact plant AND this exact bonus id as
+    part of its domain (see PLANT_COLLECTIONS' domain_bonus_ids). That
+    last part is what makes e.g. every owned potato variety's Voluminous
+    and Bountiful values climb FURTHER once the whole Potato Family
+    collection is complete, instead of the collection only ever granting
+    a flat unrelated reward. Returns 0 if the bonus's level hasn't been
     reached yet."""
     bdef = get_plant_bonus_def(plant_def, bonus_id)
     if not bdef or level < bdef["level"]:
@@ -2254,6 +3566,10 @@ def get_plant_bonus_value(plant_record, plant_def, bonus_id, level):
         value += plant_record.get("fast_grower_seed_tiers", 0) * FAST_GROWER_SEED_UPGRADE_PCT
     points = (plant_record.get("prestige_allocations") or {}).get(bonus_id, 0)
     value += points * PRESTIGE_BUFF_POINT_INCREMENTS.get(bonus_id, 0)
+    if d is not None:
+        for coll in compute_active_collections(d):
+            if plant_def["id"] in coll.get("plant_ids", ()) and bonus_id in coll.get("domain_bonus_ids", ()):
+                value *= (1 + coll.get("domain_boost_pct", 0) / 100.0)
     return round(value, 2)
 
 def compute_days_since_last_study(d):
@@ -2308,8 +3624,88 @@ def compute_plant_recent_growth_hours(plant_record, d, window_days):
 def is_plant_specifically_neglected(plant_record, d):
     plant_count = len(d.get("plants", []))
     window_days = compute_plant_specific_window_days(plant_count)
+    plant_def = get_plant_def(plant_record.get("plant_type"))
+    if plant_def:
+        # Warden adds FLAT extra days to the window before specific
+        # neglect kicks in at all — a different axis from Hardy, which
+        # only softens the yield penalty once neglect has already
+        # started. A plant with strong Warden may simply never trigger
+        # specific neglect during normal use.
+        growth_hours = compute_plant_growth_hours(plant_record, d)
+        level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+        warden_days = get_plant_bonus_value(plant_record, plant_def, "warden", level, d)
+        window_days += warden_days
     recent_hours = compute_plant_recent_growth_hours(plant_record, d, window_days)
     return recent_hours < PLANT_SPECIFIC_NEGLECT_MIN_HOURS
+
+def compute_plant_harvest_progress_hours(plant_record, d, plant_def):
+    """Growth-hours accrued toward the NEXT harvest since the last
+    harvest (or since acquisition, if never harvested) — EXCLUDING hours
+    logged during the post-harvest HARVEST_LOCKOUT_HOURS window, since
+    growth toward the next harvest is meant to pause during that window.
+    Entirely separate from compute_plant_growth_hours (which keeps
+    counting everything, uninterrupted, for LEVEL/PRESTIGE) — lockout
+    only ever pauses this harvest-specific tally."""
+    anchor = plant_record.get("last_harvest_at") or plant_record.get("created", "")
+    lockout_end = None
+    if plant_record.get("last_harvest_at"):
+        try:
+            h_dt = datetime.strptime(plant_record["last_harvest_at"], "%Y-%m-%dT%H:%M:%S")
+            lockout_end = (h_dt + __import__("datetime").timedelta(hours=HARVEST_LOCKOUT_HOURS)).strftime("%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            lockout_end = None
+    mins = 0.0
+    for r in d.get("self_study", []):
+        created = r.get("created", "")
+        if not created or created <= anchor:
+            continue
+        if lockout_end and created <= lockout_end:
+            continue
+        if "grown_plant_id" in r:
+            gpid = r.get("grown_plant_id")
+            if gpid != plant_record["id"]:
+                continue
+        fert_mult = _fertilizer_multiplier_at(plant_record, created)
+        mins += r.get("minutes", 0) * _self_study_status_mult(r.get("status", "Done")) * fert_mult
+    return mins / 60.0
+
+def compute_plant_harvest_state(plant_record, d, plant_def, level):
+    """None if this plant hasn't reached its max level yet. Otherwise a
+    dict describing lockout status and progress toward the next harvest.
+    'Cornucopia' (see bonus catalog) shrinks the hours-required; nothing
+    here checks inventory space — that's checked at the harvest ROUTE,
+    since it needs a live inventory-slot count, not just plant state."""
+    max_level = plant_max_level(plant_def)
+    if level < max_level:
+        return None
+    now_dt = datetime.now()
+    locked = False
+    lockout_remaining_minutes = 0
+    last_harvest_str = plant_record.get("last_harvest_at")
+    if last_harvest_str:
+        try:
+            h_dt = datetime.strptime(last_harvest_str, "%Y-%m-%dT%H:%M:%S")
+            unlock_dt = h_dt + __import__("datetime").timedelta(hours=HARVEST_LOCKOUT_HOURS)
+            if now_dt < unlock_dt:
+                locked = True
+                lockout_remaining_minutes = max(0, round((unlock_dt - now_dt).total_seconds() / 60))
+        except Exception:
+            pass
+    progress_hours = compute_plant_harvest_progress_hours(plant_record, d, plant_def)
+    bountiful_pct = get_plant_bonus_value(plant_record, plant_def, "bountiful", level, d)
+    hours_needed = max(1.0, round(HARVEST_GROWTH_HOURS_INTERVAL * (1 - bountiful_pct / 100.0), 2))
+    ready = (not locked) and progress_hours >= hours_needed
+    return {
+        "eligible": True,
+        "locked": locked,
+        "lockout_remaining_minutes": lockout_remaining_minutes,
+        "progress_hours": round(min(progress_hours, hours_needed), 2),
+        "hours_required": hours_needed,
+        "ready": ready,
+        "harvest_count": plant_record.get("harvest_count", 0),
+        "fruit_item": f"{plant_def['id']}_fruit",
+        "fruit_label": plant_def.get("fruit_name", plant_def["name"]),
+    }
 
 def compute_plant_state(plant_record, d):
     """Full computed view of one owned plant — everything the frontend
@@ -2319,13 +3715,14 @@ def compute_plant_state(plant_record, d):
         return None
     growth_hours = compute_plant_growth_hours(plant_record, d)
     level, prestige_tier, into, nxt = compute_plant_level_and_prestige(growth_hours, plant_def)
+    harvest_state = compute_plant_harvest_state(plant_record, d, plant_def, level)
     bonuses = []
     for bdef in plant_def["level_bonus_defs"]:
         unlocked = level >= bdef["level"]
         bonuses.append({
             "id": bdef["id"], "label": bdef["label"], "level_required": bdef["level"],
             "unit": bdef["unit"], "desc": bdef["desc"], "unlocked": unlocked,
-            "value": get_plant_bonus_value(plant_record, plant_def, bdef["id"], level) if unlocked else 0.0,
+            "value": get_plant_bonus_value(plant_record, plant_def, bdef["id"], level, d) if unlocked else 0.0,
         })
     color = PLANT_PRESTIGE_COLORS[min(prestige_tier, len(PLANT_PRESTIGE_COLORS)) - 1] if prestige_tier > 0 else PLANT_LEVEL_COLORS[level - 1]
     tier_name = PLANT_PRESTIGE_NAMES[prestige_tier - 1] if prestige_tier > 0 else f"Level {level}"
@@ -2343,6 +3740,8 @@ def compute_plant_state(plant_record, d):
     # in styles.css), so a withered seed still reads as a seed, just
     # drained of color, same for every other growth stage.
     sprite_file = plant_def["sprites"][level - 1]
+    if harvest_state and harvest_state["locked"]:
+        sprite_file = f"{plant_def['id']}h.png"
     # Fertilizer active/remaining — a temporary buff, not a permanent
     # stack, so the card needs "is it active right now, and for how much
     # longer" rather than a stack count.
@@ -2369,7 +3768,7 @@ def compute_plant_state(plant_record, d):
         "hours_into_level": round(into, 2), "hours_for_next_level": nxt,
         "fertilizer_active": fert_active,
         "fertilizer_remaining_hours": round(fert_remaining_hours, 1),
-        "fertilizer_cost": FERTILIZER_COST,
+        "fertilizer_cost": max(5, round(FERTILIZER_COST * (1 - get_plant_bonus_value(plant_record, plant_def, "thrifty", level, d) / 100.0))),
         "fertilizer_bonus_pct": FERTILIZER_GROWTH_BONUS_PCT,
         "fast_grower_seed_tiers": plant_record.get("fast_grower_seed_tiers", 0),
         "prestige_allocations": plant_record.get("prestige_allocations") or {},
@@ -2379,6 +3778,7 @@ def compute_plant_state(plant_record, d):
         "weekly_yield_multiplier": weekly_mult,
         "yield_per_hour_base": PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL[level - 1],
         "yield_per_hour_effective": round(effective_rate, 2),
+        "harvest": harvest_state,
     }
 
 def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuses=None):
@@ -2398,9 +3798,16 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
     for c in d.get("passive_claims", []):
         if c.get("plant_id") == plant_record["id"] and c.get("created", "") > last_claim_ts:
             last_claim_ts = c["created"]
+    # 'Stocky' extends THIS plant's own storage cap beyond the shared
+    # PASSIVE_YIELD_MAX_STORAGE_HOURS default — a genuinely different axis
+    # from Voluminous/Fast Grower (it raises how long you can go between
+    # visits before losing anything, not the per-hour rate).
+    stocky_hours = get_plant_bonus_value(plant_record, plant_def, "stocky", level, d) if bonuses is None \
+        else next((b["value"] for b in bonuses if b["id"] == "stocky"), 0.0)
+    storage_cap = PASSIVE_YIELD_MAX_STORAGE_HOURS + stocky_hours
     try:
         last_dt = datetime.strptime(last_claim_ts, "%Y-%m-%dT%H:%M:%S")
-        elapsed_hours = min(PASSIVE_YIELD_MAX_STORAGE_HOURS, max(0.0, (datetime.now() - last_dt).total_seconds() / 3600.0))
+        elapsed_hours = min(storage_cap, max(0.0, (datetime.now() - last_dt).total_seconds() / 3600.0))
     except Exception:
         elapsed_hours = 0.0
 
@@ -2408,17 +3815,22 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
     base_rate = PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL[level - 1]
 
     if bonuses is None:
-        voluminous_pct = get_plant_bonus_value(plant_record, plant_def, "voluminous", level)
-        fast_grower_pct = get_plant_bonus_value(plant_record, plant_def, "fast_grower", level)
+        voluminous_pct = get_plant_bonus_value(plant_record, plant_def, "voluminous", level, d)
+        fast_grower_pct = get_plant_bonus_value(plant_record, plant_def, "fast_grower", level, d)
+        hardy_pct = get_plant_bonus_value(plant_record, plant_def, "hardy", level, d)
     else:
         voluminous_pct = next((b["value"] for b in bonuses if b["id"] == "voluminous"), 0.0)
         fast_grower_pct = next((b["value"] for b in bonuses if b["id"] == "fast_grower"), 0.0)
+        hardy_pct = next((b["value"] for b in bonuses if b["id"] == "hardy"), 0.0)
 
     total_mult = (1 + voluminous_pct / 100.0) * (1 + fast_grower_pct / 100.0)
     if is_globally_neglected(d):
         total_mult *= PLANT_GLOBAL_NEGLECT_YIELD_FRACTION
     if is_plant_specifically_neglected(plant_record, d):
-        total_mult *= PLANT_SPECIFIC_NEGLECT_YIELD_FRACTION
+        # Hardy softens (never eliminates) the harsh plant-specific
+        # neglect penalty by raising the effective fraction multiplicatively.
+        softened_fraction = min(1.0, PLANT_SPECIFIC_NEGLECT_YIELD_FRACTION * (1 + hardy_pct / 100.0))
+        total_mult *= softened_fraction
     effective_rate = base_rate * weekly_mult * total_mult
     raw = effective_rate * elapsed_hours
     return round(raw, 1), elapsed_hours, weekly_mult, effective_rate
@@ -2467,12 +3879,62 @@ def compute_rolling_24h_claimed(d):
             pass
     return total
 
-def compute_plant_session_multipliers(d, minutes, date_str):
-    """Refreshing (XP only, sessions >= REFRESHING_MIN_SESSION_MINUTES,
-    summer) and Hydration (XP & Nerds, every session, summer) are the
-    only two bonuses that modify a session's own XP/Nerds as it's being
-    logged — everything else (Voluminous/Seedy/Fast Grower) lives on the
-    passive-yield/claim side instead. Returns (xp_mult, nerds_mult)."""
+def compute_active_collections(d):
+    """Which PLANT_COLLECTIONS sets are currently fully complete -- every
+    member plant_id owned, with at least one owned copy at/above the
+    collection's required_level."""
+    if not PLANT_COLLECTIONS:
+        return []
+    owned_by_type = defaultdict(list)
+    for p in d.get("plants", []):
+        owned_by_type[p["plant_type"]].append(p)
+    active = []
+    for coll in PLANT_COLLECTIONS:
+        complete = True
+        for pid in coll["plant_ids"]:
+            recs = owned_by_type.get(pid)
+            if not recs:
+                complete = False
+                break
+            pdef = get_plant_def(pid)
+            if not pdef:
+                complete = False
+                break
+            best_level = 0
+            for rec in recs:
+                gh = compute_plant_growth_hours(rec, d)
+                lvl, _, _, _ = compute_plant_level_and_prestige(gh, pdef)
+                best_level = max(best_level, lvl)
+            if best_level < coll["required_level"]:
+                complete = False
+                break
+        if complete:
+            active.append(coll)
+    return active
+
+def compute_plant_session_multipliers(d, record_like):
+    """Session-modifying bonuses -- apply to ONE session's own XP/Nerds
+    as it's being logged. `record_like` needs minutes/date/difficulty/
+    created (a real self_study record, or an equivalent dict). Sources,
+    all additive within XP and Nerds separately before converting to a
+    multiplier:
+      - 'refreshing' (XP only, sessions >= REFRESHING_MIN_SESSION_MINUTES, summer)
+      - 'hydration' (XP & Nerds, any length, summer)
+      - 'frosty' (XP & Nerds, any length, winter -- real cold-storage/
+        frost-sweetened crops only)
+      - 'dawn_grower' (XP & Nerds, sessions STARTING before DAWN_GROWER_HOUR_CUTOFF, any date)
+      - 'dusk_grower' (XP & Nerds, sessions STARTING at/after DUSK_GROWER_HOUR_CUTOFF, any date)
+      - 'spicy' (XP & Nerds, scales with the session's OWN difficulty
+        rating out of 10 rather than length or date -- peppers only)
+    On top of any of those, completed Plant Collections amplify their
+    member plants' bonus VALUES directly (see get_plant_bonus_value's
+    `d` parameter) rather than adding a separate flat number, so a
+    completed collection is felt through the same mechanics the plant
+    already has, just stronger. Returns (xp_mult, nerds_mult)."""
+    minutes = record_like.get("minutes", 0)
+    date_str = record_like.get("date", "")
+    difficulty = record_like.get("difficulty", 5)
+    created = record_like.get("created", "")
     xp_bonus_pct = 0.0
     nerds_bonus_pct = 0.0
     try:
@@ -2480,19 +3942,56 @@ def compute_plant_session_multipliers(d, minutes, date_str):
     except Exception:
         month = datetime.now().month
     is_summer = month in SUMMER_MONTHS
-    if not is_summer:
-        return 1.0, 1.0
+    is_winter = month in WINTER_MONTHS
+    start_hour = None
+    if created:
+        try:
+            start_hour = int(created[11:13])
+        except Exception:
+            start_hour = None
+
     for plant_record in d.get("plants", []):
         plant_def = get_plant_def(plant_record.get("plant_type"))
         if not plant_def:
             continue
         growth_hours = compute_plant_growth_hours(plant_record, d)
         level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
-        if minutes >= REFRESHING_MIN_SESSION_MINUTES:
-            xp_bonus_pct += get_plant_bonus_value(plant_record, plant_def, "refreshing", level)
-        hydration_pct = get_plant_bonus_value(plant_record, plant_def, "hydration", level)
-        xp_bonus_pct += hydration_pct
-        nerds_bonus_pct += hydration_pct
+        if is_summer:
+            if minutes >= REFRESHING_MIN_SESSION_MINUTES:
+                xp_bonus_pct += get_plant_bonus_value(plant_record, plant_def, "refreshing", level, d)
+            hydration_pct = get_plant_bonus_value(plant_record, plant_def, "hydration", level, d)
+            xp_bonus_pct += hydration_pct
+            nerds_bonus_pct += hydration_pct
+        if is_winter:
+            frosty_pct = get_plant_bonus_value(plant_record, plant_def, "frosty", level, d)
+            xp_bonus_pct += frosty_pct
+            nerds_bonus_pct += frosty_pct
+        if start_hour is not None:
+            if start_hour < DAWN_GROWER_HOUR_CUTOFF:
+                dawn_pct = get_plant_bonus_value(plant_record, plant_def, "dawn_grower", level, d)
+                xp_bonus_pct += dawn_pct
+                nerds_bonus_pct += dawn_pct
+            if start_hour >= DUSK_GROWER_HOUR_CUTOFF:
+                dusk_pct = get_plant_bonus_value(plant_record, plant_def, "dusk_grower", level, d)
+                xp_bonus_pct += dusk_pct
+                nerds_bonus_pct += dusk_pct
+        spicy_per_point = get_plant_bonus_value(plant_record, plant_def, "spicy", level, d)
+        if spicy_per_point > 0:
+            spicy_total = spicy_per_point * difficulty
+            xp_bonus_pct += spicy_total
+            nerds_bonus_pct += spicy_total
+
+    # A small number of collections (currently only "The Full Garden"
+    # capstone) grant a flat, universal XP%/Nerds% on top of everything
+    # above, rather than amplifying a specific domain — appropriate only
+    # for a collection that spans every domain at once. Family-themed
+    # collections instead amplify their members' own existing bonus
+    # VALUES directly (handled inside get_plant_bonus_value above), so
+    # most collections never touch these two lines at all.
+    for coll in compute_active_collections(d):
+        xp_bonus_pct += coll.get("flat_xp_pct", 0)
+        nerds_bonus_pct += coll.get("flat_nerds_pct", 0)
+
     return 1.0 + xp_bonus_pct / 100.0, 1.0 + nerds_bonus_pct / 100.0
 
 def compute_current_balance(name, d):
@@ -2840,7 +4339,7 @@ def _log_self_study_gain(cfg, d, record):
     base = compute_self_study_record_nerds(mins, record.get("difficulty", 5), record.get("status", "Done"))
     if base <= 0:
         return
-    _, nerds_mult = compute_plant_session_multipliers(d, mins, record.get("date", ""))
+    _, nerds_mult = compute_plant_session_multipliers(d, record)
     amount = round(base * nerds_mult, 1)
     subj = next((s for s in cfg.get("subjects", []) if s["id"] == record.get("subject_id")), None)
     skill = next((s for s in cfg.get("skills", []) if s["id"] == record.get("skill_id")), None)
@@ -3134,22 +4633,61 @@ def _inventory_qty(d, item_type):
             return it
     return None
 
+def compute_purchased_inventory_slots(d):
+    """Derived, not stored — same event-log philosophy as everything
+    else. Each successful purchase is one 'inventory_slot' entry in
+    nerds_spent."""
+    return sum(1 for p in d.get("nerds_spent", []) if p.get("item_type") == "inventory_slot")
+
+def compute_inventory_slot_count(d):
+    return INVENTORY_SLOT_COUNT + compute_purchased_inventory_slots(d)
+
+def next_inventory_slot_cost(d):
+    """None once INVENTORY_SLOT_MAX_PURCHASES is reached — no further
+    slots purchasable past that ceiling."""
+    n = compute_purchased_inventory_slots(d)
+    if n >= INVENTORY_SLOT_MAX_PURCHASES:
+        return None
+    return round(INVENTORY_SLOT_BASE_COST * (INVENTORY_SLOT_COST_GROWTH ** n))
+
 def _inventory_next_free_slot(d):
+    """Returns the first open slot index within the CURRENT (base +
+    purchased) slot count, or None if every slot is occupied — callers
+    must treat None as 'refuse this addition', never silently overflow
+    or discard the item."""
+    slot_count = compute_inventory_slot_count(d)
     used = {it.get("slot_index") for it in d.get("inventory", []) if it.get("slot_index") is not None}
-    for i in range(INVENTORY_SLOT_COUNT):
+    for i in range(slot_count):
         if i not in used:
             return i
-    return len(d.get("inventory", []))  # grid is full — overflow past the fixed count rather than lose the item
+    return None
+
+def _inventory_has_space(d, item_type):
+    """True if `item_type` can be added right now — either it already
+    has a stack (adding just increases qty, no new slot needed) or a
+    free slot exists for a brand new stack."""
+    if _inventory_qty(d, item_type):
+        return True
+    return _inventory_next_free_slot(d) is not None
 
 def _inventory_add(d, item_type, qty):
+    """Returns True if added, False if refused (inventory full and this
+    is a brand-new item type with no free slot). Never overflows past
+    the current slot count and never silently drops the item — the
+    caller is responsible for not charging Nerds / not consuming a
+    harvest / etc. when this returns False."""
     it = _inventory_qty(d, item_type)
     if it:
         it["qty"] = it.get("qty", 0) + qty
-    else:
-        d.setdefault("inventory", []).append({
-            "id": gen_id(8), "item_type": item_type, "qty": qty,
-            "slot_index": _inventory_next_free_slot(d)
-        })
+        return True
+    slot = _inventory_next_free_slot(d)
+    if slot is None:
+        return False
+    d.setdefault("inventory", []).append({
+        "id": gen_id(8), "item_type": item_type, "qty": qty,
+        "slot_index": slot
+    })
+    return True
 
 def _inventory_remove(d, item_type, qty):
     it = _inventory_qty(d, item_type)
@@ -3164,7 +4702,7 @@ def _inventory_move(d, item_type, to_slot):
     """Moves one item stack to a specific slot, swapping places with
     whatever (if anything) already occupies that slot — a real
     rearrange, not just a reorder of the underlying list."""
-    if to_slot < 0 or to_slot >= INVENTORY_SLOT_COUNT:
+    if to_slot < 0 or to_slot >= compute_inventory_slot_count(d):
         return False
     moving = _inventory_qty(d, item_type)
     if not moving:
@@ -3204,11 +4742,15 @@ def botanarium_catalog(name):
     for p in PLANT_DEFS:
         catalog.append({
             "id": p["id"], "name": p["name"], "scientific_name": p["scientific_name"],
-            "seed_item": p["seed_item"],
+            "seed_item": p["seed_item"], "fruit_name": p.get("fruit_name", p["name"]),
             "sprites": [f"/sprites/{p['sprite_dir']}/{f}" for f in p["sprites"]],
             "level_hours_thresholds": p["level_hours_thresholds"],
             "level_bonus_defs": p["level_bonus_defs"],
+            "max_level": plant_max_level(p),
+            "harvest_hours_interval": HARVEST_GROWTH_HOURS_INTERVAL,
+            "harvest_lockout_hours": HARVEST_LOCKOUT_HOURS,
             "seed_buy_price": SEED_SHOP_BUY_PRICE, "seed_sell_price": SEED_SHOP_SELL_PRICE,
+            "fruit_sell_price": FRUIT_SELL_PRICE,
         })
     return jsonify({
         "catalog": catalog,
@@ -3227,7 +4769,7 @@ def botanarium_catalog(name):
         "passive_yield": {
             "storage_cap_hours": PASSIVE_YIELD_MAX_STORAGE_HOURS,
             "weekly_lower_limit_hours": WEEKLY_YIELD_LOWER_LIMIT_HOURS,
-            "min_multiplier": WEEKLY_YIELD_MIN_MULTIPLIER, "max_multiplier": WEEKLY_YIELD_MAX_MULTIPLIER,
+            "max_multiplier": WEEKLY_YIELD_MAX_MULTIPLIER,
         },
         "bank_levels": BOTANARIUM_BANK_LEVELS,
         "summer_months": SUMMER_MONTHS,
@@ -3241,6 +4783,7 @@ def list_plants(name):
     weekly_hours = compute_weekly_study_hours(d)
     bank = compute_bank_state(d)
     claimed_24h = compute_rolling_24h_claimed(d)
+    active_collection_ids = {c["id"] for c in compute_active_collections(d)}
     return jsonify({
         "plants": [s for s in states if s],
         "selected_plant_id": d.get("selected_plant_id"),
@@ -3249,6 +4792,7 @@ def list_plants(name):
         "bank": bank,
         "claimed_last_24h": round(claimed_24h, 1),
         "claim_remaining_24h": round(max(0, bank["daily_claim_cap"] - claimed_24h), 1),
+        "collections": [{**c, "active": c["id"] in active_collection_ids} for c in PLANT_COLLECTIONS],
     })
 
 @app.route("/api/<name>/plants/<plant_id>/fertilize", methods=["POST"])
@@ -3267,7 +4811,11 @@ def fertilize_plant(name, plant_id):
     plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
     if not plant:
         return jsonify({"error": "Plant not found"}), 404
-    cost = FERTILIZER_COST
+    plant_def = get_plant_def(plant["plant_type"])
+    growth_hours = compute_plant_growth_hours(plant, d)
+    level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def) if plant_def else (1, 0, 0, None)
+    thrifty_pct = get_plant_bonus_value(plant, plant_def, "thrifty", level, d) if plant_def else 0.0
+    cost = max(5, round(FERTILIZER_COST * (1 - thrifty_pct / 100.0)))
     balance = compute_current_balance(name, d)
     if balance < cost:
         return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
@@ -3355,13 +4903,57 @@ def claim_plant_yield(name, plant_id):
     d.setdefault("passive_claims", []).append(claim)
 
     seed_dropped = False
-    seedy_pct = get_plant_bonus_value(plant, plant_def, "seedy", level)
+    seedy_pct = get_plant_bonus_value(plant, plant_def, "seedy", level, d)
     if seedy_pct > 0 and __import__("random").random() * 100 < seedy_pct:
-        _inventory_add(d, plant_def["seed_item"], 1)
-        seed_dropped = True
+        # The Nerds claim itself always succeeds regardless of inventory
+        # space — only the BONUS seed drop is skipped if there's no room,
+        # since the main action here is claiming Nerds, not the seed.
+        seed_dropped = _inventory_add(d, plant_def["seed_item"], 1)
 
     save_data(name, d)
     return jsonify({"ok": True, "amount": amount, "seed_dropped": seed_dropped, "seed_item": plant_def["seed_item"] if seed_dropped else None})
+
+@app.route("/api/<name>/plants/<plant_id>/harvest", methods=["POST"])
+def harvest_plant(name, plant_id):
+    """Max-level-only mechanic, separate from passive Nerds claiming: once
+    a plant has accrued its required growth-hours since its last harvest
+    (see compute_plant_harvest_progress_hours), it can be harvested for
+    Fruit item(s). Harvesting then locks the plant's sprite to its
+    depleted "<id>h.png" look and pauses further harvest-hour accrual for
+    HARVEST_LOCKOUT_HOURS — passive Nerds yield and leveling/prestige
+    growth keep working normally throughout. REFUSED outright (nothing
+    consumed — no lockout starts, no growth-hours spent) if there's no
+    inventory slot free for this plant's fruit type."""
+    ensure_profile(name)
+    d = load_data(name)
+    plant = next((p for p in d.get("plants", []) if p["id"] == plant_id), None)
+    if not plant:
+        return jsonify({"error": "Plant not found"}), 404
+    plant_def = get_plant_def(plant["plant_type"])
+    if not plant_def:
+        return jsonify({"error": "Unknown plant type"}), 400
+    growth_hours = compute_plant_growth_hours(plant, d)
+    level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
+    harvest_state = compute_plant_harvest_state(plant, d, plant_def, level)
+    if not harvest_state:
+        return jsonify({"error": "This plant hasn't reached its max level yet."}), 400
+    if harvest_state["locked"]:
+        return jsonify({"error": f"Still recovering from its last harvest — {harvest_state['lockout_remaining_minutes']}min left."}), 400
+    if not harvest_state["ready"]:
+        return jsonify({"error": f"Not enough growth hours yet ({harvest_state['progress_hours']}/{harvest_state['hours_required']}h)."}), 400
+    fruit_item = harvest_state["fruit_item"]
+    if not _inventory_has_space(d, fruit_item):
+        return jsonify({"error": "Your inventory is full — free up a slot (or buy another) before harvesting. Nothing was consumed."}), 400
+    plant["last_harvest_at"] = now_str()
+    plant["harvest_count"] = plant.get("harvest_count", 0) + 1
+    qty = 1
+    fruitful_pct = get_plant_bonus_value(plant, plant_def, "fruitful", level, d)
+    bonus_fruit = fruitful_pct > 0 and random.random() * 100 < fruitful_pct
+    if bonus_fruit:
+        qty = 2
+    _inventory_add(d, fruit_item, qty)
+    save_data(name, d)
+    return jsonify({"ok": True, "fruit_item": fruit_item, "fruit_label": harvest_state["fruit_label"], "qty": qty, "bonus_fruit": bonus_fruit})
 
 @app.route("/api/<name>/botanarium/bank")
 def get_bank_state(name):
@@ -3396,11 +4988,37 @@ def get_inventory(name):
     changed = False
     for it in d.get("inventory", []):
         if it.get("slot_index") is None:
-            it["slot_index"] = _inventory_next_free_slot(d)
-            changed = True
+            slot = _inventory_next_free_slot(d)
+            if slot is not None:
+                it["slot_index"] = slot
+                changed = True
     if changed:
         save_data(name, d)
-    return jsonify({"inventory": d.get("inventory", []), "slot_count": INVENTORY_SLOT_COUNT})
+    return jsonify({
+        "inventory": d.get("inventory", []),
+        "slot_count": compute_inventory_slot_count(d),
+        "base_slot_count": INVENTORY_SLOT_COUNT,
+        "purchased_slots": compute_purchased_inventory_slots(d),
+        "next_slot_cost": next_inventory_slot_cost(d),
+    })
+
+@app.route("/api/<name>/inventory/buy_slot", methods=["POST"])
+def buy_inventory_slot(name):
+    """Purchases ONE additional inventory slot — cost climbs each time
+    (see INVENTORY_SLOT_COST_GROWTH), capped at INVENTORY_SLOT_MAX_PURCHASES
+    total purchases. Nothing is stored beyond the standard nerds_spent
+    log entry; slot count is always derived from it."""
+    ensure_profile(name)
+    d = load_data(name)
+    cost = next_inventory_slot_cost(d)
+    if cost is None:
+        return jsonify({"error": "Maximum inventory slots already reached"}), 400
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    _spend_nerds(d, "inventory_slot", 1, cost)
+    save_data(name, d)
+    return jsonify({"ok": True, "cost": cost, "slot_count": compute_inventory_slot_count(d)})
 
 @app.route("/api/<name>/inventory/move", methods=["POST"])
 def move_inventory_item(name):
@@ -3414,9 +5032,10 @@ def move_inventory_item(name):
 
 @app.route("/api/<name>/shop/catalog")
 def shop_catalog(name):
-    """Everything purchasable/sellable right now — just watermelon seeds
-    for the moment, but every plant's seed_item is listed automatically
-    so future plants need zero shop code changes."""
+    """Every plant's seed_item (buyable + sellable), plus every plant's
+    fruit item (sell-only for now, no dedicated sprite yet — see
+    is_fruit/sprite: None). Adding a plant to PLANT_DEFS needs zero shop
+    code changes on top of this."""
     ensure_profile(name)
     items = []
     for p in PLANT_DEFS:
@@ -3424,7 +5043,12 @@ def shop_catalog(name):
             "item_type": p["seed_item"], "label": f"{p['name']} Seed",
             "sprite": f"/sprites/{p['sprite_dir']}/{p['sprites'][0]}",
             "buy_price": SEED_SHOP_BUY_PRICE, "sell_price": SEED_SHOP_SELL_PRICE,
-            "plant_id": p["id"],
+            "plant_id": p["id"], "is_fruit": False,
+        })
+        items.append({
+            "item_type": f"{p['id']}_fruit", "label": p.get("fruit_name", p["name"]),
+            "sprite": None, "buy_price": None, "sell_price": FRUIT_SELL_PRICE,
+            "plant_id": p["id"], "is_fruit": True,
         })
     return jsonify({"items": items})
 
@@ -3438,6 +5062,8 @@ def shop_buy(name):
     seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
     if not seed_def:
         return jsonify({"error": "Unknown item"}), 400
+    if not _inventory_has_space(d, item_type):
+        return jsonify({"error": "Your inventory is full — free up a slot, or buy another slot, before buying this."}), 400
     cost = SEED_SHOP_BUY_PRICE * qty
     balance = compute_current_balance(name, d)
     if balance < cost:
@@ -3455,11 +5081,28 @@ def shop_sell(name):
     qty = max(1, int(data.get("qty", 1)))
     d = load_data(name)
     seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
-    if not seed_def:
+    fruit_def = next((p for p in PLANT_DEFS if f"{p['id']}_fruit" == item_type), None)
+    if not seed_def and not fruit_def:
         return jsonify({"error": "Unknown item"}), 400
     if not _inventory_remove(d, item_type, qty):
         return jsonify({"error": "Not enough of that item to sell"}), 400
-    proceeds = round(SEED_SHOP_SELL_PRICE * qty, 1)
+    if seed_def:
+        # Richseed boosts THIS plant's own seed sell price — based on the
+        # best-leveled copy the person currently owns (0 bonus if they
+        # don't own a grown copy of this plant at all yet).
+        richseed_pct = 0.0
+        owned = [p for p in d.get("plants", []) if p["plant_type"] == seed_def["id"]]
+        if owned:
+            best_pct = 0.0
+            for rec in owned:
+                gh = compute_plant_growth_hours(rec, d)
+                lvl, _, _, _ = compute_plant_level_and_prestige(gh, seed_def)
+                best_pct = max(best_pct, get_plant_bonus_value(rec, seed_def, "richseed", lvl, d))
+            richseed_pct = best_pct
+        unit_price = round(SEED_SHOP_SELL_PRICE * (1 + richseed_pct / 100.0), 1)
+    else:
+        unit_price = FRUIT_SELL_PRICE
+    proceeds = round(unit_price * qty, 1)
     d.setdefault("passive_claims", []).append({
         "id": gen_id(8), "plant_id": None, "plant_type": None, "date": today_str(),
         "created": now_str(), "amount": proceeds, "elapsed_hours": 0, "weekly_multiplier": 0,
@@ -4232,6 +5875,13 @@ def get_stats(name):
     d = load_data(name)
     return jsonify(_compute_stats_payload(cfg, d))
 
+@app.route("/api/version")
+def get_version():
+    """Single source of truth for the running backend's version — the
+    frontend's APP_VERSION const (app.js) is the display-side default;
+    this endpoint is what actually reflects what's running right now."""
+    return jsonify({"version": APP_VERSION})
+
 # ── Static files ──
 @app.route("/")
 def index():
@@ -4261,5 +5911,5 @@ def sprite_file(subpath):
     return send_file(requested)
 
 if __name__ == "__main__":
-    print("StudyTracker v2.1 — http://localhost:8080")
+    print(f"StudyTracker v{APP_VERSION} — http://localhost:8080")
     app.run(host="127.0.0.1", port=8080, debug=False)

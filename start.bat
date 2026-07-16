@@ -2,11 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
-title StudyTracker v2.1
+title StudyTracker v2.2.0
 
 echo.
 echo ===========================================================
-echo    StudyTracker v2.1
+echo    StudyTracker v2.2.0
 echo    Study Tracking Dashboard
 echo    Live to love. Love to learn. Learn to live.
 echo    Now Featuring: The Botanarium - Can you plant them all?

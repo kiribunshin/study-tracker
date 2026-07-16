@@ -18,7 +18,7 @@ Flask backend, vanilla JS/HTML/CSS frontend, no framework bloat. Runs locally vi
 
 ## Status
 
-#### v2.0 - The Botany Update:
+### v2.0 - The Botany Update:
 - Added: The Botanarium - A space where the plant lover in you can thrive:
     - Care for plants: You can buy seeds and grow plants through hours studied.
     - Watch them blossom: Each plant has its unique sprites, allowing you to watch it grow from a seed to a blossoming beauty (Level 1 → Level 5).
@@ -34,7 +34,7 @@ Flask backend, vanilla JS/HTML/CSS frontend, no framework bloat. Runs locally vi
 - Changed: Adding an older self-study record now prompts you for the time the study session was had, and defaults to the current hour and minute.
 - Fixed: At times, the website would require a manual refresh to register changes to any gamification-related data, added a `loadConfigAndGamification()` helper that is wired into `Add Subject`, `Add Skill`, `Add Category`, `Delete Subject` and `Delete Skill`. Progression should now update immediately and seamlessly.
 
-#### v2.1 changes:
+### v2.1 changes:
 This patch comes with many fixes to bugs in v2.0 as well as inherited bugs from previous versions.
 - Added: Clementine's Book of Wonders now lists all the hours needed for plant levels as well as the significance of their respective bonuses.
 - Added: Plant neglect:
@@ -51,3 +51,15 @@ This patch comes with many fixes to bugs in v2.0 as well as inherited bugs from 
 - Fixed: When an old self-study session is logged, the time is now specified as `Start Time` and should display correctly in the timetable.
 - Fixed: Studying past midnight should now display normally in the timetable.
 - Fixed: "Partial" now appears as yellow under the `Recent Activity` section of the `Dashboard`.
+
+### v2.2.0 changes:
+This patch brings a whopping 31 new plants, now reaching a total of 32. Some bugs were patched.
+- Added: Over 31 new plants with distinct bonuses and mechanics aiming for maximum uniqueness.
+- Added: Plant Harvest: You can now harvest fruit from all of your plants once they are fully matured and every ~5 growth hours. (Susceptible to change - aka reductions - through specific plant buffs.) 
+- Added: `Plant Collections`: Collect multiple plants of the same category and level them up to their max level to earn a powerful permanent buff.
+- Added: `Inventory Slots`: You now start with 20 inventory slots and can purchase more slots with increasing amounts of Nerds. Any event that would use up an inventory slot now gets outright refused when all inventory slots are full.
+- Changed: Exposed the version variable at the top of app.js and server.py for easier maintenance.  
+
+There are still a few bugs (stretched out textures, missing fruit textures, raw variables written in frontend instead of formatted text) but I wanted to push this out so the main features are there quicker.  
+
+A lot of plants are planned for the future so stay tuned.

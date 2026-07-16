@@ -1,4 +1,14 @@
-/* StudyTracker v2.1 — Frontend */
+/* StudyTracker — Frontend */
+// ═══════════════════════════════════════════
+// ── VERSION ── Bump this whenever you ship a meaningful change. This
+// is the ONE place to edit it on the frontend — it's what the topbar's
+// "v..." sub-label (see index.html's #topLevelBar area / logo-sub span)
+// and any future about/settings display should read from. The backend
+// has its own matching APP_VERSION constant near the top of server.py;
+// the two are edited independently but should generally be bumped
+// together when you ship a change that touches both.
+// ═══════════════════════════════════════════
+const APP_VERSION = '2.2.0';
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -2900,6 +2910,37 @@ async function renderBotanarium(c) {
     ));
   }
 
+  // Active collections — themed sets of plants (e.g. every potato
+  // variety) that amplify their own members' existing bonus values once
+  // every member reaches max level, rather than granting an unrelated
+  // flat reward — e.g. every owned potato-family plant's Voluminous/
+  // Bountiful/Hardy values climb further once the whole Potato Cellar
+  // is complete. Only the "Full Garden" capstone grants a flat reward,
+  // since it spans every domain at once.
+  if ((plantsResp.collections || []).length) {
+    c.appendChild(el('div', { class: 'card fade-in' }, [
+      el('div', { class: 'card-title', text: '🎖 Plant Collections' }),
+      el('div', { class: 'text-dim text-sm mb-8', text: 'Get every plant in a themed set to its max level. Most collections amplify those plants\' OWN existing bonuses further (hover a card for exactly which ones); "The Full Garden" is the one universal capstone reward. Multiple active collections stack.' }),
+      el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(220px,1fr))' },
+        plantsResp.collections.map(coll => {
+          const rewardText = coll.domain_bonus_ids
+            ? `+${coll.domain_boost_pct}% to ${coll.domain_bonus_ids.join(', ')}`
+            : `+${coll.flat_xp_pct}% XP / +${coll.flat_nerds_pct}% Nerds`;
+          const card = el('div', {
+            class: 'stat-card', style: `opacity:${coll.active ? 1 : .55};cursor:help`
+          }, [
+            el('div', { style: 'font-size:1.3rem', text: coll.active ? '✅' : '🔒' }),
+            el('div', { class: 'stat-label', style: 'margin-top:6px;font-weight:700', text: coll.label }),
+            el('div', { class: 'text-dim', style: 'font-size:10px', text: `${coll.plant_ids.length} plants · Lv${coll.required_level}` }),
+            el('div', { style: `font-weight:800;color:var(--gold);margin-top:4px;font-size:11px`, text: rewardText })
+          ]);
+          attachTooltip(card, coll.desc, 'var(--gold)');
+          return card;
+        })
+      )
+    ]));
+  }
+
   // Not-yet-owned plants (acquire via seed)
   const ownedTypes = new Set(plantsResp.plants.map(p => p.plant_type));
   const notOwned = catalog.catalog.filter(p => !ownedTypes.has(p.id));
@@ -2922,11 +2963,12 @@ async function renderBotanarium(c) {
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: 'ℹ️ How Plant Growth Works' }),
     el('div', { class: 'col', style: 'gap:8px;font-size:var(--font-s)' }, [
-      el('div', {}, [el('strong', { text: 'Growth: ' }), el('span', { text: 'Only ONE plant grows at a time — whichever one you\'ve tapped "Select for Growth" on. Every minute you study while it\'s selected banks toward its next level (1 through 5). Fertilizer is a temporary buff (bought with Nerds) that boosts growth-hour accrual for 24 hours, then wears off — buy it again any time.' })]),
-      el('div', {}, [el('strong', { text: 'Bonuses: ' }), el('span', { text: 'Each level permanently unlocks one bonus. Colors on the card border always mean the same level across every plant.' })]),
-      el('div', {}, [el('strong', { text: 'Passive Yield: ' }), el('span', { text: 'Every plant generates Nerds passively over real time, claimable any time — up to 24 hours\' worth banks up, the rest is lost, so check back regularly. The rate scales with how much you\'ve studied THIS week (a slow week still gives a trickle, never zero).' })]),
-      el('div', {}, [el('strong', { text: 'Prestige: ' }), el('span', { text: 'Once a plant hits Level 5, continued study hours build toward Prestige tiers instead. Each tier grants one point to permanently boost any one of the plant\'s 5 bonuses.' })]),
-      el('div', {}, [el('strong', { text: 'Neglect: ' }), el('span', { text: 'Two separate signals. Go too long with NO self-study at all, and every plant\'s yield dips a bit (a soft, forgiving nudge). Go too long WITHOUT REAL GROWTH TIME on one specific plant, and that plant visibly wilts and its yield nearly stops — a token session won\'t stop this, it takes real hours. The safe window per plant grows the more plants you own, so a big collection stays realistic to rotate through.' })]),
+      el('div', {}, [el('strong', { text: 'Growth: ' }), el('span', { text: 'Only ONE plant grows at a time — whichever one you\'ve tapped "Select for Growth" on. Every minute you study while it\'s selected banks toward its next level (most plants max out at Level 4; Watermelon maxes at Level 5). Fertilizer is a temporary buff (bought with Nerds) that boosts growth-hour accrual for 24 hours, then wears off — buy it again any time.' })]),
+      el('div', {}, [el('strong', { text: 'Bonuses: ' }), el('span', { text: 'Each level permanently unlocks one bonus, unique to that plant. Hover any bonus on a plant\'s card (or check the Book of Wonders) to see exactly what triggers it and by how much. Colors on the card border always mean the same level across every plant.' })]),
+      el('div', {}, [el('strong', { text: 'Passive Yield: ' }), el('span', { text: 'Every plant generates Nerds passively over real time, claimable any time — up to 24 hours\' worth banks up (some plants extend this), the rest is lost, so check back regularly. Studying 5+ hours in a week (quality-weighted) boosts the rate above normal for every plant; studying less never lowers it below normal — under-studying is handled entirely by Neglect below, not by this.' })]),
+      el('div', {}, [el('strong', { text: 'Harvest: ' }), el('span', { text: 'Once a plant reaches its max level, it can additionally be Harvested for a Fruit item every few growth-hours (separate from, and on top of, passive Nerds yield). Harvesting shows the plant\'s depleted look for 1 hour afterward, during which it can\'t be harvested again — passive yield and Prestige growth keep working normally throughout. A Harvest is refused outright (nothing consumed) if your inventory has no room for it. Fruits are text-only inventory items for now, sellable in the Market.' })]),
+      el('div', {}, [el('strong', { text: 'Prestige: ' }), el('span', { text: 'Once a plant hits its max level, continued study hours build toward Prestige tiers instead. Each tier grants one point to permanently boost any one of the plant\'s own 4 (or, for Watermelon, 5) bonuses.' })]),
+      el('div', {}, [el('strong', { text: 'Neglect: ' }), el('span', { text: 'Two separate signals. Go too long with NO self-study at all, and every plant\'s yield dips a bit (a soft, forgiving nudge). Go too long WITHOUT REAL GROWTH TIME on one specific plant, and that plant visibly wilts and its yield nearly stops — a token session won\'t stop this, it takes real hours. The safe window per plant grows the more plants you own. Some plants soften this penalty (Hardy) or extend the window before it starts at all (Warden).' })]),
       el('div', {}, [el('strong', { text: 'Seeds: ' }), el('span', { text: 'A plant\'s first seed plants it. Any extra seeds (bought, or occasionally earned from that plant\'s own bonuses) can only upgrade its Fast Grower bonus, or be sold in the Market.' })]),
     ]),
     el('div', { class: 'row', style: 'gap:14px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)' }, [
@@ -3021,13 +3063,47 @@ function renderPlantCard(p, catalog) {
   ]);
   card.appendChild(claimRow);
 
-  // Bonuses
-  const bonusList = el('div', { class: 'mt-8' }, p.bonuses.map(b => el('div', {
-    class: 'row', style: `justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);opacity:${b.unlocked ? 1 : .45}`
-  }, [
-    el('span', { class: 'text-sm', text: `${b.unlocked ? '✓' : '🔒'} ${b.label} (Lv${b.level_required})` }),
-    el('span', { class: 'text-sm', style: 'font-weight:700', text: b.unlocked ? `+${b.value}${b.unit}` : '—' })
-  ])));
+  // Harvest — a separate, max-level-only mechanic from passive Claim.
+  // p.harvest is null until the plant reaches its max level.
+  if (p.harvest) {
+    const h = p.harvest;
+    const harvestBox = el('div', { class: 'mt-8', style: 'padding:10px;border-radius:var(--r-sm);background:var(--bg3);border:1px solid var(--border)' });
+    harvestBox.appendChild(el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;margin-bottom:6px' }, [
+      el('span', { class: 'text-sm', style: 'font-weight:700', text: `🍈 ${h.fruit_label}` }),
+      el('span', { class: 'text-dim text-sm', text: `Harvested ${h.harvest_count}x` })
+    ]));
+    if (h.locked) {
+      harvestBox.appendChild(el('div', { class: 'text-sm', style: 'color:var(--amber)', text: `Recovering — growth resumes in ${h.lockout_remaining_minutes}min` }));
+      harvestBox.appendChild(el('div', { class: 'text-dim text-sm mt-8', text: 'This plant shows its just-harvested look until it recovers. Growth toward the NEXT harvest is paused during this window — passive Nerds yield and leveling/prestige growth are unaffected.' }));
+    } else {
+      const pct = Math.min(100, (h.progress_hours / h.hours_required) * 100);
+      harvestBox.appendChild(el('div', { class: 'xp-progress-track' }, [el('div', { class: 'xp-progress-fill', style: `width:${pct}%;background:${p.color}` })]));
+      harvestBox.appendChild(el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;margin-top:8px' }, [
+        el('span', { class: 'text-dim text-sm', text: `${fmt(h.progress_hours, 1)}h / ${h.hours_required}h` }),
+        el('button', { class: 'btn btn-sm btn-success', text: 'Harvest', disabled: !h.ready, onclick: async () => {
+          try {
+            const resp = await api(`/api/${currentProfile}/plants/${p.id}/harvest`, { method: 'POST' });
+            if (resp.qty > 1) alert(`🍈 Bonus harvest! Got ${resp.qty}x ${resp.fruit_label}.`);
+            render();
+          } catch (e) { alert(e.message); }
+        } })
+      ]));
+    }
+    card.appendChild(harvestBox);
+  }
+
+  // Bonuses — hover any row to see the exact trigger/mechanism, not
+  // just the label + value.
+  const bonusList = el('div', { class: 'mt-8' }, p.bonuses.map(b => {
+    const row = el('div', {
+      class: 'row', style: `justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);opacity:${b.unlocked ? 1 : .45};cursor:help`
+    }, [
+      el('span', { class: 'text-sm', text: `${b.unlocked ? '✓' : '🔒'} ${b.label} (Lv${b.level_required})` }),
+      el('span', { class: 'text-sm', style: 'font-weight:700', text: b.unlocked ? `+${b.value}${b.unit}` : '—' })
+    ]);
+    attachTooltip(row, b.desc, p.color);
+    return row;
+  }));
   card.appendChild(bonusList);
 
   // Actions: Fertilize (temporary buff), Fast Grower upgrade, Prestige allocation
@@ -3124,11 +3200,16 @@ function renderBookGrowthGuide(plantDef, catalog) {
   return el('div', { class: 'card', style: 'margin-top:18px' }, [
     el('div', { class: 'card-title', text: '🌱 Growth Guide (in-game)' }),
     el('table', {}, [
-      el('thead', {}, el('tr', {}, [el('th', { text: 'Level' }), el('th', { text: 'Hours to Reach' }), el('th', { text: 'Bonus Unlocked' })])),
+      el('thead', {}, el('tr', {}, [
+        el('th', { text: 'Level' }), el('th', { text: 'Hours to Reach' }),
+        el('th', { text: 'Bonus' }), el('th', { text: 'Value' }), el('th', { text: 'How it works' })
+      ])),
       el('tbody', {}, (plantDef.level_bonus_defs || []).map((b, i) => el('tr', {}, [
         el('td', {}, el('span', { style: `color:${(catalog.level_colors || [])[i] || 'inherit'};font-weight:700`, text: `Level ${b.level}` })),
         el('td', { text: `${thresholds[i] ?? '?'}h` }),
-        el('td', { text: `${b.label} — +${b.base_value}${b.unit} (${b.desc})` })
+        el('td', { text: b.label }),
+        el('td', {}, el('span', { style: 'font-weight:800;color:var(--gold)', text: `+${b.base_value}${b.unit}` })),
+        el('td', { class: 'text-sm', style: 'max-width:340px', text: b.desc })
       ])))
     ])
   ]);
@@ -3242,8 +3323,19 @@ async function renderInventory(c) {
     }
   }
   c.appendChild(el('div', { class: 'card fade-in' }, [
-    el('div', { class: 'card-title', text: '📦 Your Items' }),
-    el('div', { class: 'text-dim text-sm mb-8', text: 'Same-type items stack into one slot automatically. Drag a slot onto another to rearrange (or swap) them.' }),
+    el('div', { class: 'row', style: 'justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px' }, [
+      el('div', { class: 'card-title', style: 'margin-bottom:0', text: '📦 Your Items' }),
+      el('div', { class: 'row', style: 'gap:10px;align-items:center' }, [
+        el('span', { class: 'text-dim text-sm', text: `${items.length} / ${slotCount} slots used (${inv.purchased_slots || 0} purchased)` }),
+        inv.next_slot_cost != null
+          ? el('button', { class: 'btn btn-sm btn-outline', onclick: async () => {
+              try { await api(`/api/${currentProfile}/inventory/buy_slot`, { method: 'POST' }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
+              catch (e) { alert(e.message); }
+            } }, [el('span', { text: '+ Buy Slot ' }), coinIcon(12), el('span', { text: inv.next_slot_cost })])
+          : el('span', { class: 'text-dim text-sm', text: 'Max slots reached' })
+      ])
+    ]),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Same-type items stack into one slot automatically. Drag a slot onto another to rearrange (or swap) them. When every slot is full, buying a seed, harvesting a fruit, or a passive seed-drop for a NEW item type is refused until a slot is free.' }),
     items.length ? null : el('div', { class: 'text-dim text-sm mb-8', text: 'Your inventory is empty. Buy a seed from the Market below, or earn one from a plant\'s own bonuses.' }),
     slotsGrid
   ]));
@@ -3251,32 +3343,44 @@ async function renderInventory(c) {
   // Market
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: '🏪 Market' }),
-    el('div', { class: 'text-dim text-sm mb-8', text: 'Buy seeds to plant new species in the Botanarium, sell off surplus seeds for Nerds, or pick up a cosmetic theme.' }),
-    el('table', {}, [
-      el('thead', {}, el('tr', {}, [el('th', { text: 'Item' }), el('th', { text: 'Buy' }), el('th', { text: 'Sell' }), el('th', { text: 'You Have' }), el('th', { text: '' })])),
-      el('tbody', {}, (shop.items || []).map(it => {
-        const owned = items.find(x => x.item_type === it.item_type);
-        return el('tr', {}, [
-          el('td', {}, el('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
-            el('img', { src: it.sprite, style: 'width:28px;height:28px;image-rendering:pixelated', onerror: (e) => { e.target.style.display = 'none'; } }),
-            el('span', { text: it.label })
-          ])),
-          el('td', {}, nerdsAmount(it.buy_price, 14)),
-          el('td', {}, nerdsAmount(it.sell_price, 14)),
-          el('td', { text: owned ? owned.qty : 0 }),
-          el('td', {}, el('div', { class: 'btn-group' }, [
-            el('button', { class: 'btn btn-sm', text: 'Buy', onclick: async () => {
-              try { await api(`/api/${currentProfile}/shop/buy`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
-              catch (e) { alert(e.message); }
-            } }),
-            el('button', { class: 'btn btn-sm btn-amber', text: 'Sell 1', disabled: !owned || owned.qty < 1, onclick: async () => {
-              try { await api(`/api/${currentProfile}/shop/sell`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); render(); }
-              catch (e) { alert(e.message); }
-            } })
-          ]))
-        ]);
-      }))
-    ])
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Buy seeds to plant new species in the Botanarium, sell off surplus seeds and harvested fruits for Nerds, or pick up a cosmetic theme. Fruits are sell-only for now.' }),
+    (() => {
+      const searchInput = el('input', { placeholder: 'Search items...', style: 'max-width:260px;margin-bottom:10px' });
+      const tableHost = el('div');
+      function renderMarketTable() {
+        const q = searchInput.value.trim().toLowerCase();
+        const filtered = (shop.items || []).filter(it => !q || it.label.toLowerCase().includes(q));
+        tableHost.innerHTML = '';
+        tableHost.appendChild(el('table', {}, [
+          el('thead', {}, el('tr', {}, [el('th', { text: 'Item' }), el('th', { text: 'Buy' }), el('th', { text: 'Sell' }), el('th', { text: 'You Have' }), el('th', { text: '' })])),
+          el('tbody', {}, filtered.map(it => {
+            const owned = items.find(x => x.item_type === it.item_type);
+            return el('tr', {}, [
+              el('td', {}, el('div', { class: 'row', style: 'gap:8px;align-items:center' }, [
+                it.sprite ? el('img', { src: it.sprite, style: 'width:28px;height:28px;image-rendering:pixelated', onerror: (e) => { e.target.style.display = 'none'; } }) : el('span', { style: 'width:28px;display:inline-flex;justify-content:center', text: '🍈' }),
+                el('span', { text: it.label })
+              ])),
+              el('td', {}, it.buy_price != null ? nerdsAmount(it.buy_price, 14) : el('span', { class: 'text-dim', text: '—' })),
+              el('td', {}, nerdsAmount(it.sell_price, 14)),
+              el('td', { text: owned ? owned.qty : 0 }),
+              el('td', {}, el('div', { class: 'btn-group' }, [
+                it.buy_price != null ? el('button', { class: 'btn btn-sm', text: 'Buy', onclick: async () => {
+                  try { await api(`/api/${currentProfile}/shop/buy`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); await maybeShowLevelUp({ skipXpToast: true }); render(); }
+                  catch (e) { alert(e.message); }
+                } }) : null,
+                el('button', { class: 'btn btn-sm btn-amber', text: 'Sell 1', disabled: !owned || owned.qty < 1, onclick: async () => {
+                  try { await api(`/api/${currentProfile}/shop/sell`, { method: 'POST', body: JSON.stringify({ item_type: it.item_type, qty: 1 }) }); render(); }
+                  catch (e) { alert(e.message); }
+                } })
+              ]))
+            ]);
+          }))
+        ]));
+      }
+      searchInput.addEventListener('input', renderMarketTable);
+      renderMarketTable();
+      return el('div', {}, [searchInput, tableHost]);
+    })()
   ]));
 
   // Theme shop — cosmetic themes purchasable with Nerds, separate from
@@ -4054,11 +4158,14 @@ async function renderSettings(c) {
           return el('tr', {}, [
           el('td', { text: s.name }),
           el('td', { class: 'text-dim', text: cat ? cat.name : '—' }),
-          el('td', {}, el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
-            if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session and file linked to this skill too — including all mastery progress earned for it. This cannot be undone.`)) return;
-            await api(`/api/${currentProfile}/skills/${s.id}`, { method: 'DELETE' });
-            await loadConfigAndGamification(); render();
-          } }))
+          el('td', {}, el('div', { class: 'btn-group' }, [
+            el('button', { class: 'btn btn-sm btn-outline', text: '✏️', title: 'Rename skill', onclick: () => showRenameSkillModal(s) }),
+            el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
+              if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session and file linked to this skill too — including all mastery progress earned for it. This cannot be undone.`)) return;
+              await api(`/api/${currentProfile}/skills/${s.id}`, { method: 'DELETE' });
+              await loadConfigAndGamification(); render();
+            } })
+          ]))
         ]);
         }))
       ])
@@ -4140,6 +4247,29 @@ async function addSubject() {
     $('#newSubName').value = '';
     await loadConfigAndGamification(); render();
   } catch (e) { alert(e.message); }
+}
+
+function showRenameSkillModal(skill) {
+  const nameInput = el('input', { value: skill.name, placeholder: 'Skill name' });
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [
+      el('div', { class: 'modal-title', text: 'Rename Skill' }),
+      el('button', { class: 'modal-close', onclick: closeModal, text: '×' })
+    ]),
+    el('label', { text: 'Skill Name' }), nameInput,
+    el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
+      el('button', { class: 'btn', text: 'Save', onclick: async () => {
+        const newName = nameInput.value.trim();
+        if (!newName) { alert('Enter a name'); return; }
+        try {
+          await api(`/api/${currentProfile}/skills/${skill.id}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+          closeModal();
+          await loadConfigAndGamification(); render();
+        } catch (e) { alert(e.message); }
+      }})
+    ])
+  ]);
+  showModal(content);
 }
 
 async function addSkill() {
@@ -4250,6 +4380,15 @@ async function renderFilesList() {
 
 // ── Init ──
 async function init() {
+  const versionLabel = $('#appVersionLabel');
+  if (versionLabel) versionLabel.textContent = ` v${APP_VERSION}`;
+  // Non-fatal: just a console heads-up if the two files were bumped out
+  // of sync with each other, since they're edited independently.
+  api('/api/version').then(v => {
+    if (v?.version && v.version !== APP_VERSION) {
+      console.warn(`Frontend/backend version mismatch: app.js APP_VERSION=${APP_VERSION}, server.py APP_VERSION=${v.version}`);
+    }
+  }).catch(() => {});
   await loadProfiles();
   if (currentProfile) {
     await loadConfig();
