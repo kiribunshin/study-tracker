@@ -1,3 +1,10 @@
+# v2.2.1 changes:
+- Changed: Plant prices in the market are now different instead of being a constant across all plants.
+- Fixed: `Plant Collections` now displays prettier, formatted text for the bonuses instead of displaying raw variable names and IDs.
+- Fixed: Sprites are no longer stretched out (`object-fit: contain`).
+
+---
+
 # v2.2.0 changes:
 This patch brings a whopping 31 new plants, now reaching a total of 32. Some bugs were patched.
 - Added: Over 31 new plants with distinct bonuses and mechanics aiming for maximum uniqueness.

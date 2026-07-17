@@ -681,7 +681,7 @@ tr:hover td { background: var(--accent-soft); }
 .xp-progress-fill { height: 100%; background: var(--gradient); border-radius: 6px; transition: width .5s ease; }
 
 /* ── Botanarium ── */
-.pixel-sprite { image-rendering: pixelated; display: block; }
+.pixel-sprite { image-rendering: pixelated; display: block; object-fit: contain; }
 .plant-card { display: flex; flex-direction: column; border-width: 2px; }
 .plant-card.plant-withered .pixel-sprite { filter: grayscale(1) brightness(.92) contrast(.95); }
 .plant-card.plant-selected-growth { box-shadow: 0 0 0 2px var(--green), var(--shadow); }

@@ -63,3 +63,8 @@ This patch brings a whopping 31 new plants, now reaching a total of 32. Some bug
 There are still a few bugs (stretched out textures, missing fruit textures, raw variables written in frontend instead of formatted text) but I wanted to push this out so the main features are there quicker.  
 
 A lot of plants are planned for the future so stay tuned.
+
+### v2.2.1 changes:
+- Changed: Plant prices in the market are now different instead of being a constant across all plants.
+- Fixed: `Plant Collections` now displays prettier, formatted text for the bonuses instead of displaying raw variable names and IDs.
+- Fixed: Sprites are no longer stretched out (`object-fit: contain`).

@@ -8,7 +8,7 @@
 // the two are edited independently but should generally be bumped
 // together when you ship a change that touches both.
 // ═══════════════════════════════════════════
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.2.1';
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -2910,7 +2910,15 @@ async function renderBotanarium(c) {
     ));
   }
 
-  // Active collections — themed sets of plants (e.g. every potato
+// Turns a raw mechanic id like "fast_grower" into a display-ready label
+// like "Fast Grower" — underscores replaced with spaces, each word
+// capitalized. Used anywhere a bonus id needs to be shown to the person
+// rather than just referenced internally (e.g. collection reward text).
+function formatBonusLabel(id) {
+  return String(id).split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// Active collections — themed sets of plants (e.g. every potato
   // variety) that amplify their own members' existing bonus values once
   // every member reaches max level, rather than granting an unrelated
   // flat reward — e.g. every owned potato-family plant's Voluminous/
@@ -2924,7 +2932,7 @@ async function renderBotanarium(c) {
       el('div', { class: 'stats-grid', style: 'grid-template-columns:repeat(auto-fill,minmax(220px,1fr))' },
         plantsResp.collections.map(coll => {
           const rewardText = coll.domain_bonus_ids
-            ? `+${coll.domain_boost_pct}% to ${coll.domain_bonus_ids.join(', ')}`
+            ? `+${coll.domain_boost_pct}% to ${coll.domain_bonus_ids.map(formatBonusLabel).join(', ')}`
             : `+${coll.flat_xp_pct}% XP / +${coll.flat_nerds_pct}% Nerds`;
           const card = el('div', {
             class: 'stat-card', style: `opacity:${coll.active ? 1 : .55};cursor:help`

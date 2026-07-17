@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 # frontend (see APP_VERSION in app.js) to read and display, so the two
 # never drift apart or need editing in two places by hand.
 # ═══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 
 app = Flask(__name__)
 
@@ -394,10 +394,10 @@ PLANT_COLLECTIONS = [
     },
     {
         "id": "melon_collection", "label": "Melon Patch",
-        "plant_ids": ['honeydewmelon', 'cantaloupemelon'],
+        "plant_ids": ['honeydewmelon', 'cantaloupemelon', 'watermelon'],
         "required_level": 4,
         "domain_bonus_ids": ['hydration', 'fruitful'], "domain_boost_pct": 25,
-        "desc": "Both melons at max level. Amplifies both melons' own Hydration and Fruitful bonus values by +25%.",
+        "desc": "Both melons AND Watermelon (at its own max, Level 5) all at max level. Amplifies each melon's own Hydration and Fruitful bonus values by +25% — Watermelon shares the same botanical family (Cucurbitaceae) and the same real-world identity as an exceptionally water-rich fruit.",
     },
     {
         "id": "squash_collection", "label": "Squash Harvest",
@@ -532,6 +532,7 @@ PLANT_DEFS = [
         # drained of color, and likewise at every other level.
         "seed_item": "watermelon_seed",
         "fruit_name": "Watermelon Fruit",
+        "seed_buy_price": 1000, "seed_sell_price": 170, "fruit_sell_price": 140,
         # Cumulative growth-hours (since acquired, Fertilizer applied)
         # needed to REACH each level. Level 1 is immediate — the plant
         # starts there the moment it's planted. ~100h total to fully
@@ -558,6 +559,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["russetpotato1.png", "russetpotato2.png", "russetpotato3.png", "russetpotato4.png"],
         "seed_item": "russetpotato_seed", "fruit_name": "Russet Potato",
+        "seed_buy_price": 600, "seed_sell_price": 95, "fruit_sell_price": 65,
         "level_hours_thresholds": [0, 7.8, 20.8, 65.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Starchy Bulk", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3% — Russets are bred specifically for high starch mass per tuber."},
@@ -571,6 +573,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["yukongoldpotato1.png", "yukongoldpotato2.png", "yukongoldpotato3.png", "yukongoldpotato4.png"],
         "seed_item": "yukongoldpotato_seed", "fruit_name": "Yukon Gold Potato",
+        "seed_buy_price": 630, "seed_sell_price": 100, "fruit_sell_price": 68,
         "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Buttery Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
@@ -584,6 +587,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["peruvianpurplepotato1.png", "peruvianpurplepotato2.png", "peruvianpurplepotato3.png", "peruvianpurplepotato4.png"],
         "seed_item": "peruvianpurplepotato_seed", "fruit_name": "Peruvian Purple Potato",
+        "seed_buy_price": 720, "seed_sell_price": 115, "fruit_sell_price": 80,
         "level_hours_thresholds": [0, 8.4, 22.4, 70.0],
         "level_bonus_defs": [
             {"level": 1, "id": "seedy", "label": "Andean Genetic Diversity", "base_value": 5.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 5% chance to also add 1 seed of this plant's type to your inventory — reflecting the thousands of native Andean potato landraces still maintained today."},
@@ -597,6 +601,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["sweetpotato1.png", "sweetpotato2.png", "sweetpotato3.png", "sweetpotato4.png"],
         "seed_item": "sweetpotato_seed", "fruit_name": "Sweet Potato",
+        "seed_buy_price": 650, "seed_sell_price": 105, "fruit_sell_price": 72,
         "level_hours_thresholds": [0, 8.2, 21.8, 68.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Warm-Season Grower", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned — sweet potato is a genuine warm-season crop, planted after the last frost and grown through peak summer heat, unlike a true potato."},
@@ -610,6 +615,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["cassava1.png", "cassava2.png", "cassava3.png", "cassava4.png"],
         "seed_item": "cassava_seed", "fruit_name": "Cassava Root",
+        "seed_buy_price": 560, "seed_sell_price": 90, "fruit_sell_price": 60,
         "level_hours_thresholds": [0, 10.2, 27.2, 85.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Drought Tolerant", "base_value": 30.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty by far the most of any plant in the Botanarium. Multiplies the neglect yield fraction by +30% relative to the base — cassava genuinely survives drought and poor soil better than nearly any other staple crop."},
@@ -623,6 +629,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["daikonradish1.png", "daikonradish2.png", "daikonradish3.png", "daikonradish4.png"],
         "seed_item": "daikonradish_seed", "fruit_name": "Daikon Radish",
+        "seed_buy_price": 480, "seed_sell_price": 80, "fruit_sell_price": 55,
         "level_hours_thresholds": [0, 5.4, 15.7, 45.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Quick Sprouter", "base_value": 3.5, "unit": "%", "desc": "Adds +3.5% to this plant's base passive Nerds-per-hour rate — one of the fastest passive-ramp bonuses in the Botanarium."},
@@ -636,6 +643,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["carrot1.png", "carrot2.png", "carrot3.png", "carrot4.png"],
         "seed_item": "carrot_seed", "fruit_name": "Carrot",
+        "seed_buy_price": 500, "seed_sell_price": 85, "fruit_sell_price": 58,
         "level_hours_thresholds": [0, 6.6, 19.2, 55.0],
         "level_bonus_defs": [
             {"level": 1, "id": "frosty", "label": "Sweetens After Frost", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +4.5% to both the XP and the Nerds earned — cold genuinely converts a carrot's stored starch into sugar."},
@@ -649,6 +657,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["parsnip1.png", "parsnip2.png", "parsnip3.png", "parsnip4.png"],
         "seed_item": "parsnip_seed", "fruit_name": "Parsnip",
+        "seed_buy_price": 560, "seed_sell_price": 95, "fruit_sell_price": 65,
         "level_hours_thresholds": [0, 7.4, 21.7, 62.0],
         "level_bonus_defs": [
             {"level": 1, "id": "frosty", "label": "True Winter Root", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +6.5% to both the XP and the Nerds earned — the strongest winter bonus of any plant, reflecting parsnip's tradition of being deliberately left in the ground until AFTER the first hard frost."},
@@ -662,6 +671,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["radish1.png", "radish2.png", "radish3.png", "radish4.png"],
         "seed_item": "radish_seed", "fruit_name": "Radish",
+        "seed_buy_price": 420, "seed_sell_price": 70, "fruit_sell_price": 48,
         "level_hours_thresholds": [0, 4.8, 14.0, 40.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Fastest Grower", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — the single fastest passive-ramp bonus of any plant in the Botanarium, reflecting the radish's real-world speed to harvest (as little as 3-4 weeks)."},
@@ -675,6 +685,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["beet1.png", "beet2.png", "beet3.png", "beet4.png"],
         "seed_item": "beet_seed", "fruit_name": "Beet",
+        "seed_buy_price": 540, "seed_sell_price": 90, "fruit_sell_price": 62,
         "level_hours_thresholds": [0, 7.0, 20.3, 58.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Deep Pigment", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% — reflecting the dense betalain pigments beets are prized for."},
@@ -688,6 +699,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["turnip1.png", "turnip2.png", "turnip3.png", "turnip4.png"],
         "seed_item": "turnip_seed", "fruit_name": "Turnip",
+        "seed_buy_price": 470, "seed_sell_price": 78, "fruit_sell_price": 54,
         "level_hours_thresholds": [0, 6.0, 17.5, 50.0],
         "level_bonus_defs": [
             {"level": 1, "id": "frosty", "label": "Frost-Hardy", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5% to both the XP and the Nerds earned."},
@@ -701,6 +713,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["rutabaga1.png", "rutabaga2.png", "rutabaga3.png", "rutabaga4.png"],
         "seed_item": "rutabaga_seed", "fruit_name": "Rutabaga",
+        "seed_buy_price": 590, "seed_sell_price": 98, "fruit_sell_price": 68,
         "level_hours_thresholds": [0, 7.2, 21.0, 60.0],
         "level_bonus_defs": [
             {"level": 1, "id": "frosty", "label": "Swede's Chill", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5.5% to both the XP and the Nerds earned."},
@@ -714,6 +727,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["garlic1.png", "garlic2.png", "garlic3.png", "garlic4.png"],
         "seed_item": "garlic_seed", "fruit_name": "Garlic",
+        "seed_buy_price": 820, "seed_sell_price": 140, "fruit_sell_price": 95,
         "level_hours_thresholds": [0, 8.6, 25.2, 72.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Antimicrobial Bulb", "base_value": 28.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +28% relative to the base — garlic's real-world reputation for keeping (and repelling pests) shows up here as the strongest Hardy bonus of any allium."},
@@ -727,6 +741,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["sweetonion1.png", "sweetonion2.png", "sweetonion3.png", "sweetonion4.png"],
         "seed_item": "sweetonion_seed", "fruit_name": "Sweet Onion",
+        "seed_buy_price": 700, "seed_sell_price": 118, "fruit_sell_price": 80,
         "level_hours_thresholds": [0, 7.0, 20.3, 58.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Layered Bulb", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
@@ -740,6 +755,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["redonion1.png", "redonion2.png", "redonion3.png", "redonion4.png"],
         "seed_item": "redonion_seed", "fruit_name": "Red Onion",
+        "seed_buy_price": 680, "seed_sell_price": 112, "fruit_sell_price": 76,
         "level_hours_thresholds": [0, 7.2, 21.0, 60.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Anthocyanin Layers", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
@@ -753,6 +769,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["whiteonion1.png", "whiteonion2.png", "whiteonion3.png", "whiteonion4.png"],
         "seed_item": "whiteonion_seed", "fruit_name": "White Onion",
+        "seed_buy_price": 650, "seed_sell_price": 108, "fruit_sell_price": 74,
         "level_hours_thresholds": [0, 6.6, 19.2, 55.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Crisp Layers", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate."},
@@ -766,6 +783,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["greenonion1.png", "greenonion2.png", "greenonion3.png", "greenonion4.png"],
         "seed_item": "greenonion_seed", "fruit_name": "Green Onion",
+        "seed_buy_price": 430, "seed_sell_price": 72, "fruit_sell_price": 50,
         "level_hours_thresholds": [0, 4.6, 13.3, 38.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Fastest Allium", "base_value": 5.0, "unit": "%", "desc": "Adds +5% to this plant's base passive Nerds-per-hour rate — the fastest-ramping allium bonus, reflecting how quickly green onion regrows after cutting."},
@@ -779,6 +797,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["habanero1.png", "habanero2.png", "habanero3.png", "habanero4.png"],
         "seed_item": "habanero_seed", "fruit_name": "Habanero Fruit",
+        "seed_buy_price": 900, "seed_sell_price": 150, "fruit_sell_price": 105,
         "level_hours_thresholds": [0, 7.9, 21.1, 66.0],
         "level_bonus_defs": [
             {"level": 1, "id": "spicy", "label": "Scoville Peak", "base_value": 0.5, "unit": "% per difficulty point", "desc": "Adds +0.5% XP AND +0.5% Nerds to a session PER POINT of that session's difficulty rating (so +5% at difficulty 10/10, +2.5% at difficulty 5/10) — habanero is among the hottest commonly cultivated peppers, and this scales with how 'hard' the session was rather than its length or the calendar."},
@@ -792,6 +811,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["greenbellpepper1.png", "greenbellpepper2.png", "greenbellpepper3.png", "greenbellpepper4.png"],
         "seed_item": "greenbellpepper_seed", "fruit_name": "Green Bell Pepper",
+        "seed_buy_price": 620, "seed_sell_price": 100, "fruit_sell_price": 68,
         "level_hours_thresholds": [0, 6.6, 17.6, 55.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Early Harvest", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate — green bells are simply an unripe harvest of the same fruit that becomes red/yellow/orange later, so this plant matures its yield fastest of the bell pepper family."},
@@ -805,6 +825,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["redbellpepper1.png", "redbellpepper2.png", "redbellpepper3.png", "redbellpepper4.png"],
         "seed_item": "redbellpepper_seed", "fruit_name": "Red Bell Pepper",
+        "seed_buy_price": 720, "seed_sell_price": 120, "fruit_sell_price": 82,
         "level_hours_thresholds": [0, 7.4, 19.8, 62.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Sweet & Sugar-Rich", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4% — reflecting the roughly doubled sugar content a fully ripened pepper develops versus its green, unripe form."},
@@ -818,6 +839,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["orangebellpepper1.png", "orangebellpepper2.png", "orangebellpepper3.png", "orangebellpepper4.png"],
         "seed_item": "orangebellpepper_seed", "fruit_name": "Orange Bell Pepper",
+        "seed_buy_price": 700, "seed_sell_price": 116, "fruit_sell_price": 78,
         "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Sun-Ripened", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4.5% to both the XP and the Nerds earned."},
@@ -831,6 +853,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["yellowbellpepper1.png", "yellowbellpepper2.png", "yellowbellpepper3.png", "yellowbellpepper4.png"],
         "seed_item": "yellowbellpepper_seed", "fruit_name": "Yellow Bell Pepper",
+        "seed_buy_price": 680, "seed_sell_price": 112, "fruit_sell_price": 76,
         "level_hours_thresholds": [0, 7.0, 18.6, 58.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Golden Ripeness", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
@@ -844,6 +867,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["hotpepper1.png", "hotpepper2.png", "hotpepper3.png", "hotpepper4.png"],
         "seed_item": "hotpepper_seed", "fruit_name": "Hot Pepper",
+        "seed_buy_price": 820, "seed_sell_price": 138, "fruit_sell_price": 95,
         "level_hours_thresholds": [0, 7.7, 20.5, 64.0],
         "level_bonus_defs": [
             {"level": 1, "id": "spicy", "label": "Genuine Heat", "base_value": 0.3, "unit": "% per difficulty point", "desc": "Adds +0.3% XP AND +0.3% Nerds to a session PER POINT of that session's difficulty rating (so +3% at difficulty 10/10) — a real cayenne/serrano-type heat, milder than habanero's, so this scales more gently."},
@@ -857,6 +881,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["honeydewmelon1.png", "honeydewmelon2.png", "honeydewmelon3.png", "honeydewmelon4.png"],
         "seed_item": "honeydewmelon_seed", "fruit_name": "Honeydew Melon",
+        "seed_buy_price": 950, "seed_sell_price": 160, "fruit_sell_price": 130,
         "level_hours_thresholds": [0, 9.4, 25.0, 78.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Near-Pure Water Content", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +6.5% to both the XP and the Nerds earned — honeydew is roughly 90% water, giving it the strongest hydration bonus of any melon."},
@@ -870,6 +895,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["cantaloupemelon1.png", "cantaloupemelon2.png", "cantaloupemelon3.png", "cantaloupemelon4.png"],
         "seed_item": "cantaloupemelon_seed", "fruit_name": "Cantaloupe Melon",
+        "seed_buy_price": 980, "seed_sell_price": 165, "fruit_sell_price": 135,
         "level_hours_thresholds": [0, 9.1, 24.3, 76.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Netted Ripeness", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5.5% to both the XP and the Nerds earned."},
@@ -883,6 +909,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["acornsquash1.png", "acornsquash2.png", "acornsquash3.png", "acornsquash4.png"],
         "seed_item": "acornsquash_seed", "fruit_name": "Acorn Squash",
+        "seed_buy_price": 830, "seed_sell_price": 135, "fruit_sell_price": 105,
         "level_hours_thresholds": [0, 9.6, 25.6, 80.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Thick Rind Storage", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +20% relative to the base — acorn squash is a classic long-storing winter squash."},
@@ -896,6 +923,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["crooknecksquash1.png", "crooknecksquash2.png", "crooknecksquash3.png", "crooknecksquash4.png"],
         "seed_item": "crooknecksquash_seed", "fruit_name": "Crookneck Squash",
+        "seed_buy_price": 700, "seed_sell_price": 115, "fruit_sell_price": 88,
         "level_hours_thresholds": [0, 6.2, 16.6, 52.0],
         "level_bonus_defs": [
             {"level": 1, "id": "fast_grower", "label": "Prolific Summer Squash", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — summer squash varieties are famous for outproducing nearly every other home garden crop."},
@@ -909,6 +937,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["pumpkin1.png", "pumpkin2.png", "pumpkin3.png", "pumpkin4.png"],
         "seed_item": "pumpkin_seed", "fruit_name": "Pumpkin",
+        "seed_buy_price": 1100, "seed_sell_price": 180, "fruit_sell_price": 150,
         "level_hours_thresholds": [0, 11.4, 30.4, 95.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Hard Rind", "base_value": 24.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +24% relative to the base — pumpkins are among the best-storing squash varieties, keeping for months."},
@@ -922,6 +951,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["butternutsquash1.png", "butternutsquash2.png", "butternutsquash3.png", "butternutsquash4.png"],
         "seed_item": "butternutsquash_seed", "fruit_name": "Butternut Squash",
+        "seed_buy_price": 900, "seed_sell_price": 148, "fruit_sell_price": 115,
         "level_hours_thresholds": [0, 9.8, 26.2, 82.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Excellent Keeper", "base_value": 22.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +22% relative to the base — butternut squash is famous for storing many months without spoiling."},
@@ -935,6 +965,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["sweetcorn1.png", "sweetcorn2.png", "sweetcorn3.png", "sweetcorn4.png"],
         "seed_item": "sweetcorn_seed", "fruit_name": "Sweet Corn",
+        "seed_buy_price": 720, "seed_sell_price": 118, "fruit_sell_price": 85,
         "level_hours_thresholds": [0, 8.9, 23.7, 74.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hydration", "label": "Milky Kernels", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5% to both the XP and the Nerds earned — sweet corn is famously a peak-summer crop, best eaten within hours of picking."},
@@ -948,6 +979,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["flintcorn1.png", "flintcorn2.png", "flintcorn3.png", "flintcorn4.png"],
         "seed_item": "flintcorn_seed", "fruit_name": "Flint Corn",
+        "seed_buy_price": 760, "seed_sell_price": 125, "fruit_sell_price": 90,
         "level_hours_thresholds": [0, 10.8, 28.8, 90.0],
         "level_bonus_defs": [
             {"level": 1, "id": "hardy", "label": "Hard Outer Shell", "base_value": 26.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +26% relative to the base — the hardest kernel of any plant here, and the most storage-resistant."},
@@ -4749,8 +4781,9 @@ def botanarium_catalog(name):
             "max_level": plant_max_level(p),
             "harvest_hours_interval": HARVEST_GROWTH_HOURS_INTERVAL,
             "harvest_lockout_hours": HARVEST_LOCKOUT_HOURS,
-            "seed_buy_price": SEED_SHOP_BUY_PRICE, "seed_sell_price": SEED_SHOP_SELL_PRICE,
-            "fruit_sell_price": FRUIT_SELL_PRICE,
+            "seed_buy_price": p.get("seed_buy_price", SEED_SHOP_BUY_PRICE),
+            "seed_sell_price": p.get("seed_sell_price", SEED_SHOP_SELL_PRICE),
+            "fruit_sell_price": p.get("fruit_sell_price", FRUIT_SELL_PRICE),
         })
     return jsonify({
         "catalog": catalog,
@@ -5042,12 +5075,14 @@ def shop_catalog(name):
         items.append({
             "item_type": p["seed_item"], "label": f"{p['name']} Seed",
             "sprite": f"/sprites/{p['sprite_dir']}/{p['sprites'][0]}",
-            "buy_price": SEED_SHOP_BUY_PRICE, "sell_price": SEED_SHOP_SELL_PRICE,
+            "buy_price": p.get("seed_buy_price", SEED_SHOP_BUY_PRICE),
+            "sell_price": p.get("seed_sell_price", SEED_SHOP_SELL_PRICE),
             "plant_id": p["id"], "is_fruit": False,
         })
         items.append({
             "item_type": f"{p['id']}_fruit", "label": p.get("fruit_name", p["name"]),
-            "sprite": None, "buy_price": None, "sell_price": FRUIT_SELL_PRICE,
+            "sprite": None, "buy_price": None,
+            "sell_price": p.get("fruit_sell_price", FRUIT_SELL_PRICE),
             "plant_id": p["id"], "is_fruit": True,
         })
     return jsonify({"items": items})
@@ -5064,11 +5099,12 @@ def shop_buy(name):
         return jsonify({"error": "Unknown item"}), 400
     if not _inventory_has_space(d, item_type):
         return jsonify({"error": "Your inventory is full — free up a slot, or buy another slot, before buying this."}), 400
-    cost = SEED_SHOP_BUY_PRICE * qty
+    unit_price = seed_def.get("seed_buy_price", SEED_SHOP_BUY_PRICE)
+    cost = unit_price * qty
     balance = compute_current_balance(name, d)
     if balance < cost:
         return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
-    _spend_nerds(d, item_type, qty, SEED_SHOP_BUY_PRICE)
+    _spend_nerds(d, item_type, qty, unit_price)
     _inventory_add(d, item_type, qty)
     save_data(name, d)
     return jsonify({"ok": True, "item_type": item_type, "qty": qty, "cost": cost})
@@ -5099,9 +5135,10 @@ def shop_sell(name):
                 lvl, _, _, _ = compute_plant_level_and_prestige(gh, seed_def)
                 best_pct = max(best_pct, get_plant_bonus_value(rec, seed_def, "richseed", lvl, d))
             richseed_pct = best_pct
-        unit_price = round(SEED_SHOP_SELL_PRICE * (1 + richseed_pct / 100.0), 1)
+        base_price = seed_def.get("seed_sell_price", SEED_SHOP_SELL_PRICE)
+        unit_price = round(base_price * (1 + richseed_pct / 100.0), 1)
     else:
-        unit_price = FRUIT_SELL_PRICE
+        unit_price = fruit_def.get("fruit_sell_price", FRUIT_SELL_PRICE)
     proceeds = round(unit_price * qty, 1)
     d.setdefault("passive_claims", []).append({
         "id": gen_id(8), "plant_id": None, "plant_type": None, "date": today_str(),
