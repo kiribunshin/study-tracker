@@ -1,3 +1,19 @@
+# v2.3 changes:
+- Added: `File Explorer`: Drastically improved and built upon the existing file system, now having its own section in the `navbar` and is able to:
+    - Read `.pdf` files and save notes on specific pages as well as open multiple at once and split-view
+    - Play audio files (multiple formats) through an audio player at the bottom and queue other audio files.
+    - Play video files (multiple formats) through a video player with a timed note-taking function, allowing you to review videos later with your own time-stamped notes. (Great for longer lectures especially)
+    - A rudimentary text editor that allows you to edit anything from `.txt` to `.md`, `.html`, `.css`, `.js`, `.py`, `.sh`, `.json`, etc... with syntax-highlighting and preview for `.md` files. (Richer note-taking)
+- Added: `Update Checker` in the settings: You can now routinely check if you're still in sync with the repo. If you are behind, it will prompt to install the update and restart Cultivar.
+- Added: `Subject Category`: Subjects can now be grouped by category.
+- Changed: Officially rebranded to `Cultivar`!
+- Changed: The app now launches in its own independent desktop window, no need for a browser anymore.
+- Changed: The `cmd` now disappears entirely when the app is running (still yet to implement a packaged .exe, but this is a step in the right way)
+- Fixed: A newly-acquired plant no longer appears as withered.
+- Dropped: The idea of cross-device synced use; has proven to be far too problematic in the current architecture with a relatively unimpressive gain.
+
+---
+
 # v2.2.1 changes:
 - Changed: Plant prices in the market are now different instead of being a constant across all plants.
 - Fixed: `Plant Collections` now displays prettier, formatted text for the bonuses instead of displaying raw variable names and IDs.

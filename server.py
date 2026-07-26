@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""StudyTracker — Portable study tracking web app."""
-import os, json, time, hashlib, shutil, math, uuid, random
+"""Cultivar — Portable, purely local study tracking desktop app."""
+import os, sys, json, time, hashlib, shutil, math, uuid, random, socket, threading
+import urllib.request, urllib.error, tempfile, zipfile as _zipfile_mod, subprocess
 from flask import Flask, jsonify, request, send_file, abort
 from pathlib import Path
 from collections import defaultdict
@@ -14,15 +15,252 @@ from werkzeug.utils import secure_filename
 # frontend (see APP_VERSION in app.js) to read and display, so the two
 # never drift apart or need editing in two places by hand.
 # ═══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 
 app = Flask(__name__)
 
+# ── File Explorer (per-subject/skill rich file navigator) ──
+# Folders are REAL directories on disk (mirrors the filesystem 1:1 —
+# no virtual/DB-only folder tree) so a person can also just poke around
+# in saves/<profile>/_files/ directly with a normal file manager and see
+# exactly what the app sees. Two consequences of that:
+#   1. Renaming a subject/skill or reassigning its category physically
+#      moves its folder on disk (see _reconcile_item_folder). This is
+#      safe: every route addresses files by the subject/skill's stable
+#      id + a path relative to ITS OWN folder, never by an absolute
+#      path baked in anywhere else, so nothing external can "link" to a
+#      path that then goes stale.
+#   2. Per-file rich metadata (notes, video timestamps, last PDF page)
+#      can't be shoved into the filename, so it lives in a small hidden
+#      sidecar `.filemeta.json` written into each folder, keyed by
+#      filename. Deleting/moving a file is expected to drag its meta
+#      entry along with it.
+FILEMETA_NAME = ".filemeta.json"
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
+PDF_EXTENSIONS = {".pdf"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+# Anything editable as plain text in the in-browser editor (see the Files
+# page's text/markdown/code viewer) — deliberately broad so common code
+# and config files can be quickly tweaked without leaving the app. Kept
+# as a max-size-gated allowlist (see WRITABLE_TEXT_MAX_BYTES) rather than
+# "anything not otherwise recognized," since a binary file opened as text
+# would just show mangled bytes.
+TEXT_EXTENSIONS = {
+    ".md", ".markdown", ".txt", ".csv", ".tsv", ".json", ".yaml", ".yml",
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".htm", ".css", ".scss",
+    ".xml", ".ini", ".cfg", ".conf", ".toml", ".sh", ".bat", ".ps1",
+    ".c", ".cpp", ".h", ".hpp", ".java", ".rb", ".go", ".rs", ".php",
+    ".sql", ".log", ".gitignore", ".env",
+}
+WRITABLE_TEXT_MAX_BYTES = 64 * 1024 * 1024  # 64MB: this is a quick-edit box, not an IDE
+
+# ── Bundle-aware path resolution ──
+# Two different "base directories" matter here, and they're the same
+# thing in normal (non-packaged) use but DIVERGE once this is bundled
+# into a single-file executable (see desktop.py):
+#   APP_DIR  — where this script's OWN read-only files live (index.html,
+#              app.js, styles.css, sprites/). Under PyInstaller's
+#              --onefile mode these get extracted into an EPHEMERAL temp
+#              folder (sys._MEIPASS) that's recreated fresh every launch.
+#   DATA_DIR — where the person's actual saved data ("saves/") must
+#              live. This has to be STABLE across restarts, or every
+#              profile would appear to silently vanish each time the
+#              packaged app is reopened. Anchored to the .exe's own
+#              folder instead, which persists normally on disk.
+# In plain `python server.py` (unpackaged) use, both are simply this
+# script's own directory, exactly as before.
+def _resolve_app_dir():
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+def _resolve_data_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+APP_DIR = _resolve_app_dir()
+DATA_DIR = _resolve_data_dir()
+
 # ── Configuration ──
-SAVES_DIR = Path(__file__).parent / "saves"
+SAVES_DIR = DATA_DIR / "saves"
 SAVES_DIR.mkdir(exist_ok=True)
-SPRITES_DIR = Path(__file__).parent / "sprites"   # /sprites/<category>/<file>.png — see sprite_file() route below
+SPRITES_DIR = APP_DIR / "sprites"   # /sprites/<category>/<file>.png — see sprite_file() route below
 FILES_DIR_NAME = "_files"  # subdirectory per save for subject/skill files
+
+# Purely local — the Flask server only ever listens on 127.0.0.1 (see
+# desktop.py), so this is just an internal port number, never exposed
+# to a network. No LAN access, no password/auth, no HTTPS: all of that
+# existed for a phone/multi-device design this app no longer has.
+PORT = int(os.environ.get("CULTIVAR_PORT", "8080"))
+
+# ═══════════════════════════════════════════════════════════════════
+# ── GitHub Update Checker ──
+# Compares the latest commit on the repo's default branch against the
+# commit this install last synced to, and — on request — downloads and
+# applies that update in place. This only works meaningfully when
+# Cultivar is running from a real source checkout (`python
+# desktop.py` / `python server.py`, e.g. via start.bat) rather than a
+# PyInstaller-frozen .exe, since a frozen exe can't sensibly overwrite
+# its own bundled/extracted files. In frozen mode, checking still works
+# (so the person can be told "an update exists"), but applying it is
+# refused with a message pointing them at a fresh download instead.
+#
+# What gets overwritten on apply: only the app's own source/asset files
+# (index.html, app.js, styles.css, server.py, desktop.py, start.bat, and
+# everything under sprites/) — never saves/, never anything holding
+# actual study data. The freshly downloaded copy of each of those files
+# completely replaces the local one; nothing is merged.
+# ═══════════════════════════════════════════════════════════════════
+GITHUB_REPO = "kiribunshin/study-tracker"
+GITHUB_BRANCH = "main"
+UPDATE_STATE_PATH = SAVES_DIR / "_update_state.json"
+UPDATE_SAFE_TOP_LEVEL = {"index.html", "app.js", "styles.css",
+                          "server.py", "desktop.py", "start.bat", "sprites"}
+
+def _is_frozen_exe():
+    return bool(getattr(sys, "frozen", False))
+
+def _load_update_state():
+    if UPDATE_STATE_PATH.exists():
+        try:
+            with open(UPDATE_STATE_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"last_synced_sha": None, "last_checked": None}
+
+def _save_update_state(state):
+    try:
+        with open(UPDATE_STATE_PATH, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+
+def _github_api_get(url):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Cultivar-UpdateChecker",
+        "Accept": "application/vnd.github+json",
+    })
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def check_for_update():
+    """Returns a dict describing update availability. Never raises —
+    network failures are reported back as a normal (non-error) 'could
+    not check' result so a flaky connection never looks like a crash."""
+    state = _load_update_state()
+    try:
+        latest = _github_api_get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}")
+        latest_sha = latest.get("sha")
+        commit_info = latest.get("commit", {})
+        message = (commit_info.get("message") or "").split("\n")[0]
+        date = (commit_info.get("author") or {}).get("date")
+    except Exception as e:
+        return {"ok": False, "error": f"Could not reach GitHub to check for updates: {e}",
+                "current_sha": state.get("last_synced_sha")}
+
+    current_sha = state.get("last_synced_sha")
+    state["last_checked"] = now_str()
+    _save_update_state(state)
+
+    if not current_sha:
+        # First time this install has ever checked — treat the current
+        # running code as the baseline instead of claiming an update is
+        # available purely because nothing was recorded yet.
+        state["last_synced_sha"] = latest_sha
+        _save_update_state(state)
+        return {"ok": True, "update_available": False, "current_sha": latest_sha,
+                "latest_sha": latest_sha, "message": message, "date": date}
+
+    return {
+        "ok": True, "update_available": latest_sha != current_sha,
+        "current_sha": current_sha, "latest_sha": latest_sha,
+        "message": message, "date": date,
+        "frozen": _is_frozen_exe(),
+    }
+
+def apply_update():
+    """Downloads the latest commit's zipball and overwrites this
+    install's own app files with it (see UPDATE_SAFE_TOP_LEVEL — saves/
+    is never touched). Returns dict with ok/error. Caller is responsible
+    for triggering a restart afterward."""
+    if _is_frozen_exe():
+        return {"ok": False, "error": "This is a packaged .exe build — auto-update can't overwrite a running executable. Please download the latest release manually."}
+
+    url = f"https://codeload.github.com/{GITHUB_REPO}/zip/refs/heads/{GITHUB_BRANCH}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Cultivar-UpdateChecker"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            zip_bytes = resp.read()
+    except Exception as e:
+        return {"ok": False, "error": f"Download failed: {e}"}
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="Cultivar_update_"))
+    try:
+        zip_path = tmp_dir / "update.zip"
+        zip_path.write_bytes(zip_bytes)
+        with _zipfile_mod.ZipFile(zip_path) as zf:
+            zf.extractall(tmp_dir)
+        # The zipball extracts into a single "<repo>-<branch>/" folder.
+        extracted_roots = [p for p in tmp_dir.iterdir() if p.is_dir()]
+        if not extracted_roots:
+            return {"ok": False, "error": "Downloaded archive looked empty."}
+        src_root = extracted_roots[0]
+
+        copied = []
+        for name in UPDATE_SAFE_TOP_LEVEL:
+            src = src_root / name
+            if not src.exists():
+                continue
+            dest = APP_DIR / name
+            if src.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(src, dest)
+            else:
+                shutil.copy2(src, dest)
+            copied.append(name)
+
+        try:
+            latest = _github_api_get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}")
+            new_sha = latest.get("sha")
+        except Exception:
+            new_sha = None
+        state = _load_update_state()
+        state["last_synced_sha"] = new_sha
+        state["last_applied"] = now_str()
+        _save_update_state(state)
+        return {"ok": True, "copied": copied, "new_sha": new_sha}
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to apply update: {e}"}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+@app.route("/api/update/check")
+def update_check():
+    return jsonify(check_for_update())
+
+@app.route("/api/update/apply", methods=["POST"])
+def update_apply():
+    result = apply_update()
+    return jsonify(result)
+
+@app.route("/api/update/restart", methods=["POST"])
+def update_restart():
+    """Restarts this process in place (same interpreter, same argv) —
+    used right after an update is applied, or any time the person just
+    wants a clean restart. Responds first, then swaps the process out
+    from under itself a moment later so the response actually reaches
+    the browser before the server disappears."""
+    def _do_restart():
+        time.sleep(0.6)
+        python = sys.executable
+        os.execv(python, [python] + sys.argv)
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return jsonify({"ok": True, "restarting": True})
+
 DEFAULT_DATA = {
     "self_study": [],
     "attendance": [],
@@ -277,7 +515,6 @@ PLANT_LEVEL_COLORS = ["#8bc34a", "#5a9e3d", "#2e7d32", "#f9a825", "#e64a19"]
 # type — see the inventory-slot economy below.
 HARVEST_GROWTH_HOURS_INTERVAL = 5.0
 HARVEST_LOCKOUT_HOURS = 1.0
-FRUIT_SELL_PRICE = 90   # flat Nerds sell price for any plant's fruit item, uniform for now
 
 # Prestige tiers (past PLANT_MAX_LEVEL) reuse the SAME 10-tier color
 # ladder as badges/mastery — one consistent "achievement color" language
@@ -334,6 +571,11 @@ FERTILIZER_COST = 45                     # flat Nerds cost, every time
 # sold back. Priced to be a real, but reachable, first goal.
 SEED_SHOP_BUY_PRICE = 750
 SEED_SHOP_SELL_PRICE = 120
+# Fallback fruit sell price used when a plant def somehow omits its own
+# fruit_sell_price (every PLANT_DEFS entry currently sets one explicitly,
+# but botanarium_catalog/shop_catalog/shop_sell all reference this name
+# as a safety-net default, so it must exist).
+FRUIT_SELL_PRICE = 80
 
 # Fast Grower (the Level 4 bonus) is upgraded with SEEDS, not Nerds —
 # each tier doubles the seed cost of the last (1,2,4,8,16 = 31 seeds to
@@ -434,7 +676,7 @@ PLANT_COLLECTIONS = [
 # check for space first and do not silently overflow or discard.
 INVENTORY_SLOT_BASE_COST = 500
 INVENTORY_SLOT_COST_GROWTH = 1.35
-INVENTORY_SLOT_MAX_PURCHASES = 40
+INVENTORY_SLOT_MAX_PURCHASES = 59
 
 # ── Passive Yield (every plant/tree, at every level, generates Nerds
 # passively over real time — this is the "Claim" button on each card) ──
@@ -1872,7 +2114,7 @@ BOOK_ENTRIES = [
 
 # ── Misc / System ──
 TRASH_MAX_ENTRIES = 20                     # how many recent deletions the undo trash keeps
-INVENTORY_SLOT_COUNT = 20                  # fixed grid size shown in the Inventory page
+INVENTORY_SLOT_COUNT = 1                   # fixed grid size shown in the Inventory page
 DEFAULT_ATTENDANCE_MINUTES_FALLBACK = 90   # used when a schedule slot's start/end time can't be parsed
 DEFAULT_ML_MIN_RECORDS = 30                # config default for a profile's "ml_min_records" field
 # ═══════════════════════════════════════════════════════════════════
@@ -1905,6 +2147,154 @@ def save_dir(profile):
 def files_dir(profile):
     return save_dir(profile) / FILES_DIR_NAME
 
+# ── Folder-name sanitization ──
+# Keeps the folder human-readable (unlike secure_filename, which mangles
+# spaces/unicode) while stripping anything that could escape the
+# category/subject directory or confuse a real OS file manager.
+_FOLDER_BAD_CHARS = '/\\:*?"<>|\0'
+
+def _sanitize_folder_name(name):
+    name = (name or "").strip()
+    for ch in _FOLDER_BAD_CHARS:
+        name = name.replace(ch, "")
+    name = name.strip(" .")
+    name = " ".join(name.split())  # collapse internal whitespace runs
+    if not name:
+        name = "untitled"
+    return name[:80]
+
+def _unique_dir(parent, wanted_name):
+    """If `wanted_name` collides with an existing, DIFFERENT directory
+    under `parent`, appends ' (2)', ' (3)', ... until it doesn't."""
+    candidate = wanted_name
+    n = 2
+    while (parent / candidate).exists():
+        candidate = f"{wanted_name} ({n})"
+        n += 1
+    return candidate
+
+def _item_folder_rel(cfg, item, kind):
+    """Computes the CURRENT canonical relative folder path (relative to
+    files_dir(profile)) for a subject or skill, from its name + category
+    — category-agnostic between subjects/skills sharing the same
+    category is intentional (kind='subject'|'skill' only matters for
+    which category list to look in)."""
+    cat_list = cfg.get("subject_categories", []) if kind == "subject" else cfg.get("skill_categories", [])
+    cat = next((c for c in cat_list if c["id"] == item.get("category_id")), None)
+    name_part = _sanitize_folder_name(item.get("name", "untitled"))
+    if cat:
+        return f"{_sanitize_folder_name(cat['name'])}/{name_part}"
+    return name_part
+
+def _reconcile_item_folder(profile, cfg, item, kind):
+    """Ensures item['folder'] on disk matches what _item_folder_rel()
+    says it SHOULD be right now, physically moving the directory if the
+    name or category changed. Non-fatal on any filesystem hiccup (a
+    failed move just leaves the old folder in place rather than losing
+    data) — always returns the folder path actually in use afterward."""
+    root = files_dir(profile)
+    root.mkdir(parents=True, exist_ok=True)
+    wanted_rel = _item_folder_rel(cfg, item, kind)
+    current_rel = item.get("folder")
+    if current_rel is None:
+        # Never reconciled before — check for a pre-File-Explorer,
+        # id-keyed legacy folder (_files/<id> or _files/skill_<id>) and
+        # treat IT as the current location so its files get adopted
+        # into the new Category/Name path instead of left behind.
+        legacy_name = f"skill_{item['id']}" if kind == "skill" else item["id"]
+        if (root / legacy_name).exists():
+            current_rel = legacy_name
+        else:
+            current_rel = wanted_rel  # nothing legacy to migrate — just create fresh below
+    if current_rel == wanted_rel:
+        (root / current_rel).mkdir(parents=True, exist_ok=True)
+        item["folder"] = current_rel
+        return current_rel
+    wanted_abs = root / wanted_rel
+    wanted_abs.parent.mkdir(parents=True, exist_ok=True)
+    current_abs = (root / current_rel) if current_rel else None
+    try:
+        if current_abs and current_abs.exists():
+            if wanted_abs.exists():
+                # Destination already has SOMETHING (rare name/category
+                # collision) — merge by picking a disambiguated name
+                # rather than overwriting or losing either folder.
+                parts = wanted_rel.rsplit("/", 1)
+                base_name = parts[-1]
+                unique_name = _unique_dir(wanted_abs.parent, base_name)
+                wanted_abs = wanted_abs.parent / unique_name
+                wanted_rel = f"{parts[0]}/{unique_name}" if len(parts) > 1 else unique_name
+            shutil.move(str(current_abs), str(wanted_abs))
+            # A category rename/removal can leave an empty parent
+            # category folder behind — tidy it up if so.
+            if current_abs.parent != root and current_abs.parent.exists():
+                try:
+                    current_abs.parent.rmdir()
+                except OSError:
+                    pass
+        else:
+            wanted_abs.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Filesystem move failed for some reason (permissions, file in
+        # use, etc.) — keep whatever the old folder was rather than
+        # silently orphaning the item's files.
+        if current_rel and (root / current_rel).exists():
+            return current_rel
+        wanted_abs.mkdir(parents=True, exist_ok=True)
+    item["folder"] = wanted_rel
+    return wanted_rel
+
+def _item_root_dir(profile, ref_type, ref_id, cfg=None):
+    """Resolves a subject/skill's own root folder as an absolute Path,
+    creating it (and reconciling its name/category-derived location) if
+    needed. Returns None if the subject/skill doesn't exist."""
+    cfg = cfg or load_config(profile)
+    if ref_type == "skill":
+        item = next((s for s in cfg.get("skills", []) if s["id"] == ref_id), None)
+        kind = "skill"
+    else:
+        item = next((s for s in cfg.get("subjects", []) if s["id"] == ref_id), None)
+        kind = "subject"
+    if not item:
+        return None
+    rel = _reconcile_item_folder(profile, cfg, item, kind)
+    save_config(profile, cfg)
+    return files_dir(profile) / rel
+
+def _safe_subpath(root, rel_path):
+    """Resolves `rel_path` (a '/'-separated relative path from the
+    request) against `root`, refusing anything that would escape it
+    (../, absolute paths, symlink shenanigans). Returns None if unsafe."""
+    rel_path = (rel_path or "").strip().strip("/")
+    candidate = (root / rel_path).resolve() if rel_path else root.resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+def _read_filemeta(folder_abs):
+    p = folder_abs / FILEMETA_NAME
+    if p.exists():
+        try:
+            with open(p) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _write_filemeta(folder_abs, meta):
+    p = folder_abs / FILEMETA_NAME
+    if not meta:
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return
+    with open(p, "w") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+
 def config_path(profile):
     return save_dir(profile) / "config.json"
 
@@ -1922,6 +2312,20 @@ def load_config(profile):
         cfg.setdefault("attendance_default_mode", "manual")
         cfg.setdefault("attendance_autofill_last_date", "")
         cfg.setdefault("skill_categories", [])
+        cfg.setdefault("subject_categories", [])
+        # Migration: subjects/skills from before the freeform File
+        # Explorer existed had their files sitting in an id-keyed folder
+        # (_files/<subject_id> or _files/skill_<skill_id>) with no
+        # `folder` field on the record at all. First load after
+        # upgrading, adopt that legacy folder as-is (rather than moving
+        # anything sight-unseen) by just recording its path — the very
+        # next name/category edit (or simply opening Files) will then
+        # naturally reconcile it to the proper Category/Name location
+        # via _reconcile_item_folder.
+        for s in cfg.get("subjects", []):
+            s.setdefault("folder", None)  # resolved lazily by _reconcile_item_folder
+        for s in cfg.get("skills", []):
+            s.setdefault("folder", None)
         # Migration: skills used to carry a free-text `category` string
         # with no structure behind it. First load after upgrading,
         # every distinct non-empty string in use gets turned into a
@@ -1949,10 +2353,44 @@ def load_config(profile):
         return cfg
     return None
 
+# ── Concurrent-write safety ──
+# Now that the server runs threaded (see app.run(..., threaded=True)),
+# a PC tab and a phone tab really can hit the same profile's save file
+# at the exact same moment (e.g. both stopping a timer within the same
+# second). Two protections against that:
+#   1. A per-profile lock serializes the actual read-modify-write cycle
+#      for that profile's files, so two concurrent requests can't
+#      interleave their writes into a torn/corrupted JSON file.
+#   2. Writes land in a temp file first, then atomically replace the
+#      real file (os.replace) — so even a mid-write crash/power loss
+#      can never leave a half-written, unreadable file behind; the
+#      previous complete version stays intact until the new one is
+#      fully flushed.
+# This does NOT solve "read-then-write" races across two DIFFERENT
+# requests (e.g. both read the same old state and each write back a
+# version missing the other's change) — that would need a bigger
+# redesign. For a solo person using their own phone + PC, that's an
+# extremely narrow window (sub-second) and not worth the complexity;
+# what actually matters day to day (no corrupted files) is covered.
+_profile_locks = defaultdict(threading.RLock)
+_profile_locks_guard = threading.Lock()
+
+def _lock_for(profile):
+    with _profile_locks_guard:
+        return _profile_locks[profile]
+
+def _atomic_write_json(path, data):
+    tmp_path = path.parent / (path.name + f".tmp{os.getpid()}")
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
 def save_config(profile, d):
     d["_last_modified"] = now_str()
-    with open(config_path(profile), "w") as f:
-        json.dump(d, f, indent=2, ensure_ascii=False)
+    with _lock_for(profile):
+        _atomic_write_json(config_path(profile), d)
 
 def load_data(profile):
     p = data_path(profile)
@@ -1966,17 +2404,17 @@ def load_data(profile):
 def save_data(profile, d):
     d = {key: d.get(key, value.copy() if isinstance(value, list) else value) for key, value in DEFAULT_DATA.items()}
     p = data_path(profile)
-    # Keep one rolling backup of the previous version before overwriting.
-    # This is a last-resort safety net independent of the undo/trash
-    # system below — if anything ever wipes data unexpectedly, the prior
-    # state is still recoverable straight from disk.
-    if p.exists():
-        try:
-            shutil.copy(p, p.parent / (p.name + ".bak"))
-        except Exception:
-            pass
-    with open(p, "w") as f:
-        json.dump(d, f, indent=2, ensure_ascii=False)
+    with _lock_for(profile):
+        # Keep one rolling backup of the previous version before overwriting.
+        # This is a last-resort safety net independent of the undo/trash
+        # system below — if anything ever wipes data unexpectedly, the prior
+        # state is still recoverable straight from disk.
+        if p.exists():
+            try:
+                shutil.copy(p, p.parent / (p.name + ".bak"))
+            except Exception:
+                pass
+        _atomic_write_json(p, d)
 
 # ── Undo / trash ──
 # A lightweight, single-level undo for accidental deletions. Kept in a
@@ -2670,14 +3108,14 @@ def add_subject(name):
         "color": data.get("color", "#4a90d9"),
         "difficulty": data.get("difficulty", 5),
         "year_id": data.get("year_id", ""),
-        "schedule": data.get("schedule", [])  # [{day: "monday", type: "C", start: "08:00", end: "09:30"}]
+        "category_id": data.get("category_id", ""),
+        "schedule": data.get("schedule", []),  # [{day: "monday", type: "C", start: "08:00", end: "09:30"}]
+        "folder": None,
     }
     cfg = load_config(name)
     cfg.setdefault("subjects", []).append(subject)
+    _reconcile_item_folder(name, cfg, subject, "subject")
     save_config(name, cfg)
-    # Create file folder
-    fd = files_dir(name) / subject["id"]
-    fd.mkdir(exist_ok=True)
     return jsonify({"ok": True, "subject": subject})
 
 @app.route("/api/<name>/subjects/<sub_id>", methods=["PUT"])
@@ -2688,6 +3126,7 @@ def update_subject(name, sub_id):
     for s in cfg.get("subjects", []):
         if s["id"] == sub_id:
             s.update(data)
+            _reconcile_item_folder(name, cfg, s, "subject")
             break
     save_config(name, cfg)
     return jsonify({"ok": True})
@@ -2696,6 +3135,8 @@ def update_subject(name, sub_id):
 def delete_subject(name, sub_id):
     ensure_profile(name)
     cfg = load_config(name)
+    subject = next((s for s in cfg.get("subjects", []) if s["id"] == sub_id), None)
+    folder_rel = _reconcile_item_folder(name, cfg, subject, "subject") if subject else None
     cfg["subjects"] = [s for s in cfg.get("subjects", []) if s["id"] != sub_id]
     save_config(name, cfg)
     # Cascade delete: previously, records referencing this subject_id
@@ -2709,9 +3150,17 @@ def delete_subject(name, sub_id):
     d["attendance"] = [r for r in d.get("attendance", []) if r.get("subject_id") != sub_id]
     d["exams"] = [r for r in d.get("exams", []) if r.get("subject_id") != sub_id]
     save_data(name, d)
-    fd = files_dir(name) / sub_id
-    if fd.exists():
-        shutil.rmtree(fd)
+    if folder_rel:
+        fd = files_dir(name) / folder_rel
+        if fd.exists():
+            shutil.rmtree(fd, ignore_errors=True)
+            # Clean up now-empty category folder, if any.
+            try:
+                fd.parent.relative_to(files_dir(name))
+                if fd.parent != files_dir(name) and fd.parent.exists() and not any(fd.parent.iterdir()):
+                    fd.parent.rmdir()
+            except Exception:
+                pass
     return jsonify({"ok": True})
 
 # ── Skills & Skill Categories ──
@@ -2731,6 +3180,55 @@ def add_skill_category(name):
     save_config(name, cfg)
     return jsonify({"ok": True, "category": cat})
 
+@app.route("/api/<name>/skill_categories/<cat_id>", methods=["DELETE"])
+def delete_skill_category(name, cat_id):
+    ensure_profile(name)
+    cfg = load_config(name)
+    cfg["skill_categories"] = [c for c in cfg.get("skill_categories", []) if c["id"] != cat_id]
+    for s in cfg.get("skills", []):
+        if s.get("category_id") == cat_id:
+            s["category_id"] = ""
+            _reconcile_item_folder(name, cfg, s, "skill")
+    save_config(name, cfg)
+    return jsonify({"ok": True})
+
+@app.route("/api/<name>/subject_categories", methods=["POST"])
+def add_subject_category(name):
+    """Subject categories (e.g. 'Mathematics' holding both 'Algebra' and
+    'Analysis') are a separate list from skill_categories, but nothing
+    stops the SAME real-world topic being used as both — 'Mathematics'
+    as a subject category (uni coursework) and again as a skill category
+    (e.g. ML self-study) are just two independently-named records that
+    happen to share a label; there's no forced linking between them."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    cat_name = (data.get("name") or "").strip()
+    if not cat_name:
+        return jsonify({"error": "Category name required"}), 400
+    cfg = load_config(name)
+    existing = next((c for c in cfg.get("subject_categories", []) if c["name"].lower() == cat_name.lower()), None)
+    if existing:
+        return jsonify({"ok": True, "category": existing})
+    cat = {"id": gen_id(8), "name": cat_name}
+    cfg.setdefault("subject_categories", []).append(cat)
+    save_config(name, cfg)
+    return jsonify({"ok": True, "category": cat})
+
+@app.route("/api/<name>/subject_categories/<cat_id>", methods=["DELETE"])
+def delete_subject_category(name, cat_id):
+    """Deleting a category un-categorizes (never deletes) its subjects —
+    each affected subject's category_id is cleared and its folder is
+    reconciled back up to the top level."""
+    ensure_profile(name)
+    cfg = load_config(name)
+    cfg["subject_categories"] = [c for c in cfg.get("subject_categories", []) if c["id"] != cat_id]
+    for s in cfg.get("subjects", []):
+        if s.get("category_id") == cat_id:
+            s["category_id"] = ""
+            _reconcile_item_folder(name, cfg, s, "subject")
+    save_config(name, cfg)
+    return jsonify({"ok": True})
+
 @app.route("/api/<name>/skills", methods=["POST"])
 def add_skill(name):
     ensure_profile(name)
@@ -2745,13 +3243,13 @@ def add_skill(name):
         # blocks (same shape as subject schedule), so they can be placed
         # on the Timetable — e.g. during a vacation week, when lessons
         # are suppressed but self-skilling sessions still make sense.
-        "schedule": data.get("schedule", [])
+        "schedule": data.get("schedule", []),
+        "folder": None,
     }
     cfg = load_config(name)
     cfg.setdefault("skills", []).append(skill)
+    _reconcile_item_folder(name, cfg, skill, "skill")
     save_config(name, cfg)
-    fd = files_dir(name) / f"skill_{skill['id']}"
-    fd.mkdir(exist_ok=True)
     return jsonify({"ok": True, "skill": skill})
 
 @app.route("/api/<name>/skills/<skill_id>", methods=["PUT"])
@@ -2762,6 +3260,7 @@ def update_skill(name, skill_id):
     for s in cfg.get("skills", []):
         if s["id"] == skill_id:
             s.update(data)
+            _reconcile_item_folder(name, cfg, s, "skill")
             break
     save_config(name, cfg)
     return jsonify({"ok": True})
@@ -2770,14 +3269,23 @@ def update_skill(name, skill_id):
 def delete_skill(name, skill_id):
     ensure_profile(name)
     cfg = load_config(name)
+    skill = next((s for s in cfg.get("skills", []) if s["id"] == skill_id), None)
+    folder_rel = _reconcile_item_folder(name, cfg, skill, "skill") if skill else None
     cfg["skills"] = [s for s in cfg.get("skills", []) if s["id"] != skill_id]
     save_config(name, cfg)
     d = load_data(name)
     d["self_study"] = [r for r in d.get("self_study", []) if r.get("skill_id") != skill_id]
     save_data(name, d)
-    fd = files_dir(name) / f"skill_{skill_id}"
-    if fd.exists():
-        shutil.rmtree(fd)
+    if folder_rel:
+        fd = files_dir(name) / folder_rel
+        if fd.exists():
+            shutil.rmtree(fd, ignore_errors=True)
+            try:
+                fd.parent.relative_to(files_dir(name))
+                if fd.parent != files_dir(name) and fd.parent.exists() and not any(fd.parent.iterdir()):
+                    fd.parent.rmdir()
+            except Exception:
+                pass
     return jsonify({"ok": True})
 
 # ── Self-Study Records ──
@@ -3111,100 +3619,468 @@ def delete_event(name, event_id):
     save_data(name, d)
     return jsonify({"ok": True})
 
-# ── Timer ──
+# ── Timer (single shared, server-authoritative "active timer" per profile) ──
+# Exactly ONE timer can be running/paused/awaiting-rating per profile at
+# a time — this is what makes starting a timer from a phone and a PC at
+# the same moment safe: the SECOND device to hit /timer/start is handed
+# back the FIRST device's already-active timer instead of creating a
+# competing one, so a session can never be double-logged. Every device
+# polls GET /timer/active to stay in sync with whichever device is
+# actually driving it, and pause/resume/stop/skip all operate on that
+# one shared record regardless of which device sent the request.
+# A timer left "running"/"paused"/"awaiting_rating" for longer than this
+# is almost certainly an orphan — a session that outlived a crash, a
+# killed process, a laptop put to sleep for days, or leftover test data
+# — rather than a real multi-day study session. Auto-cancelling it here
+# is what stops a stale timer from silently reappearing on next load
+# with controls that look normal but don't behave like a fresh session
+# (see the "timer showed 30min planned with working-looking buttons on
+# a totally fresh app load" bug report).
+STALE_TIMER_MAX_HOURS = 18
+
+def _is_timer_stale(t):
+    anchor = t.get("phase_ends_at") or t.get("started_at")
+    if not anchor:
+        return True
+    try:
+        anchor_dt = datetime.strptime(anchor, "%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return True
+    return (datetime.now() - anchor_dt).total_seconds() > STALE_TIMER_MAX_HOURS * 3600
+
+def _free_timer_ensure_open_segment(t):
+    """A 'running' free-mode timer with no OPEN study segment is broken:
+    the widget shows Pause/Stop/Cancel (because status says running) but
+    the clock can never advance, since paintTimerNumbers() has no open
+    segment to compute elapsed time from — exactly the 'buttons show but
+    stuck at 0:00, untouched' bug. This can happen if a pause/resume
+    cycle got interrupted (crash, killed process, browser closed mid-
+    request) leaving segments in an inconsistent state. Self-heals by
+    reopening a fresh study segment right now, rather than leaving the
+    person stuck with a dead-looking timer they can't even watch tick."""
+    if t.get("mode") != "free" or t.get("status") != "running":
+        return False
+    segs = t.setdefault("segments", [])
+    if segs and segs[-1].get("type") == "study" and not segs[-1].get("end"):
+        return False  # already has a valid open segment
+    _timer_open_segment(t, "study")
+    return True
+
+def get_active_timer(d):
+    active = [t for t in d.get("timers", []) if t.get("status") in ("running", "paused", "awaiting_rating")]
+    if not active:
+        return None
+    still_active = []
+    for t in active:
+        if _is_timer_stale(t):
+            t["status"] = "cancelled"
+            t["completed_at"] = now_str()
+            t["cancel_reason"] = "auto-expired (stale)"
+        else:
+            still_active.append(t)
+    active = still_active
+    if not active:
+        return None
+    if len(active) > 1:
+        # Self-heal: legacy data (from before this model existed) or a
+        # rare edge case could in theory leave more than one "active"
+        # timer on disk — keep only the most recently started one and
+        # quietly cancel the rest rather than ever showing two.
+        active.sort(key=lambda t: t.get("started_at", ""), reverse=True)
+        for stale in active[1:]:
+            stale["status"] = "cancelled"
+    return active[0]
+
+def _get_active_timer_and_advance(d):
+    """Used by /timer/active. Returns (timer_or_None, changed) —
+    `changed` is True only if get_active_timer's self-heal or
+    _pomodoro_ensure_current's phase catch-up actually mutated
+    something, so the caller can skip an unnecessary save_data() on
+    the common case where nothing needed fixing."""
+    before = json.dumps(d.get("timers", []), sort_keys=True, default=str)
+    t = get_active_timer(d)
+    if t:
+        _pomodoro_ensure_current(t)
+        _free_timer_ensure_open_segment(t)
+    after = json.dumps(d.get("timers", []), sort_keys=True, default=str)
+    return t, before != after
+
+def _timer_open_segment(timer, seg_type):
+    timer.setdefault("segments", []).append({"type": seg_type, "start": now_str(), "end": None})
+
+def _timer_close_open_segment(timer):
+    segs = timer.get("segments", [])
+    if segs and not segs[-1].get("end"):
+        segs[-1]["end"] = now_str()
+
+def _pomodoro_phase_sequence(config):
+    seq = []
+    blocks = config.get("blocks", 1)
+    every = config.get("every", 4)
+    for i in range(1, blocks + 1):
+        seq.append({"phase": "work", "block": i})
+        if i < blocks:
+            seq.append({"phase": "long" if i % every == 0 else "short", "block": i})
+    return seq
+
+def _pomodoro_phase_minutes(config, step):
+    if step["phase"] == "work":
+        return config.get("work", 25)
+    if step["phase"] == "long":
+        return config.get("long", 15)
+    return config.get("short", 5)
+
+def _pomodoro_ensure_current(timer):
+    """Walks the timer's Pomodoro phase forward past any phases that
+    have already fully elapsed in real time — matters because devices
+    only poll periodically (or might be closed entirely for a while),
+    so the phase needs to 'catch up' to the actual current time rather
+    than staying stuck wherever it was last observed. When the final
+    work phase's time is up, the timer moves to 'awaiting_rating'
+    instead of vanishing — someone still needs to confirm the session
+    (difficulty/status/note) before it becomes a real self-study record,
+    so it waits there for whichever device next stops it."""
+    if timer.get("mode") != "pomodoro" or timer.get("status") != "running":
+        return
+    config = timer.get("pomodoro_config", {})
+    seq = _pomodoro_phase_sequence(config)
+    now_dt = datetime.now()
+    guard = 0
+    while guard < 200:
+        guard += 1
+        idx = timer.get("pomodoro_idx", 0)
+        if idx >= len(seq):
+            timer["status"] = "awaiting_rating"
+            _timer_close_open_segment(timer)
+            return
+        ends_at = timer.get("phase_ends_at")
+        try:
+            ends_dt = datetime.strptime(ends_at, "%Y-%m-%dT%H:%M:%S") if ends_at else None
+        except Exception:
+            ends_dt = None
+        if not ends_dt or now_dt < ends_dt:
+            return
+        step = seq[idx]
+        if step["phase"] == "work":
+            timer["work_minutes_done"] = timer.get("work_minutes_done", 0) + _pomodoro_phase_minutes(config, step)
+        idx += 1
+        timer["pomodoro_idx"] = idx
+        if idx >= len(seq):
+            timer["status"] = "awaiting_rating"
+            _timer_close_open_segment(timer)
+            return
+        next_step = seq[idx]
+        minutes = _pomodoro_phase_minutes(config, next_step)
+        timer["phase_started_at"] = ends_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        timer["phase_ends_at"] = (ends_dt + __import__("datetime").timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+        _timer_close_open_segment(timer)
+        _timer_open_segment(timer, "study" if next_step["phase"] == "work" else "break")
+
+def serialize_timer_for_client(timer):
+    """Everything a client needs to render the timer widget/mini-badge
+    without doing any of its own bookkeeping — all derived server-side
+    so two devices can never compute a slightly different answer.
+    `server_now` lets each client compute its own countdown/elapsed
+    display between polls without assuming its clock matches the
+    server's exactly."""
+    out = {
+        "id": timer["id"], "mode": timer.get("mode", "free"),
+        "subject_id": timer.get("subject_id", ""), "skill_id": timer.get("skill_id", ""),
+        "planned_minutes": timer.get("planned_minutes", 0),
+        "status": timer.get("status"), "started_at": timer.get("started_at"),
+        "server_now": now_str(),
+    }
+    if timer.get("mode") == "pomodoro":
+        config = timer.get("pomodoro_config", {})
+        seq = _pomodoro_phase_sequence(config)
+        idx = timer.get("pomodoro_idx", 0)
+        out["pomodoro_config"] = config
+        out["pomodoro_total_blocks"] = config.get("blocks", 1)
+        out["work_minutes_done"] = round(timer.get("work_minutes_done", 0), 2)
+        if idx < len(seq):
+            step = seq[idx]
+            out["phase"] = step["phase"]
+            out["phase_block"] = step["block"]
+            out["phase_ends_at"] = timer.get("phase_ends_at")
+            out["phase_minutes"] = _pomodoro_phase_minutes(config, step)
+        else:
+            out["phase"] = None
+    else:
+        segs = timer.get("segments", [])
+        accumulated = 0.0
+        open_since = None
+        for s in segs:
+            if s.get("type") != "study":
+                continue
+            if s.get("end"):
+                try:
+                    st = datetime.strptime(s["start"], "%Y-%m-%dT%H:%M:%S")
+                    en = datetime.strptime(s["end"], "%Y-%m-%dT%H:%M:%S")
+                    accumulated += (en - st).total_seconds()
+                except Exception:
+                    pass
+            elif timer.get("status") == "running":
+                open_since = s.get("start")
+        out["accumulated_seconds"] = round(accumulated)
+        out["open_segment_since"] = open_since  # None while paused
+    return out
+
+def _hhmm_to_min(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+def _split_segments_by_day(segments):
+    """Turns real ISO start/end timestamps into per-day
+    {type, start:'HH:MM', end:'HH:MM'} slices, splitting any segment
+    that crosses midnight so each piece lands on the correct calendar
+    day (a piece running to exactly midnight is written as '24:00',
+    matching how the Timetable already clips the bottom of a day's
+    column with no special-casing needed)."""
+    by_day = {}
+    for seg in segments:
+        if not seg.get("end"):
+            continue
+        try:
+            cur_start = datetime.strptime(seg["start"], "%Y-%m-%dT%H:%M:%S")
+            seg_end = datetime.strptime(seg["end"], "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            continue
+        guard = 0
+        while cur_start < seg_end and guard < 30:
+            guard += 1
+            day_str = cur_start.strftime("%Y-%m-%d")
+            next_midnight = datetime(cur_start.year, cur_start.month, cur_start.day) + __import__("datetime").timedelta(days=1)
+            piece_end = seg_end if seg_end < next_midnight else next_midnight
+            start_min = cur_start.hour * 60 + cur_start.minute
+            crosses = piece_end == next_midnight
+            end_min = 24 * 60 if crosses else (piece_end.hour * 60 + piece_end.minute)
+            if end_min > start_min:
+                start_str = f"{start_min // 60:02d}:{start_min % 60:02d}"
+                end_str = f"{end_min // 60:02d}:{end_min % 60:02d}"
+                by_day.setdefault(day_str, []).append({"type": seg["type"], "start": start_str, "end": end_str})
+            cur_start = piece_end
+    return by_day
+
+def _compute_day_buckets(segments):
+    by_day = _split_segments_by_day(segments)
+    buckets = []
+    for date, segs in by_day.items():
+        study_min = sum(max(0, _hhmm_to_min(s["end"]) - _hhmm_to_min(s["start"])) for s in segs if s["type"] == "study")
+        if study_min > 0:
+            buckets.append({"date": date, "minutes": round(study_min), "segments": segs})
+    buckets.sort(key=lambda b: b["date"])
+    return buckets
+
 @app.route("/api/<name>/timer/start", methods=["POST"])
 def timer_start(name):
     ensure_profile(name)
     data = request.get_json(force=True)
-    timer = {
-        "id": gen_id(12),
-        "subject_id": data.get("subject_id", ""),
-        "skill_id": data.get("skill_id", ""),
-        "planned_minutes": int(data.get("planned_minutes", 0)),
-        "actual_minutes": 0,
-        "started_at": now_str(),
-        "status": "running",
-        "note": data.get("note", "")
-    }
-    d = load_data(name)
-    d["timers"].append(timer)
-    save_data(name, d)
-    return jsonify({"ok": True, "timer": timer})
+    # The whole check-then-create is wrapped in this profile's lock so
+    # two devices hitting Start within the same instant can't BOTH see
+    # "nothing active" and both create a timer — one of them always
+    # loses the race and is hande the winner's timer instead.
+    with _lock_for(name):
+        d = load_data(name)
+        existing = get_active_timer(d)
+        if existing:
+            _pomodoro_ensure_current(existing)
+            _free_timer_ensure_open_segment(existing)
+            save_data(name, d)
+            return jsonify({"ok": True, "joined_existing": True, "timer": serialize_timer_for_client(existing)})
+        mode = data.get("mode", "free")
+        timer = {
+            "id": gen_id(12),
+            "subject_id": data.get("subject_id", ""),
+            "skill_id": data.get("skill_id", ""),
+            "planned_minutes": int(data.get("planned_minutes", 0)),
+            "mode": mode,
+            "started_at": now_str(),
+            "status": "running",
+            "segments": [],
+        }
+        if mode == "pomodoro":
+            raw_config = data.get("pomodoro_config") or {}
+            config = {
+                "work": int(raw_config.get("work", 25)), "short": int(raw_config.get("short", 5)),
+                "long": int(raw_config.get("long", 15)), "blocks": int(raw_config.get("blocks", 4)),
+                "every": int(raw_config.get("every", 4)),
+            }
+            timer["pomodoro_config"] = config
+            timer["pomodoro_idx"] = 0
+            timer["work_minutes_done"] = 0
+            seq = _pomodoro_phase_sequence(config)
+            first_minutes = _pomodoro_phase_minutes(config, seq[0]) if seq else config["work"]
+            timer["phase_started_at"] = timer["started_at"]
+            timer["phase_ends_at"] = (datetime.now() + __import__("datetime").timedelta(minutes=first_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+        _timer_open_segment(timer, "study")
+        d["timers"].append(timer)
+        save_data(name, d)
+        return jsonify({"ok": True, "joined_existing": False, "timer": serialize_timer_for_client(timer)})
+
+@app.route("/api/<name>/timer/active")
+def timer_active(name):
+    """Single-shot fetch of the current active timer (if any) — called on
+    app load, on switching profiles, and right after this same window's
+    own start/pause/resume/stop actions. Not polled on a loop; this is a
+    purely local, single-window desktop app now, so there's nothing else
+    that could have changed the timer in the background."""
+    ensure_profile(name)
+    with _lock_for(name):
+        d = load_data(name)
+        t, changed = _get_active_timer_and_advance(d)
+        if changed:
+            save_data(name, d)
+        return jsonify({"timer": serialize_timer_for_client(t) if t else None})
+
+@app.route("/api/<name>/timer/<timer_id>/pause", methods=["POST"])
+def timer_pause(name, timer_id):
+    ensure_profile(name)
+    with _lock_for(name):
+        d = load_data(name)
+        t = next((x for x in d["timers"] if x["id"] == timer_id), None)
+        if not t or t.get("status") != "running" or t.get("mode") != "free":
+            return jsonify({"error": "No running free timer to pause — it may have already been stopped from another device."}), 409
+        _timer_close_open_segment(t)
+        _timer_open_segment(t, "break")
+        t["status"] = "paused"
+        save_data(name, d)
+        return jsonify({"ok": True, "timer": serialize_timer_for_client(t)})
+
+@app.route("/api/<name>/timer/<timer_id>/resume", methods=["POST"])
+def timer_resume(name, timer_id):
+    ensure_profile(name)
+    with _lock_for(name):
+        d = load_data(name)
+        t = next((x for x in d["timers"] if x["id"] == timer_id), None)
+        if not t or t.get("status") != "paused":
+            return jsonify({"error": "No paused timer to resume — it may have already been stopped from another device."}), 409
+        _timer_close_open_segment(t)
+        _timer_open_segment(t, "study")
+        t["status"] = "running"
+        save_data(name, d)
+        return jsonify({"ok": True, "timer": serialize_timer_for_client(t)})
+
+@app.route("/api/<name>/timer/<timer_id>/pomodoro_advance", methods=["POST"])
+def timer_pomodoro_advance(name, timer_id):
+    """Manual 'Skip Phase' — credits partial work-phase progress if the
+    skipped phase was a work block, then jumps straight to the next
+    phase (or ends the sequence) regardless of how much time was left."""
+    ensure_profile(name)
+    with _lock_for(name):
+        d = load_data(name)
+        t = next((x for x in d["timers"] if x["id"] == timer_id), None)
+        if not t or t.get("mode") != "pomodoro" or t.get("status") != "running":
+            return jsonify({"error": "No running Pomodoro timer to advance — it may have already been stopped from another device."}), 409
+        _pomodoro_ensure_current(t)
+        if t.get("status") != "running":
+            save_data(name, d)
+            return jsonify({"ok": True, "timer": serialize_timer_for_client(t)})
+        config = t.get("pomodoro_config", {})
+        seq = _pomodoro_phase_sequence(config)
+        idx = t.get("pomodoro_idx", 0)
+        if idx < len(seq) and seq[idx]["phase"] == "work":
+            try:
+                ends_dt = datetime.strptime(t["phase_ends_at"], "%Y-%m-%dT%H:%M:%S")
+                phase_minutes = _pomodoro_phase_minutes(config, seq[idx])
+                remaining_sec = max(0, (ends_dt - datetime.now()).total_seconds())
+                done_min = max(0, phase_minutes - remaining_sec / 60.0)
+                t["work_minutes_done"] = t.get("work_minutes_done", 0) + done_min
+            except Exception:
+                pass
+        idx += 1
+        t["pomodoro_idx"] = idx
+        _timer_close_open_segment(t)
+        if idx >= len(seq):
+            t["status"] = "awaiting_rating"
+        else:
+            next_step = seq[idx]
+            minutes = _pomodoro_phase_minutes(config, next_step)
+            t["phase_started_at"] = now_str()
+            t["phase_ends_at"] = (datetime.now() + __import__("datetime").timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+            _timer_open_segment(t, "study" if next_step["phase"] == "work" else "break")
+        save_data(name, d)
+        return jsonify({"ok": True, "timer": serialize_timer_for_client(t)})
 
 @app.route("/api/<name>/timer/<timer_id>/stop", methods=["POST"])
 def timer_stop(name, timer_id):
+    """Finalizes the shared timer — from WHICHEVER device sends this
+    first. Minutes/segments are read from the SERVER's own record, not
+    trusted from the client, so two devices can never submit conflicting
+    numbers for the same session; whichever request loses a simultaneous
+    double-tap just gets 'already stopped' back instead of creating a
+    second, duplicate self-study record."""
     ensure_profile(name)
     data = request.get_json(force=True)
-    d = load_data(name)
-    xp_earned = 0.0
-    nerds_earned = 0.0
-    created_records = []
-    for t in d["timers"]:
-        if t["id"] == timer_id:
-            t["status"] = "completed"
-            t["actual_minutes"] = int(data.get("actual_minutes", 0))
-            t["completed_at"] = now_str()
-            t["difficulty"] = data.get("difficulty", 5)
-            t["self_study_status"] = data.get("self_study_status", "Done")
-            # Auto-create self-study record(s) if requested. A session
-            # that runs past midnight is split client-side into one
-            # "day bucket" per real calendar day it touched (see
-            # computeDayBuckets() in app.js) — each becomes its OWN
-            # self-study record with its own date, minutes, and slice
-            # of segments, so an overnight session shows up correctly
-            # on BOTH days instead of being mis-dated onto whichever day
-            # the Stop button happened to be pressed on, or silently
-            # losing whichever segment crossed midnight. day_buckets is
-            # optional for backward compatibility (older cached
-            # frontends, or any other API caller) — falls back to the
-            # old single-record-dated-today behavior if absent.
-            if data.get("auto_record", True):
-                day_buckets = data.get("day_buckets")
-                if not day_buckets:
-                    day_buckets = [{"date": today_str(), "minutes": t["actual_minutes"], "segments": data.get("segments", [])}]
-                for bucket in day_buckets:
-                    mins = int(bucket.get("minutes", 0))
-                    if mins <= 0:
-                        continue
-                    record = {
-                        "id": gen_id(12),
-                        "date": bucket.get("date", today_str()),
-                        "subject_id": t.get("subject_id", ""),
-                        "skill_id": t.get("skill_id", ""),
-                        "minutes": mins,
-                        "difficulty": data.get("difficulty", 5),
-                        "status": data.get("self_study_status", "Done"),
-                        # BUGFIX: this used to read t.get("note", "") — the
-                        # timer's OWN note field, which is set at
-                        # timer/start and is always empty since the start
-                        # form never collects one. The note the person
-                        # actually types is in the STOP request's rating
-                        # modal payload (see saveSession() in app.js),
-                        # which is `data` here, not `t`.
-                        "note": data.get("note", ""),
-                        # Study/break segments from the timer session (free timer
-                        # pause/resume cycles, or Pomodoro work/break phases) —
-                        # used by the Timetable to draw the session as multiple
-                        # visually-distinct but functionally-linked blocks
-                        # instead of one solid rectangle. Optional/empty for
-                        # manual self-study entries, which have no timer.
-                        "segments": bucket.get("segments", []),
-                        "grown_plant_id": _resolve_growth_plant_id(d),
-                        "created": now_str()
-                    }
-                    d["self_study"].append(record)
-                    created_records.append(record)
-            break
-    cfg = load_config(name)
-    for record in created_records:
-        _log_self_study_gain(cfg, d, record)
-    reconcile_nerds_ledger(cfg, d)
-    save_data(name, d)
-    for record in created_records:
-        xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
-        xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
-        nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
-    return jsonify({"ok": True, "xp_earned": round(xp_earned, 1), "nerds_earned": round(nerds_earned, 1), "records_created": len(created_records)})
+    with _lock_for(name):
+        d = load_data(name)
+        t = next((x for x in d["timers"] if x["id"] == timer_id), None)
+        if not t or t.get("status") not in ("running", "paused", "awaiting_rating"):
+            return jsonify({"error": "This session was already stopped — maybe from another device."}), 409
+        _pomodoro_ensure_current(t)
+        _timer_close_open_segment(t)
+        t["status"] = "completed"
+        t["completed_at"] = now_str()
+        t["difficulty"] = data.get("difficulty", 5)
+        t["self_study_status"] = data.get("self_study_status", "Done")
+        t["note"] = data.get("note", "")
+
+        day_buckets = _compute_day_buckets(t.get("segments", []))
+        if t.get("mode") == "pomodoro":
+            actual_minutes = max(0, round(t.get("work_minutes_done", 0)))
+        else:
+            actual_minutes = sum(b["minutes"] for b in day_buckets)
+        t["actual_minutes"] = actual_minutes
+
+        created_records = []
+        discard = bool(data.get("discard")) or actual_minutes <= 0
+        if not discard:
+            for bucket in day_buckets:
+                mins = int(bucket.get("minutes", 0))
+                if mins <= 0:
+                    continue
+                record = {
+                    "id": gen_id(12), "date": bucket.get("date", today_str()),
+                    "subject_id": t.get("subject_id", ""), "skill_id": t.get("skill_id", ""),
+                    "minutes": mins, "difficulty": t["difficulty"], "status": t["self_study_status"],
+                    "note": t["note"], "segments": bucket.get("segments", []),
+                    "grown_plant_id": _resolve_growth_plant_id(d), "created": now_str()
+                }
+                d["self_study"].append(record)
+                created_records.append(record)
+
+        cfg = load_config(name)
+        for record in created_records:
+            _log_self_study_gain(cfg, d, record)
+        reconcile_nerds_ledger(cfg, d)
+        save_data(name, d)
+
+        xp_earned = 0.0
+        nerds_earned = 0.0
+        for record in created_records:
+            xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
+            xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
+            nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
+        return jsonify({
+            "ok": True, "xp_earned": round(xp_earned, 1), "nerds_earned": round(nerds_earned, 1),
+            "records_created": len(created_records), "actual_minutes": actual_minutes,
+            "day_buckets": day_buckets
+        })
+
+@app.route("/api/<name>/timer/<timer_id>/cancel", methods=["POST"])
+def timer_cancel(name, timer_id):
+    """Abandons the active session without logging any study time — e.g.
+    started by mistake, or on the wrong subject. Reachable from any
+    device, same as everything else here."""
+    ensure_profile(name)
+    with _lock_for(name):
+        d = load_data(name)
+        t = next((x for x in d["timers"] if x["id"] == timer_id), None)
+        if not t or t.get("status") not in ("running", "paused", "awaiting_rating"):
+            return jsonify({"error": "Nothing to cancel — it may have already been stopped from another device."}), 409
+        t["status"] = "cancelled"
+        t["completed_at"] = now_str()
+        save_data(name, d)
+        return jsonify({"ok": True})
 
 @app.route("/api/<name>/timer/<timer_id>", methods=["DELETE"])
 def delete_timer(name, timer_id):
@@ -3214,73 +4090,369 @@ def delete_timer(name, timer_id):
     save_data(name, d)
     return jsonify({"ok": True})
 
-# ── File Upload ──
-@app.route("/api/<name>/files/<ref_type>/<ref_id>", methods=["POST"])
-def upload_file(name, ref_type, ref_id):
+# ═══════════════════════════════════════════════════════════════════
+# ── File Explorer ──
+# A freeform mini file-manager rooted at each subject/skill's own
+# folder (see _item_root_dir / _reconcile_item_folder above). Every
+# route below takes an optional `path` (query param on GET, JSON body
+# field on POST) — a '/'-separated path RELATIVE to that root — letting
+# the person create/rename/move/delete folders and files anywhere
+# inside their subject/skill's own space, exactly like a normal file
+# manager. `path` empty/omitted always means "the root itself".
+# ═══════════════════════════════════════════════════════════════════
+
+def _file_kind(filename):
+    ext = Path(filename).suffix.lower()
+    if ext in AUDIO_EXTENSIONS:
+        return "audio"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    if ext in PDF_EXTENSIONS:
+        return "pdf"
+    if ext in IMAGE_EXTENSIONS:
+        return "image"
+    if ext in (".md", ".markdown"):
+        return "markdown"
+    if ext in TEXT_EXTENSIONS:
+        return "text"
+    return "file"
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>")
+def filetree_list(name, ref_type, ref_id):
+    """Lists the folders + files directly inside `path`. Files include
+    a `has_notes` flag (from the folder's .filemeta.json sidecar) so the
+    UI can show a little note-indicator without a second round trip."""
+    ensure_profile(name)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, request.args.get("path", ""))
+    if target is None or not target.exists() or not target.is_dir():
+        return jsonify({"error": "Folder not found"}), 404
+    meta = _read_filemeta(target)
+    folders, files = [], []
+    for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+        if entry.name == FILEMETA_NAME or entry.name.startswith("."):
+            continue
+        if entry.is_dir():
+            file_count = sum(1 for _ in entry.rglob("*") if _.is_file() and _.name != FILEMETA_NAME)
+            folders.append({"name": entry.name, "file_count": file_count})
+        else:
+            fmeta = meta.get(entry.name, {})
+            files.append({
+                "name": entry.name,
+                "size": entry.stat().st_size,
+                "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.stat().st_mtime)),
+                "kind": _file_kind(entry.name),
+                "has_notes": bool(fmeta.get("notes") or fmeta.get("video_notes") or fmeta.get("pdf_notes")),
+            })
+    return jsonify({"path": request.args.get("path", ""), "folders": folders, "files": files})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/mkdir", methods=["POST"])
+def filetree_mkdir(name, ref_type, ref_id):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    parent = _safe_subpath(root, data.get("path", ""))
+    if parent is None or not parent.is_dir():
+        return jsonify({"error": "Invalid location"}), 400
+    folder_name = _sanitize_folder_name(data.get("name", ""))
+    unique = _unique_dir(parent, folder_name)
+    (parent / unique).mkdir(parents=True)
+    return jsonify({"ok": True, "name": unique})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/newfile", methods=["POST"])
+def filetree_newfile(name, ref_type, ref_id):
+    """Creates a brand-new empty (or pre-filled) text/markdown/code file
+    directly, without needing to upload one from outside the app first —
+    the counterpart to mkdir for files instead of folders."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    parent = _safe_subpath(root, data.get("path", ""))
+    if parent is None or not parent.is_dir():
+        return jsonify({"error": "Invalid location"}), 400
+    raw_name = (data.get("name") or "").strip()
+    if not raw_name:
+        return jsonify({"error": "Enter a filename"}), 400
+    safe_name = secure_filename(raw_name) or _sanitize_folder_name(raw_name)
+    if Path(safe_name).suffix.lower() not in TEXT_EXTENSIONS:
+        return jsonify({"error": "Only text/markdown/code file types can be created here — upload anything else instead."}), 400
+    dest = parent / safe_name
+    if dest.exists():
+        return jsonify({"error": "A file with that name already exists here"}), 409
+    dest.write_text(data.get("content", ""), encoding="utf-8")
+    return jsonify({"ok": True, "filename": dest.name, "kind": _file_kind(dest.name)})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/read_text")
+def filetree_read_text(name, ref_type, ref_id):
+    """Reads a text/markdown/code file's raw content for the in-browser
+    editor — separate from /download so the editor gets a plain JSON
+    string (with clear error handling) rather than a raw byte stream."""
+    ensure_profile(name)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, request.args.get("path", ""))
+    if target is None or not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    if target.stat().st_size > WRITABLE_TEXT_MAX_BYTES:
+        return jsonify({"error": "File is too large to open in the in-app editor (2MB limit)."}), 400
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"error": "This file isn't plain text (or uses an unsupported encoding) — it can't be opened in the editor."}), 400
+    return jsonify({"content": content})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/write_text", methods=["PUT"])
+def filetree_write_text(name, ref_type, ref_id):
+    """Overwrites a text/markdown/code file's content from the in-browser
+    editor's Save button. Refuses to write into a file whose extension
+    isn't in TEXT_EXTENSIONS, so this can never be used to corrupt an
+    audio/video/pdf/image file by mistake."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, data.get("path", ""))
+    if target is None or not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    if target.suffix.lower() not in TEXT_EXTENSIONS:
+        return jsonify({"error": "This file type can't be edited as text"}), 400
+    content = data.get("content", "")
+    if len(content.encode("utf-8")) > WRITABLE_TEXT_MAX_BYTES:
+        return jsonify({"error": "Content is too large to save (2MB limit)."}), 400
+    target.write_text(content, encoding="utf-8")
+    return jsonify({"ok": True, "size": target.stat().st_size})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/rename", methods=["POST"])
+def filetree_rename(name, ref_type, ref_id):
+    """Renames a file OR folder at `path` to `new_name`, carrying its
+    .filemeta.json entry along if it's a file."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, data.get("path", ""))
+    if target is None or not target.exists() or target == root:
+        return jsonify({"error": "Not found"}), 404
+    is_dir = target.is_dir()
+    new_name = _sanitize_folder_name(data.get("new_name", "")) if is_dir else secure_filename(data.get("new_name", "")) or _sanitize_folder_name(data.get("new_name", ""))
+    if not new_name:
+        return jsonify({"error": "Invalid name"}), 400
+    dest = target.parent / new_name
+    if dest.exists() and dest != target:
+        return jsonify({"error": "Something with that name already exists here"}), 409
+    old_name = target.name
+    target.rename(dest)
+    if not is_dir:
+        meta = _read_filemeta(dest.parent)
+        if old_name in meta:
+            meta[new_name] = meta.pop(old_name)
+            _write_filemeta(dest.parent, meta)
+    return jsonify({"ok": True, "name": new_name})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/move", methods=["POST"])
+def filetree_move(name, ref_type, ref_id):
+    """Moves a file or folder from `path` into the folder at `to_path`
+    (both relative to the subject/skill root). Used for drag-and-drop
+    reorganization."""
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    src = _safe_subpath(root, data.get("path", ""))
+    dest_dir = _safe_subpath(root, data.get("to_path", ""))
+    if src is None or not src.exists() or src == root:
+        return jsonify({"error": "Source not found"}), 404
+    if dest_dir is None or not dest_dir.is_dir():
+        return jsonify({"error": "Destination not found"}), 404
+    if src.is_dir() and (dest_dir == src or str(dest_dir).startswith(str(src) + os.sep)):
+        return jsonify({"error": "Can't move a folder into itself"}), 400
+    dest = dest_dir / src.name
+    if dest.exists():
+        return jsonify({"error": "Something with that name already exists there"}), 409
+    old_parent = src.parent
+    old_name = src.name
+    shutil.move(str(src), str(dest))
+    if not dest.is_dir():
+        old_meta = _read_filemeta(old_parent)
+        if old_name in old_meta:
+            entry = old_meta.pop(old_name)
+            _write_filemeta(old_parent, old_meta)
+            new_meta = _read_filemeta(dest_dir)
+            new_meta[old_name] = entry
+            _write_filemeta(dest_dir, new_meta)
+    return jsonify({"ok": True})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/delete", methods=["POST"])
+def filetree_delete(name, ref_type, ref_id):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, data.get("path", ""))
+    if target is None or not target.exists() or target == root:
+        return jsonify({"error": "Not found"}), 404
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        meta = _read_filemeta(target.parent)
+        meta.pop(target.name, None)
+        _write_filemeta(target.parent, meta)
+        target.unlink()
+    return jsonify({"ok": True})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/upload", methods=["POST"])
+def filetree_upload(name, ref_type, ref_id):
     ensure_profile(name)
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "Empty filename"}), 400
-    # SECURITY: the raw filename used to be trusted as-is, so a filename
-    # like "../../config.json" could write outside the intended folder.
-    # secure_filename() strips path separators and unsafe characters.
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target_dir = _safe_subpath(root, request.form.get("path", ""))
+    if target_dir is None or not target_dir.is_dir():
+        return jsonify({"error": "Invalid destination folder"}), 400
     safe_name = secure_filename(file.filename)
     if not safe_name:
         return jsonify({"error": "Invalid filename"}), 400
-    if ref_type == "skill":
-        fd = files_dir(name) / f"skill_{ref_id}"
-    else:
-        fd = files_dir(name) / ref_id
-    fd.mkdir(exist_ok=True)
-    filepath = fd / safe_name
-    file.save(filepath)
-    return jsonify({"ok": True, "filename": safe_name, "size": filepath.stat().st_size})
+    dest = target_dir / safe_name
+    if dest.exists():
+        stem, ext = os.path.splitext(safe_name)
+        n = 2
+        while (target_dir / f"{stem} ({n}){ext}").exists():
+            n += 1
+        dest = target_dir / f"{stem} ({n}){ext}"
+    file.save(dest)
+    return jsonify({"ok": True, "filename": dest.name, "size": dest.stat().st_size, "kind": _file_kind(dest.name)})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/download")
+def filetree_download(name, ref_type, ref_id):
+    """Streams a file for download/playback/preview. `as_attachment=0`
+    (default for media) lets <audio>/<video>/<iframe> play it inline
+    with normal HTTP range-request seeking; pass as_attachment=1 to force
+    a Save-As download instead."""
+    ensure_profile(name)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        abort(404)
+    target = _safe_subpath(root, request.args.get("path", ""))
+    if target is None or not target.exists() or not target.is_file():
+        abort(404)
+    as_attachment = request.args.get("as_attachment") == "1"
+    return send_file(target, as_attachment=as_attachment, download_name=target.name, conditional=True)
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/meta")
+def filetree_get_meta(name, ref_type, ref_id):
+    """Rich per-file metadata: freeform notes, timestamped video notes,
+    and per-page PDF notes + last-read page. Returns {} for a file with
+    no metadata yet rather than 404ing (nothing to fetch is normal)."""
+    ensure_profile(name)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    file_path = request.args.get("path", "")
+    target = _safe_subpath(root, file_path)
+    if target is None or not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    meta = _read_filemeta(target.parent)
+    return jsonify(meta.get(target.name, {}))
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/meta", methods=["PUT"])
+def filetree_put_meta(name, ref_type, ref_id):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    file_path = data.get("path", "")
+    target = _safe_subpath(root, file_path)
+    if target is None or not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    meta = _read_filemeta(target.parent)
+    entry = meta.get(target.name, {})
+    # Only merge recognized fields — an unbounded free-form PUT would
+    # let a stray client bug wedge junk into the sidecar forever.
+    for field in ("notes", "video_notes", "pdf_notes", "pdf_last_page", "audio_last_position"):
+        if field in data:
+            entry[field] = data[field]
+    entry["updated"] = now_str()
+    meta[target.name] = entry
+    _write_filemeta(target.parent, meta)
+    return jsonify({"ok": True, "meta": entry})
+
+@app.route("/api/<name>/filetree/<ref_type>/<ref_id>/siblings")
+def filetree_siblings(name, ref_type, ref_id):
+    """All audio files in the SAME folder as `path` — powers the
+    persistent audio player's 'more from this folder' dropdown without
+    the person needing to leave the player and reopen the explorer."""
+    ensure_profile(name)
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"error": "Subject/skill not found"}), 404
+    target = _safe_subpath(root, request.args.get("path", ""))
+    if target is None:
+        return jsonify({"error": "Not found"}), 404
+    folder = target.parent if target.is_file() else target
+    kind_filter = request.args.get("kind", "audio")
+    items = []
+    for entry in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+        if entry.is_file() and entry.name != FILEMETA_NAME and _file_kind(entry.name) == kind_filter:
+            items.append({"name": entry.name, "path": str((folder.relative_to(root) / entry.name)) if folder != root else entry.name})
+    return jsonify({"folder_path": str(folder.relative_to(root)) if folder != root else "", "items": items})
+
+# ── Legacy flat file routes — kept as thin wrappers over the tree API so
+# any old bookmarked/cached link still resolves to the file at the root
+# of the subject/skill's folder instead of 404ing outright. ──
+@app.route("/api/<name>/files/<ref_type>/<ref_id>", methods=["POST"])
+def upload_file(name, ref_type, ref_id):
+    return filetree_upload(name, ref_type, ref_id)
 
 @app.route("/api/<name>/files/<ref_type>/<ref_id>")
 def list_files(name, ref_type, ref_id):
     ensure_profile(name)
-    if ref_type == "skill":
-        fd = files_dir(name) / f"skill_{ref_id}"
-    else:
-        fd = files_dir(name) / ref_id
-    if not fd.exists():
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
         return jsonify([])
-    files = []
-    for f in sorted(fd.iterdir()):
-        if f.is_file():
-            files.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
-            })
-    return jsonify(files)
+    meta = _read_filemeta(root)
+    return jsonify([
+        {"name": f.name, "size": f.stat().st_size,
+         "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))}
+        for f in sorted(root.iterdir()) if f.is_file() and f.name != FILEMETA_NAME
+    ])
 
-@app.route("/api/<name>/files/<ref_type>/<ref_id>/<filename>")
+@app.route("/api/<name>/files/<ref_type>/<ref_id>/<path:filename>")
 def download_file(name, ref_type, ref_id, filename):
     ensure_profile(name)
-    filename = secure_filename(filename)
-    if ref_type == "skill":
-        fd = files_dir(name) / f"skill_{ref_id}"
-    else:
-        fd = files_dir(name) / ref_id
-    filepath = fd / filename
-    if not filepath.exists():
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
         abort(404)
-    return send_file(filepath)
+    target = _safe_subpath(root, filename)
+    if target is None or not target.is_file():
+        abort(404)
+    return send_file(target, conditional=True)
 
-@app.route("/api/<name>/files/<ref_type>/<ref_id>/<filename>", methods=["DELETE"])
+@app.route("/api/<name>/files/<ref_type>/<ref_id>/<path:filename>", methods=["DELETE"])
 def delete_file(name, ref_type, ref_id, filename):
     ensure_profile(name)
-    filename = secure_filename(filename)
-    if ref_type == "skill":
-        fd = files_dir(name) / f"skill_{ref_id}"
-    else:
-        fd = files_dir(name) / ref_id
-    filepath = fd / filename
-    if filepath.exists():
-        filepath.unlink()
+    root = _item_root_dir(name, ref_type, ref_id)
+    if root is None:
+        return jsonify({"ok": True})
+    target = _safe_subpath(root, filename)
+    if target and target.is_file():
+        target.unlink()
     return jsonify({"ok": True})
 
 # ── ML Recommendations ──
@@ -3667,6 +4839,20 @@ def is_plant_specifically_neglected(plant_record, d):
         level, _, _, _ = compute_plant_level_and_prestige(growth_hours, plant_def)
         warden_days = get_plant_bonus_value(plant_record, plant_def, "warden", level, d)
         window_days += warden_days
+    # Grace period: a plant can't fairly be judged "neglected" against a
+    # window it hasn't existed for yet — without this, a plant acquired
+    # seconds ago has (correctly) accrued 0 recent hours and would
+    # immediately show up withered before there was ever a chance to
+    # study it. Only start checking once at least a full window's worth
+    # of days has actually passed since it was planted.
+    acquired = plant_record.get("created", "")
+    try:
+        acquired_dt = datetime.strptime(acquired[:10], "%Y-%m-%d")
+        days_since_acquired = (datetime.strptime(today_str(), "%Y-%m-%d") - acquired_dt).days
+        if days_since_acquired < window_days:
+            return False
+    except Exception:
+        pass
     recent_hours = compute_plant_recent_growth_hours(plant_record, d, window_days)
     return recent_hours < PLANT_SPECIFIC_NEGLECT_MIN_HOURS
 
@@ -5535,7 +6721,7 @@ def _report_cover_page(profile_name, cfg, week_stats, gam, start_date, end_date,
     _style(tc)
     fig = plt.figure(figsize=(8.5, 11))
     fig.patch.set_facecolor(tc["bg"])
-    fig.text(0.5, 0.93, "StudyTracker", ha="center", fontsize=26, fontweight="bold", color=tc["palette"][0])
+    fig.text(0.5, 0.93, "Cultivar", ha="center", fontsize=26, fontweight="bold", color=tc["palette"][0])
     fig.text(0.5, 0.885, "Weekly Summary Report", ha="center", fontsize=15, color=tc["text"])
     fig.text(0.5, 0.85, f"{profile_name}  \u2022  {start_date} to {end_date}", ha="center", fontsize=11, color=tc["dim"])
 
@@ -5567,7 +6753,7 @@ def _report_cover_page(profile_name, cfg, week_stats, gam, start_date, end_date,
             wrapped.append(line)
         fig.text(0.1, 0.34, "\n".join(wrapped), fontsize=9.5, color=tc["text"], va="top", linespacing=1.6, wrap=True)
 
-    fig.text(0.5, 0.03, "Generated by StudyTracker", ha="center", fontsize=8, color=tc["dim"])
+    fig.text(0.5, 0.03, "Generated by Cultivar", ha="center", fontsize=8, color=tc["dim"])
     return fig
 
 @app.route("/api/<name>/report/weekly")
@@ -5612,7 +6798,7 @@ def weekly_report(name):
 
     buf.seek(0)
     return send_file(buf, mimetype="application/pdf", as_attachment=True,
-                      download_name=f"studytracker_weekly_{name}_{end_date}.pdf")
+                      download_name=f"Cultivar_weekly_{name}_{end_date}.pdf")
 
 # ── Statistics ──
 # ── Statistics ──
@@ -5922,15 +7108,15 @@ def get_version():
 # ── Static files ──
 @app.route("/")
 def index():
-    return send_file(Path(__file__).parent / "index.html")
+    return send_file(APP_DIR / "index.html")
 
 @app.route("/app.js")
 def app_js():
-    return send_file(Path(__file__).parent / "app.js")
+    return send_file(APP_DIR / "app.js")
 
 @app.route("/styles.css")
 def styles_css():
-    return send_file(Path(__file__).parent / "styles.css")
+    return send_file(APP_DIR / "styles.css")
 
 @app.route("/sprites/<path:subpath>")
 def sprite_file(subpath):
@@ -5948,5 +7134,10 @@ def sprite_file(subpath):
     return send_file(requested)
 
 if __name__ == "__main__":
-    print(f"StudyTracker v{APP_VERSION} — http://localhost:8080")
-    app.run(host="127.0.0.1", port=8080, debug=False)
+    print(f"Cultivar v{APP_VERSION}")
+    print("=" * 58)
+    print(f"  Running locally at: http://127.0.0.1:{PORT}")
+    print("  (This app is desktop-only — open it via desktop.py / start.bat")
+    print("   for the native window, rather than hitting this URL directly.)")
+    print("=" * 58)
+    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)

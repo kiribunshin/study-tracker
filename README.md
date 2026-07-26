@@ -1,16 +1,16 @@
-# StudyTracker
+# Cultivar
 
 A personal study tracker I built for myself because I wanted something that actually understands my schedule instead of a generic to-do app.
 
 ## What it does
 
-- Tracks self-study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
-- Turns your studying into a little RPG — XP, levels, a 10-tier badge system (Bachelor's → Master's → PhD → Laureate), weekly quests, streaks
+- Tracks habits, skills and study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
+- Turns your studying into an RPG: XP, levels, a 10-tier badge system (Bachelor's I/II/III → Master's I/II/III → PhD I/II/III → Laureate), weekly quests, streaks
+- Buy and level up over 32 plants with unique and special bonuses in the flagship Botanarium, learn more about them in Clementine's Book of Wonders!
 - Unlockable themes as you level up (15 of them, from clean and minimal to full cyberpunk)
 - A real weekly timetable that auto-fills from your class schedule and shows your logged sessions, exams, and meetings side by side
-- Smart recommendations — a small ML model (that you can turn off if it stresses you out) predicts exam scores and flags subjects you're neglecting
-- Seaborn-rendered charts and a downloadable weekly PDF report, both themed to match whatever look you've got active
-- Presence/absence auto-fill so you're not manually marking every single class you attend
+- Smart recommendations: A small ML model (that you can turn off if it stresses you out) predicts exam scores and flags subjects you're neglecting
+- Seaborn-rendered charts and a downloadable weekly PDF report, both themed to match whatever look you've got active and packed with informative graphs that help shed light on your next step
 
 ## Stack
 
@@ -68,3 +68,17 @@ A lot of plants are planned for the future so stay tuned.
 - Changed: Plant prices in the market are now different instead of being a constant across all plants.
 - Fixed: `Plant Collections` now displays prettier, formatted text for the bonuses instead of displaying raw variable names and IDs.
 - Fixed: Sprites are no longer stretched out (`object-fit: contain`).
+
+### v2.3 changes:
+- Added: `File Explorer`: Drastically improved and built upon the existing file system, now having its own section in the `navbar` and is able to:
+    - Read `.pdf` files and save notes on specific pages as well as open multiple at once and split-view
+    - Play audio files (multiple formats) through an audio player at the bottom and queue other audio files.
+    - Play video files (multiple formats) through a video player with a timed note-taking function, allowing you to review videos later with your own time-stamped notes. (Great for longer lectures especially)
+    - A rudimentary text editor that allows you to edit anything from `.txt` to `.md`, `.html`, `.css`, `.js`, `.py`, `.sh`, `.json`, etc... with syntax-highlighting and preview for `.md` files. (Richer note-taking)
+- Added: `Update Checker` in the settings: You can now routinely check if you're still in sync with the repo. If you are behind, it will prompt to install the update and restart Cultivar.
+- Added: `Subject Category`: Subjects can now be grouped by category.
+- Changed: Officially rebranded to `Cultivar`!
+- Changed: The app now launches in its own independent desktop window, no need for a browser anymore.
+- Changed: The `cmd` now disappears entirely when the app is running (still yet to implement a packaged .exe, but this is a step in the right way)
+- Fixed: A newly-acquired plant no longer appears as withered.
+- Dropped: The idea of cross-device synced use; has proven to be far too problematic in the current architecture with a relatively unimpressive gain.

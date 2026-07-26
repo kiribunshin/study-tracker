@@ -1,4 +1,4 @@
-/* StudyTracker — Frontend */
+/* Cultivar — Frontend */
 // ═══════════════════════════════════════════
 // ── VERSION ── Bump this whenever you ship a meaningful change. This
 // is the ONE place to edit it on the frontend — it's what the topbar's
@@ -8,7 +8,7 @@
 // the two are edited independently but should generally be bumped
 // together when you ship a change that touches both.
 // ═══════════════════════════════════════════
-const APP_VERSION = '2.2.1';
+const APP_VERSION = '2.3.0';
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -20,7 +20,9 @@ let lastKnownLevel = null; // used to detect level-ups after XP-earning actions
 let lastKnownXp = null;
 let lastKnownNerds = null;
 let pendingSettingsScroll = null;
+let pendingFileExplorerOpen = null; // {ref_type, ref_id} — jump the Files page straight to an item, set from Settings' 📁 buttons
 let subjectListYearFilter = 'all';
+let activeTimer = null; // last known server timer state — refreshed on load/navigation/actions, not polled
 
 // ═══════════════════════════════════════════
 // ── CONTROL PANEL (frontend) ──
@@ -120,13 +122,28 @@ function navigate(page) {
 
 // ── Modal ──
 function showModal(content) {
-  $('#modalContent').innerHTML = '';
-  $('#modalContent').appendChild(content);
+  const mc = $('#modalContent');
+  // A previous modal (e.g. the PDF/video viewer) may have left sizing
+  // classes or a still-playing <video>/<audio> behind — always reset
+  // to a clean slate before mounting new content, rather than only
+  // doing that cleanup on explicit close.
+  mc.querySelectorAll('video, audio').forEach(m => { try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) {} });
+  mc.className = 'modal';
+  mc.innerHTML = '';
+  mc.appendChild(content);
   $('#modalOverlay').classList.add('show');
 }
 function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   $('#modalOverlay').classList.remove('show');
+  const mc = $('#modalContent');
+  // Hiding the overlay is purely visual — a <video>/<audio> element left
+  // inside #modalContent keeps playing (and keeps making sound) until
+  // its node is actually removed, which used to only happen the NEXT
+  // time a modal opened. Stop and clear it immediately on close instead.
+  mc.querySelectorAll('video, audio').forEach(m => { try { m.pause(); m.removeAttribute('src'); m.load(); } catch (_) {} });
+  mc.className = 'modal';
+  mc.innerHTML = '';
 }
 
 // ── Theme ──
@@ -685,12 +702,20 @@ async function switchProfile(name) {
   gamificationError = null;
   lastKnownLevel = null;
   lastKnownNerds = null;
+  // Reset live-sync bookkeeping for the new profile — otherwise the
+  // next poll would compare the new profile's timestamps against the
+  // PREVIOUS profile's last-seen values and could spuriously think
+  // nothing (or everything) changed.
+  lastDataModified = null;
+  lastConfigModified = null;
+  activeTimer = null;
   updateTopLevelBar();
   updateNerdsBadge();
   await loadConfig();
   try { await api(`/api/${currentProfile}/attendance/autofill`, { method: 'POST' }); } catch (e) { /* non-fatal */ }
   await loadData();
   await loadGamification();
+  await refreshActiveTimerFromServer();
   lastKnownLevel = gamification?.level ?? null;
   lastKnownXp = gamification?.xp ?? null;
   lastKnownNerds = gamification?.nerds ?? null;
@@ -745,6 +770,7 @@ async function render() {
       case 'exams': await renderExams(c); break;
       case 'events': await renderEvents(c); break;
       case 'botanarium': await renderBotanarium(c); break;
+      case 'files': await renderFiles(c); break;
       case 'inventory': await renderInventory(c); break;
       case 'stats': await renderStats(c); break;
       case 'progression': await renderProgression(c); break;
@@ -870,149 +896,81 @@ function formatClock(totalSeconds) {
   return h === '00' ? `${m}:${s}` : `${h}:${m}:${s}`;
 }
 
-// ── Persistent timer runtime state ──
-// Lives at module scope (not inside renderTimerWidget) so a running or
-// paused timer survives navigating to another page and back. Previously
-// every piece of this state (accumulatedMs, running, activeTimerId,
-// pomo, etc.) lived inside renderTimerWidget's local closure, so simply
-// leaving the Dashboard and returning silently wiped out (and orphaned
-// the interval of) any timer that was mid-session.
-const TS = {
-  mode: 'free',              // 'free' | 'pomodoro'
-  accumulatedMs: 0,
-  segmentStart: null,
-  running: false,
-  timerSubject: null,
-  timerPlanned: 0,
-  activeTimerId: null,
-  pomo: null,                 // { config, sequence, idx, workMinutesDone, phaseEndsAt, currentPhaseMinutes }
-  intervalId: null,
-  miniIntervalId: null,       // ticks the topbar mini-badge independent of the widget's own mount lifecycle
-  // Wall-clock study/break segments for the CURRENT session, used to
-  // draw the Timetable as multiple linked blocks instead of one solid
-  // rectangle. Free timer: a 'study' segment while running, a 'break'
-  // segment while paused. Pomodoro: 'study' during work phases, 'break'
-  // during short/long breaks. Each entry is { type, start: Date, end:
-  // Date|null } — end is null while that segment is still open.
-  segments: []
-};
+// ── Shared, server-authoritative active timer (see also the
+// LIVE SYNC block near the top of this file) ──
+// `activeTimer` (declared up top) is the ONLY source of truth for
+// "is a timer running/paused right now, and what does it look like" —
+// refreshed on app load, on switching profiles, and right after this
+// window's own start/pause/resume/stop actions (see
+// refreshActiveTimerFromServer below).
 
-// ── Session segment tracking (study/break blocks for the Timetable) ──
-function openSegment(type) {
-  TS.segments.push({ type, start: new Date(), end: null });
-}
-function closeOpenSegment() {
-  const open = TS.segments[TS.segments.length - 1];
-  if (open && !open.end) open.end = new Date();
-}
-function serializeSegments() {
-  // Convert to the shape the backend stores: HH:MM local wall-clock
-  // start/end, dropping any sub-minute noise (e.g. an instant
-  // pause/resume misclick) so the Timetable doesn't get cluttered with
-  // slivers too thin to be meaningful. Kept for any single-day-only
-  // caller; sessions that might cross midnight should use
-  // computeDayBuckets() instead (see below).
-  return TS.segments
-    .filter(s => s.end)
-    .map(s => ({
-      type: s.type,
-      start: `${String(s.start.getHours()).padStart(2, '0')}:${String(s.start.getMinutes()).padStart(2, '0')}`,
-      end: `${String(s.end.getHours()).padStart(2, '0')}:${String(s.end.getMinutes()).padStart(2, '0')}`
-    }))
-    .filter(s => s.start !== s.end);
+async function refreshActiveTimerFromServer() {
+  try {
+    const resp = await api(`/api/${currentProfile}/timer/active`);
+    activeTimer = resp.timer;
+  } catch (e) { /* transient hiccup — the next explicit refresh will catch up */ }
 }
 
-// A session that runs past midnight has segments whose real start/end
-// are on two different calendar DATES, but HH:MM-only strings can't
-// express that — a segment like "23:50 -> 00:45" would previously
-// decode as end (45) < start (1430) and get silently dropped by the
-// Timetable's "end > start" sanity filter, which is exactly why the
-// second work block in an overnight session used to vanish entirely
-// instead of showing up split across both days. This splits every
-// segment at each midnight it crosses, so each PIECE is a normal
-// same-day HH:MM range — a piece that runs to exactly midnight is
-// written as "24:00" (arithmetically 1440, past the last real minute
-// of the day), which the Timetable already clips cleanly at the
-// bottom of that day's column with no special-casing needed.
-function splitSegmentsByDay(segments) {
-  const byDay = {};
-  segments.filter(s => s.end).forEach(seg => {
-    let curStart = new Date(seg.start);
-    const segEnd = new Date(seg.end);
-    let guard = 0;
-    while (curStart < segEnd && guard < 30) {
-      guard++;
-      const dayStr = localDateStr(curStart);
-      const nextMidnight = new Date(curStart.getFullYear(), curStart.getMonth(), curStart.getDate() + 1, 0, 0, 0);
-      const pieceEnd = segEnd < nextMidnight ? segEnd : nextMidnight;
-      const startMin = curStart.getHours() * 60 + curStart.getMinutes();
-      const crossesMidnight = pieceEnd.getTime() === nextMidnight.getTime();
-      const endMin = crossesMidnight ? 24 * 60 : (pieceEnd.getHours() * 60 + pieceEnd.getMinutes());
-      if (endMin > startMin) {
-        const startStr = `${String(Math.floor(startMin / 60)).padStart(2, '0')}:${String(startMin % 60).padStart(2, '0')}`;
-        const endStr = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
-        (byDay[dayStr] = byDay[dayStr] || []).push({ type: seg.type, start: startStr, end: endStr });
+// ── Live-ticking numbers (both the mini badge and, if mounted, the
+// big Dashboard display) — purely a local per-second repaint computed
+// from the last-known server state + wall-clock time. No network call. ──
+function paintTimerNumbers() {
+  const t = activeTimer;
+  const displayEl = document.getElementById('timerDisplay');
+  if (displayEl) {
+    if (!t) {
+      displayEl.textContent = '00:00:00';
+    } else if (t.mode === 'pomodoro') {
+      if (t.status === 'awaiting_rating' || !t.phase_ends_at) {
+        displayEl.textContent = '00:00:00';
+      } else {
+        const remaining = Math.max(0, (Date.parse(t.phase_ends_at) - Date.now()) / 1000);
+        displayEl.textContent = formatClock(remaining);
       }
-      curStart = pieceEnd;
+    } else {
+      const openExtra = t.open_segment_since ? Math.max(0, (Date.now() - Date.parse(t.open_segment_since)) / 1000) : 0;
+      const elapsed = (t.accumulated_seconds || 0) + openExtra;
+      displayEl.textContent = formatClock(elapsed);
+      const statusEl = document.getElementById('timerStatusDiv');
+      if (statusEl && t.status === 'running' && t.planned_minutes > 0 && elapsed / 60 >= t.planned_minutes) {
+        statusEl.innerHTML = '<span style="color:var(--green)">✓ Planned time reached!</span>';
+      }
     }
-  });
-  return byDay;
-}
-
-// Turns the current session's segments into one bucket PER CALENDAR
-// DAY it actually touched — each bucket gets its own date, its own
-// study-minute total, and its own slice of segments, so a session that
-// runs past midnight saves (and displays) correctly on BOTH days
-// instead of being silently mis-dated or partially dropped.
-function computeDayBuckets() {
-  const byDay = splitSegmentsByDay(TS.segments);
-  const buckets = [];
-  for (const [date, segs] of Object.entries(byDay)) {
-    const studyMin = segs.filter(s => s.type === 'study').reduce((sum, s) => sum + Math.max(0, timeToMinutes(s.end) - timeToMinutes(s.start)), 0);
-    if (studyMin > 0) buckets.push({ date, minutes: Math.round(studyMin), segments: segs });
   }
-  buckets.sort((a, b) => a.date.localeCompare(b.date));
-  return buckets;
+  updateMiniTimerBadge();
 }
 
 // ── Mini timer badge (topbar) ──
-// Keeps a running/paused session visible in the topbar whenever the
-// person navigates away from the Dashboard, so they don't lose track
-// of it. Ticks on its own interval, separate from the widget's
-// per-mount interval, so it keeps working regardless of which page is
-// currently rendered.
-function startMiniTimerTicker() {
-  if (TS.miniIntervalId) return;
-  TS.miniIntervalId = setInterval(updateMiniTimerBadge, UI_MINI_TIMER_TICK_MS);
-  updateMiniTimerBadge();
-}
-function stopMiniTimerTicker() {
-  if (TS.miniIntervalId) { clearInterval(TS.miniIntervalId); TS.miniIntervalId = null; }
-  const badge = $('#miniTimerBadge');
-  if (badge) { badge.classList.add('hidden'); badge.classList.remove('paused'); badge.innerHTML = ''; }
-}
+// Keeps a running/paused/awaiting-rating session visible in the topbar
+// on every page except the Dashboard (which already shows the full
+// widget) — and now reflects whichever device is actually driving the
+// session, not just this one.
 function updateMiniTimerBadge() {
   const badge = $('#miniTimerBadge');
   if (!badge) return;
-  const active = TS.activeTimerId || TS.pomo;
-  if (!active || currentPage === 'dashboard') {
+  const t = activeTimer;
+  if (!t || currentPage === 'dashboard') {
     badge.classList.add('hidden');
+    badge.classList.remove('paused');
     badge.innerHTML = '';
     return;
   }
   badge.classList.remove('hidden');
   badge.innerHTML = '';
   let icon, timeText, label, paused = false;
-  if (TS.mode === 'pomodoro' && TS.pomo) {
-    const step = TS.pomo.sequence[TS.pomo.idx];
-    icon = step.phase === 'work' ? '🍅' : (step.phase === 'long' ? '🌴' : '☕');
-    const remaining = Math.max(0, Math.floor((TS.pomo.phaseEndsAt - Date.now()) / 1000));
-    timeText = formatClock(remaining);
-    label = step.phase === 'work' ? `Block ${step.block}/${TS.pomo.config.blocks}` : 'Break';
+  if (t.mode === 'pomodoro') {
+    if (t.status === 'awaiting_rating') {
+      icon = '🎉'; timeText = '00:00'; label = 'Done — tap to rate';
+    } else {
+      icon = t.phase === 'work' ? '🍅' : (t.phase === 'long' ? '🌴' : '☕');
+      const remaining = Math.max(0, (Date.parse(t.phase_ends_at) - Date.now()) / 1000);
+      timeText = formatClock(remaining);
+      label = t.phase === 'work' ? `Block ${t.phase_block}/${t.pomodoro_total_blocks}` : 'Break';
+    }
   } else {
-    const elapsed = Math.floor((TS.accumulatedMs + (TS.running && TS.segmentStart ? Date.now() - TS.segmentStart : 0)) / 1000);
-    timeText = formatClock(elapsed);
-    paused = !TS.running;
+    const openExtra = t.open_segment_since ? Math.max(0, (Date.now() - Date.parse(t.open_segment_since)) / 1000) : 0;
+    timeText = formatClock((t.accumulated_seconds || 0) + openExtra);
+    paused = t.status === 'paused';
     icon = paused ? '⏸' : '⏱';
     label = paused ? 'Paused' : 'Studying';
   }
@@ -1023,12 +981,7 @@ function updateMiniTimerBadge() {
 }
 
 function renderTimerWidget() {
-  // A previous mount's interval (if any) is tied to now-detached DOM
-  // nodes — stop it before wiring up the fresh elements below so
-  // intervals don't pile up every time this page is revisited.
-  if (TS.intervalId) { clearInterval(TS.intervalId); TS.intervalId = null; }
-
-  const display = el('div', { class: 'timer-display', text: '00:00:00' });
+  const display = el('div', { class: 'timer-display', id: 'timerDisplay', text: '00:00:00' });
   const phaseLabel = el('div', { class: 'text-center text-dim text-sm', style: 'min-height:20px;font-weight:600' });
   const subjectSel = el('select', {}, [
     el('option', { value: '', text: 'Select subject...' }),
@@ -1036,11 +989,12 @@ function renderTimerWidget() {
     ...(cachedConfig?.skills || []).map(s => el('option', { value: 'skill_' + s.id, text: `[Skill] ${s.name}` }))
   ]);
   const plannedInput = el('input', { type: 'number', value: '30', min: '1', placeholder: 'Planned minutes' });
-  const statusDiv = el('div', { class: 'text-center text-dim text-sm', style: 'min-height:24px' });
-  const startBtn = el('button', { class: 'btn btn-success', text: '▶ Start', onclick: startFreeTimer });
-  const pauseBtn = el('button', { class: 'btn btn-amber hidden', text: '⏸ Pause', onclick: pauseFreeTimer });
-  const resumeBtn = el('button', { class: 'btn btn-success hidden', text: '▶ Resume', onclick: resumeFreeTimer });
-  const stopBtn = el('button', { class: 'btn btn-danger hidden', text: '⏹ Stop & Save', onclick: stopFreeTimer });
+  const statusDiv = el('div', { class: 'text-center text-dim text-sm', id: 'timerStatusDiv', style: 'min-height:24px' });
+  const startBtn = el('button', { class: 'btn btn-success', text: '▶ Start', onclick: () => startFreeTimer() });
+  const pauseBtn = el('button', { class: 'btn btn-amber hidden', text: '⏸ Pause', onclick: () => pauseFreeTimer() });
+  const resumeBtn = el('button', { class: 'btn btn-success hidden', text: '▶ Resume', onclick: () => resumeFreeTimer() });
+  const stopBtn = el('button', { class: 'btn btn-danger hidden', text: '⏹ Stop & Save', onclick: () => stopActiveTimer() });
+  const cancelBtn = el('button', { class: 'btn btn-outline hidden', text: '✕ Cancel', onclick: () => cancelActiveTimer() });
 
   // Pomodoro config inputs
   const workInput = el('input', { type: 'number', value: '25', min: '1', style: 'width:70px' });
@@ -1049,9 +1003,10 @@ function renderTimerWidget() {
   const blocksInput = el('input', { type: 'number', value: '4', min: '1', style: 'width:70px' });
   const longEveryInput = el('input', { type: 'number', value: '4', min: '1', style: 'width:70px' });
   const estimateDiv = el('div', { class: 'text-dim text-sm mt-8' });
-  const pomoStartBtn = el('button', { class: 'btn btn-success', text: '▶ Start Pomodoro', onclick: startPomodoro });
-  const pomoStopBtn = el('button', { class: 'btn btn-danger hidden', text: '⏹ Stop & Save', onclick: stopPomodoro });
-  const pomoSkipBtn = el('button', { class: 'btn btn-outline hidden', text: '⏭ Skip Phase', onclick: () => advancePomodoroPhase(true) });
+  const pomoStartBtn = el('button', { class: 'btn btn-success', text: '▶ Start Pomodoro', onclick: () => startPomodoroTimer() });
+  const pomoStopBtn = el('button', { class: 'btn btn-danger hidden', text: '⏹ Stop & Save', onclick: () => stopActiveTimer() });
+  const pomoSkipBtn = el('button', { class: 'btn btn-outline hidden', text: '⏭ Skip Phase', onclick: () => advancePomodoroPhase() });
+  const pomoCancelBtn = el('button', { class: 'btn btn-outline hidden', text: '✕ Cancel', onclick: () => cancelActiveTimer() });
 
   function estimateTotal() {
     const work = parseInt(workInput.value) || 25;
@@ -1069,154 +1024,166 @@ function renderTimerWidget() {
   }
   [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput].forEach(inp => inp.addEventListener('input', estimateTotal));
 
-  function elapsedMs() {
-    return TS.accumulatedMs + (TS.running && TS.segmentStart ? (Date.now() - TS.segmentStart) : 0);
+  const modeFreeBtn = el('button', { class: 'btn btn-sm', text: '⏱ Free Timer', onclick: () => setIdleModePreview('free') });
+  const modePomoBtn = el('button', { class: 'btn btn-sm btn-outline', text: '🍅 Pomodoro', onclick: () => setIdleModePreview('pomodoro') });
+  const modeTabs = el('div', { class: 'btn-group', style: 'margin-bottom:12px' }, [modeFreeBtn, modePomoBtn]);
+
+  const freePanel = el('div', {}, [
+    el('div', { class: 'row', style: 'margin-bottom:12px;gap:12px' }, [
+      el('div', { style: 'width:120px' }, [el('label', { text: 'Planned (min)' }), plannedInput])
+    ]),
+    el('div', { class: 'timer-controls' }, [startBtn, pauseBtn, resumeBtn, stopBtn, cancelBtn])
+  ]);
+
+  const pomoPanel = el('div', { class: 'hidden' }, [
+    el('div', { class: 'row', style: 'gap:10px;flex-wrap:wrap;margin-bottom:4px' }, [
+      el('div', {}, [el('label', { text: 'Work (min)' }), workInput]),
+      el('div', {}, [el('label', { text: 'Short Break' }), shortBreakInput]),
+      el('div', {}, [el('label', { text: 'Long Break' }), longBreakInput]),
+      el('div', {}, [el('label', { text: 'Blocks' }), blocksInput]),
+      el('div', {}, [el('label', { text: 'Long Every' }), longEveryInput])
+    ]),
+    estimateDiv,
+    el('div', { class: 'timer-controls', style: 'margin-top:8px' }, [pomoStartBtn, pomoStopBtn, pomoSkipBtn, pomoCancelBtn])
+  ]);
+
+  // Local-only mode PREVIEW — only meaningful while idle (no timer
+  // active anywhere), just deciding which config panel shows before
+  // Start is pressed. The instant a timer is active (from ANY device),
+  // the widget's mode is dictated entirely by the server's
+  // activeTimer.mode instead, and these tabs are hidden.
+  let idleModePreview = 'free';
+  function setIdleModePreview(m) {
+    if (activeTimer) return; // ignore while something's already running
+    idleModePreview = m;
+    freePanel.classList.toggle('hidden', m !== 'free');
+    pomoPanel.classList.toggle('hidden', m !== 'pomodoro');
+    modeFreeBtn.classList.toggle('btn-outline', m !== 'free');
+    modePomoBtn.classList.toggle('btn-outline', m !== 'pomodoro');
   }
 
-  function updateDisplay() {
-    const elapsed = Math.floor(elapsedMs() / 1000);
-    display.textContent = formatClock(elapsed);
-    if (TS.timerPlanned > 0 && elapsed >= TS.timerPlanned * 60) {
-      statusDiv.innerHTML = '<span style="color:var(--green)">✓ Planned time reached!</span>';
+  function currentSubjectPayload() {
+    const val = subjectSel.value;
+    if (!val) return null;
+    return val.startsWith('skill_') ? { skill_id: val.slice(6) } : { subject_id: val };
+  }
+
+  function handleStartResponse(resp) {
+    activeTimer = resp.timer;
+    if (resp.joined_existing) {
+      statusDiv.innerHTML = '<span style="color:var(--accent)">↺ Joined a session already running on another device.</span>';
     }
+    applyStateToDOM();
+    paintTimerNumbers();
   }
 
   async function startFreeTimer() {
-    const val = subjectSel.value;
-    if (!val) { alert('Select a subject or skill'); return; }
-    const isSkill = val.startsWith('skill_');
-    TS.timerSubject = isSkill ? { skill_id: val.slice(6) } : { subject_id: val };
-    TS.timerPlanned = parseInt(plannedInput.value) || 0;
+    const subj = currentSubjectPayload();
+    if (!subj) { alert('Select a subject or skill'); return; }
+    const planned = parseInt(plannedInput.value) || 0;
     try {
-      const startResp = await api(`/api/${currentProfile}/timer/start`, { method: 'POST', body: JSON.stringify({ ...TS.timerSubject, planned_minutes: TS.timerPlanned }) });
-      TS.activeTimerId = startResp?.timer?.id || null;
-    } catch (e) { alert('Could not start timer: ' + e.message); return; }
-    TS.accumulatedMs = 0;
-    TS.segmentStart = Date.now();
-    TS.running = true;
-    TS.segments = [];
-    openSegment('study');
-    startBtn.classList.add('hidden');
-    pauseBtn.classList.remove('hidden');
-    stopBtn.classList.remove('hidden');
-    subjectSel.disabled = true;
-    plannedInput.disabled = true;
-    statusDiv.textContent = `Running... (${TS.timerPlanned}min planned)`;
-    TS.intervalId = setInterval(updateDisplay, 1000);
-    updateDisplay();
-    startMiniTimerTicker();
+      const resp = await api(`/api/${currentProfile}/timer/start`, { method: 'POST', body: JSON.stringify({ ...subj, planned_minutes: planned, mode: 'free' }) });
+      handleStartResponse(resp);
+    } catch (e) { alert('Could not start timer: ' + e.message); }
   }
 
-  function pauseFreeTimer() {
-    if (!TS.running) return;
-    TS.accumulatedMs += Date.now() - TS.segmentStart;
-    TS.running = false;
-    TS.segmentStart = null;
-    closeOpenSegment();
-    openSegment('break');
-    clearInterval(TS.intervalId);
-    TS.intervalId = null;
-    pauseBtn.classList.add('hidden');
-    resumeBtn.classList.remove('hidden');
-    statusDiv.innerHTML = '<span style="color:var(--amber)">⏸ Paused</span>';
-    updateDisplay();
-    updateMiniTimerBadge();
+  async function startPomodoroTimer() {
+    const subj = currentSubjectPayload();
+    if (!subj) { alert('Select a subject or skill'); return; }
+    const config = {
+      work: parseInt(workInput.value) || 25, short: parseInt(shortBreakInput.value) || 5,
+      long: parseInt(longBreakInput.value) || 15, blocks: parseInt(blocksInput.value) || 4,
+      every: parseInt(longEveryInput.value) || 4
+    };
+    try {
+      const resp = await api(`/api/${currentProfile}/timer/start`, { method: 'POST', body: JSON.stringify({ ...subj, mode: 'pomodoro', pomodoro_config: config }) });
+      handleStartResponse(resp);
+      if (!resp.joined_existing) playChime(660);
+    } catch (e) { alert('Could not start: ' + e.message); }
   }
 
-  function resumeFreeTimer() {
-    if (TS.running) return;
-    TS.segmentStart = Date.now();
-    TS.running = true;
-    closeOpenSegment();
-    openSegment('study');
-    resumeBtn.classList.add('hidden');
-    pauseBtn.classList.remove('hidden');
-    statusDiv.textContent = `Running... (${TS.timerPlanned}min planned)`;
-    TS.intervalId = setInterval(updateDisplay, 1000);
-    updateDisplay();
-    updateMiniTimerBadge();
+  async function pauseFreeTimer() {
+    if (!activeTimer) return;
+    try {
+      const resp = await api(`/api/${currentProfile}/timer/${activeTimer.id}/pause`, { method: 'POST' });
+      activeTimer = resp.timer; applyStateToDOM(); paintTimerNumbers();
+    } catch (e) { alert(e.message); await refreshActiveTimerFromServer(); applyStateToDOM(); }
   }
 
-  function findSubjectOrSkillDifficulty() {
-    if (!TS.timerSubject) return 5;
-    if (TS.timerSubject.subject_id) return cachedConfig?.subjects.find(s => s.id === TS.timerSubject.subject_id)?.difficulty || 5;
-    if (TS.timerSubject.skill_id) return cachedConfig?.skills.find(s => s.id === TS.timerSubject.skill_id)?.difficulty || 5;
+  async function resumeFreeTimer() {
+    if (!activeTimer) return;
+    try {
+      const resp = await api(`/api/${currentProfile}/timer/${activeTimer.id}/resume`, { method: 'POST' });
+      activeTimer = resp.timer; applyStateToDOM(); paintTimerNumbers();
+    } catch (e) { alert(e.message); await refreshActiveTimerFromServer(); applyStateToDOM(); }
+  }
+
+  async function advancePomodoroPhase() {
+    if (!activeTimer) return;
+    try {
+      const resp = await api(`/api/${currentProfile}/timer/${activeTimer.id}/pomodoro_advance`, { method: 'POST' });
+      activeTimer = resp.timer; applyStateToDOM(); paintTimerNumbers(); playChime(activeTimer.status === 'awaiting_rating' ? 880 : 660);
+    } catch (e) { alert(e.message); await refreshActiveTimerFromServer(); applyStateToDOM(); }
+  }
+
+  function findSubjectOrSkillDifficulty(subjectId, skillId) {
+    if (subjectId) return cachedConfig?.subjects.find(s => s.id === subjectId)?.difficulty || 5;
+    if (skillId) return cachedConfig?.skills.find(s => s.id === skillId)?.difficulty || 5;
     return 5;
   }
 
-  async function saveSession(actualMin) {
-    if (!TS.activeTimerId) {
-      statusDiv.innerHTML = `<span style="color:var(--red)">Session wasn't tracked on the server — nothing to save.</span>`;
-      return;
+  async function stopActiveTimer() {
+    if (!activeTimer) return;
+    const t = activeTimer;
+    // Purely a client-side estimate to decide whether to show the
+    // rating modal at all — the server recomputes the real, final
+    // number authoritatively the moment /stop is actually called.
+    let estMinutes;
+    if (t.mode === 'pomodoro') {
+      estMinutes = Math.round(t.work_minutes_done || 0);
+    } else {
+      const openExtra = t.open_segment_since ? (Date.now() - Date.parse(t.open_segment_since)) / 60000 : 0;
+      estMinutes = Math.round((t.accumulated_seconds || 0) / 60 + openExtra);
     }
-    // Snapshot day buckets now, synchronously, before any await —
-    // TS.segments only ever changes on the next user-triggered start/
-    // pause/resume, which can't happen mid-await in single-threaded JS,
-    // but capturing it up front keeps the intent explicit either way.
-    // A session that crossed midnight produces MULTIPLE buckets, one
-    // per real calendar day it touched.
-    const dayBuckets = computeDayBuckets();
-    if (actualMin <= 0) {
-      // Nothing was actually studied (e.g. every phase was skipped
-      // near-instantly) — close out the timer without fabricating a
-      // record or asking the person to rate zero minutes of work.
-      try {
-        await api(`/api/${currentProfile}/timer/${TS.activeTimerId}/stop`, {
-          method: 'POST', body: JSON.stringify({ planned_minutes: TS.timerPlanned, actual_minutes: 0, auto_record: false })
-        });
-      } catch (e) { /* non-fatal — timer entry is cosmetic bookkeeping */ }
-      statusDiv.innerHTML = `<span class="text-dim">No study time logged — nothing saved.</span>`;
-      TS.activeTimerId = null;
-      stopMiniTimerTicker();
+    if (estMinutes <= 0) {
+      try { await api(`/api/${currentProfile}/timer/${t.id}/stop`, { method: 'POST', body: JSON.stringify({ discard: true }) }); }
+      catch (e) { /* non-fatal — nothing meaningful to lose */ }
+      activeTimer = null;
+      await refreshActiveTimerFromServer();
+      applyStateToDOM();
+      statusDiv.innerHTML = '<span class="text-dim">No study time logged — nothing saved.</span>';
       setTimeout(() => { statusDiv.textContent = ''; }, UI_STATUS_MESSAGE_CLEAR_MS);
       return;
     }
-    showSessionRatingModal(actualMin, TS.timerSubject, async (rating) => {
-      const payload = {
-        planned_minutes: TS.timerPlanned, actual_minutes: actualMin,
-        difficulty: rating.difficulty, self_study_status: rating.status,
-        note: rating.note, auto_record: true, day_buckets: dayBuckets
-      };
+    showSessionRatingModal(estMinutes, t, async (rating) => {
       try {
-        const resp = await api(`/api/${currentProfile}/timer/${TS.activeTimerId}/stop`, { method: 'POST', body: JSON.stringify(payload) });
-        statusDiv.innerHTML = `<span style="color:var(--green)">✓ Saved: ${actualMin}min${dayBuckets.length > 1 ? ` across ${dayBuckets.length} days` : ''}</span>`;
-        await loadData();
-        await maybeShowLevelUp({ skipXpToast: true });
-        render();
-        if (resp && resp.xp_earned > 0) {
-          showSessionXpToast(resp.xp_earned, actualMin, rating.difficulty, resp.nerds_earned || 0);
-        }
+        const resp = await api(`/api/${currentProfile}/timer/${t.id}/stop`, {
+          method: 'POST', body: JSON.stringify({ difficulty: rating.difficulty, self_study_status: rating.status, note: rating.note })
+        });
+        statusDiv.innerHTML = `<span style="color:var(--green)">✓ Saved: ${resp.actual_minutes}min${resp.day_buckets.length > 1 ? ` across ${resp.day_buckets.length} days` : ''}</span>`;
+        activeTimer = null;
+        await loadData(); await maybeShowLevelUp({ skipXpToast: true }); render();
+        if (resp && resp.xp_earned > 0) showSessionXpToast(resp.xp_earned, resp.actual_minutes, rating.difficulty, resp.nerds_earned || 0);
       } catch (e) {
         statusDiv.innerHTML = `<span style="color:var(--red)">Error: ${esc(e.message)}</span>`;
+        await refreshActiveTimerFromServer(); applyStateToDOM();
       }
-      TS.activeTimerId = null;
-      TS.segments = [];
-      stopMiniTimerTicker();
       setTimeout(() => { statusDiv.textContent = ''; }, UI_STATUS_MESSAGE_CLEAR_MS);
     });
   }
 
-  async function stopFreeTimer() {
-    clearInterval(TS.intervalId);
-    TS.intervalId = null;
-    const actualMin = Math.max(0, Math.round(elapsedMs() / 60000));
-    closeOpenSegment();
-    TS.running = false;
-    TS.segmentStart = null;
-    TS.accumulatedMs = 0;
-    startBtn.classList.remove('hidden');
-    pauseBtn.classList.add('hidden');
-    resumeBtn.classList.add('hidden');
-    stopBtn.classList.add('hidden');
-    subjectSel.disabled = false;
-    plannedInput.disabled = false;
-    display.textContent = '00:00:00';
-    statusDiv.textContent = '';
-    await saveSession(actualMin);
+  async function cancelActiveTimer() {
+    if (!activeTimer) return;
+    if (!confirm('Cancel this session without saving any study time?')) return;
+    try { await api(`/api/${currentProfile}/timer/${activeTimer.id}/cancel`, { method: 'POST' }); }
+    catch (e) { alert(e.message); }
+    activeTimer = null;
+    await refreshActiveTimerFromServer();
+    applyStateToDOM();
   }
 
-  function showSessionRatingModal(actualMin, subjInfo, onConfirm) {
-    const diffInput = el('input', { type: 'range', min: '1', max: '10', value: String(findSubjectOrSkillDifficulty()) });
+  function showSessionRatingModal(actualMin, timer, onConfirm) {
+    const diffInput = el('input', { type: 'range', min: '1', max: '10', value: String(findSubjectOrSkillDifficulty(timer.subject_id, timer.skill_id)) });
     const diffLabel = el('span', { text: diffInput.value + '/10', style: 'font-weight:700' });
     diffInput.oninput = () => diffLabel.textContent = diffInput.value + '/10';
     const statusSel = el('select', {}, [
@@ -1241,218 +1208,74 @@ function renderTimerWidget() {
     showModal(content);
   }
 
-  // ── Pomodoro ──
-  function phaseSequence(config) {
-    const seq = [];
-    for (let i = 1; i <= config.blocks; i++) {
-      seq.push({ phase: 'work', block: i });
-      if (i < config.blocks) {
-        seq.push({ phase: (i % config.every === 0) ? 'long' : 'short', block: i });
-      }
-    }
-    return seq;
-  }
-
-  async function startPomodoro() {
-    const val = subjectSel.value;
-    if (!val) { alert('Select a subject or skill'); return; }
-    const isSkill = val.startsWith('skill_');
-    TS.timerSubject = isSkill ? { skill_id: val.slice(6) } : { subject_id: val };
-    const config = {
-      work: parseInt(workInput.value) || 25,
-      short: parseInt(shortBreakInput.value) || 5,
-      long: parseInt(longBreakInput.value) || 15,
-      blocks: parseInt(blocksInput.value) || 4,
-      every: parseInt(longEveryInput.value) || 4
-    };
-    TS.timerPlanned = config.work * config.blocks;
-    try {
-      const startResp = await api(`/api/${currentProfile}/timer/start`, { method: 'POST', body: JSON.stringify({ ...TS.timerSubject, planned_minutes: TS.timerPlanned }) });
-      TS.activeTimerId = startResp?.timer?.id || null;
-    } catch (e) { alert('Could not start: ' + e.message); return; }
-
-    TS.pomo = { config, sequence: phaseSequence(config), idx: 0, workMinutesDone: 0 };
-    TS.segments = [];
-    [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = true);
-    pomoStartBtn.classList.add('hidden');
-    pomoStopBtn.classList.remove('hidden');
-    pomoSkipBtn.classList.remove('hidden');
-    enterPomodoroPhase();
-    startMiniTimerTicker();
-  }
-
-  function enterPomodoroPhase(silent) {
-    const step = TS.pomo.sequence[TS.pomo.idx];
-    const minutes = step.phase === 'work' ? TS.pomo.config.work : (step.phase === 'long' ? TS.pomo.config.long : TS.pomo.config.short);
-    if (!silent) {
-      TS.pomo.phaseEndsAt = Date.now() + minutes * 60000;
-      TS.pomo.currentPhaseMinutes = minutes;
-      playChime(step.phase === 'work' ? 660 : 440);
-      // Real phase transition (not just a UI resync on remount) — close
-      // whatever segment was open and start a new one matching this
-      // phase, so the Timetable can later draw work/break as separate
-      // blocks that still belong to the same session.
-      closeOpenSegment();
-      openSegment(step.phase === 'work' ? 'study' : 'break');
-    }
-    const icon = step.phase === 'work' ? '🍅' : (step.phase === 'long' ? '🌴' : '☕');
-    const label = step.phase === 'work' ? `Work Block ${step.block}/${TS.pomo.config.blocks}` : (step.phase === 'long' ? 'Long Break' : 'Short Break');
-    phaseLabel.textContent = `${icon} ${label}`;
-    clearInterval(TS.intervalId);
-    TS.intervalId = setInterval(pomodoroTick, 1000);
-    pomodoroTick();
-    updateMiniTimerBadge();
-  }
-
-  function pomodoroTick() {
-    const remaining = (TS.pomo.phaseEndsAt - Date.now()) / 1000;
-    if (remaining <= 0) {
-      const step = TS.pomo.sequence[TS.pomo.idx];
-      if (step.phase === 'work') TS.pomo.workMinutesDone += TS.pomo.currentPhaseMinutes;
-      advancePomodoroPhase(false);
+  // ── Paint the widget's DOM to match the current `activeTimer`
+  // (module-global) — called on mount and after every local action. ──
+  function applyStateToDOM() {
+    const t = activeTimer;
+    if (!t) {
+      modeTabs.classList.remove('hidden');
+      setIdleModePreview(idleModePreview);
+      subjectSel.disabled = false; plannedInput.disabled = false;
+      startBtn.classList.remove('hidden'); pauseBtn.classList.add('hidden');
+      resumeBtn.classList.add('hidden'); stopBtn.classList.add('hidden'); cancelBtn.classList.add('hidden');
+      pomoStartBtn.classList.remove('hidden'); pomoStopBtn.classList.add('hidden');
+      pomoSkipBtn.classList.add('hidden'); pomoCancelBtn.classList.add('hidden');
+      [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = false);
+      display.textContent = '00:00:00';
+      phaseLabel.textContent = '';
       return;
     }
-    display.textContent = formatClock(remaining);
-  }
-
-  async function advancePomodoroPhase(manualSkip) {
-    clearInterval(TS.intervalId);
-    TS.intervalId = null;
-    if (manualSkip) {
-      const step = TS.pomo.sequence[TS.pomo.idx];
-      if (step.phase === 'work') {
-        const doneMin = Math.round((TS.pomo.currentPhaseMinutes * 60 - Math.max(0, (TS.pomo.phaseEndsAt - Date.now()) / 1000)) / 60);
-        TS.pomo.workMinutesDone += Math.max(0, doneMin);
-      }
-    }
-    TS.pomo.idx++;
-    if (TS.pomo.idx >= TS.pomo.sequence.length) {
-      await finishPomodoro();
-      return;
-    }
-    enterPomodoroPhase();
-  }
-
-  async function finishPomodoro() {
-    display.textContent = '00:00:00';
-    phaseLabel.textContent = '🎉 Pomodoro complete!';
-    playChime(880);
-    pomoStartBtn.classList.remove('hidden');
-    pomoStopBtn.classList.add('hidden');
-    pomoSkipBtn.classList.add('hidden');
-    [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = false);
-    closeOpenSegment();
-    const workMin = Math.max(0, Math.round(TS.pomo.workMinutesDone));
-    TS.pomo = null;
-    await saveSession(workMin);
-  }
-
-  async function stopPomodoro() {
-    clearInterval(TS.intervalId);
-    TS.intervalId = null;
-    const step = TS.pomo.sequence[TS.pomo.idx];
-    if (step && step.phase === 'work') {
-      const doneMin = Math.round((TS.pomo.currentPhaseMinutes * 60 - Math.max(0, (TS.pomo.phaseEndsAt - Date.now()) / 1000)) / 60);
-      TS.pomo.workMinutesDone += Math.max(0, doneMin);
-    }
-    closeOpenSegment();
-    const workMin = Math.max(0, Math.round(TS.pomo.workMinutesDone));
-    display.textContent = '00:00:00';
-    phaseLabel.textContent = '';
-    pomoStartBtn.classList.remove('hidden');
-    pomoStopBtn.classList.add('hidden');
-    pomoSkipBtn.classList.add('hidden');
-    [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = false);
-    TS.pomo = null;
-    await saveSession(workMin);
-  }
-
-  const freePanel = el('div', {}, [
-    el('div', { class: 'row', style: 'margin-bottom:12px;gap:12px' }, [
-      el('div', { style: 'width:120px' }, [el('label', { text: 'Planned (min)' }), plannedInput])
-    ]),
-    el('div', { class: 'timer-controls' }, [startBtn, pauseBtn, resumeBtn, stopBtn])
-  ]);
-
-  const pomoPanel = el('div', { class: 'hidden' }, [
-    el('div', { class: 'row', style: 'gap:10px;flex-wrap:wrap;margin-bottom:4px' }, [
-      el('div', {}, [el('label', { text: 'Work (min)' }), workInput]),
-      el('div', {}, [el('label', { text: 'Short Break' }), shortBreakInput]),
-      el('div', {}, [el('label', { text: 'Long Break' }), longBreakInput]),
-      el('div', {}, [el('label', { text: 'Blocks' }), blocksInput]),
-      el('div', {}, [el('label', { text: 'Long Every' }), longEveryInput])
-    ]),
-    estimateDiv,
-    el('div', { class: 'timer-controls', style: 'margin-top:8px' }, [pomoStartBtn, pomoStopBtn, pomoSkipBtn])
-  ]);
-
-  const modeFreeBtn = el('button', { class: 'btn btn-sm', text: '⏱ Free Timer', onclick: () => switchMode('free') });
-  const modePomoBtn = el('button', { class: 'btn btn-sm btn-outline', text: '🍅 Pomodoro', onclick: () => switchMode('pomodoro') });
-  const modeTabs = el('div', { class: 'btn-group', style: 'margin-bottom:12px' }, [modeFreeBtn, modePomoBtn]);
-
-  function switchMode(m) {
-    // Switching tabs while a timer is actively running/paused in the
-    // OTHER mode would silently abandon it, so it's blocked — the
-    // person needs to stop/save (or let the Pomodoro finish) first.
-    if (m !== TS.mode && (TS.activeTimerId || TS.pomo)) {
-      alert('Finish or stop the current session before switching modes.');
-      return;
-    }
-    TS.mode = m;
-    freePanel.classList.toggle('hidden', m !== 'free');
-    pomoPanel.classList.toggle('hidden', m !== 'pomodoro');
-    modeFreeBtn.classList.toggle('btn-outline', m !== 'free');
-    modePomoBtn.classList.toggle('btn-outline', m !== 'pomodoro');
-    display.textContent = '00:00:00';
-    phaseLabel.textContent = '';
-  }
-
-  // ── Restore UI from persisted state ──
-  // Runs on every mount (including remounts after navigating away and
-  // back) so a session already in progress shows correctly instead of
-  // resetting to the idle "Start" state.
-  function syncUIFromState() {
-    modeFreeBtn.classList.toggle('btn-outline', TS.mode !== 'free');
-    modePomoBtn.classList.toggle('btn-outline', TS.mode !== 'pomodoro');
-    freePanel.classList.toggle('hidden', TS.mode !== 'free');
-    pomoPanel.classList.toggle('hidden', TS.mode !== 'pomodoro');
-
-    const subjVal = TS.timerSubject ? (TS.timerSubject.subject_id || ('skill_' + TS.timerSubject.skill_id)) : '';
+    // Something is active — from THIS device or another. Mode tabs are
+    // locked to whichever mode is actually running; subject/skill is
+    // shown read-only, matching whichever device originally started it.
+    modeTabs.classList.add('hidden');
+    const subjVal = t.subject_id || (t.skill_id ? 'skill_' + t.skill_id : '');
     if (subjVal) subjectSel.value = subjVal;
+    subjectSel.disabled = true;
 
-    if (TS.mode === 'free' && TS.activeTimerId) {
-      subjectSel.disabled = true;
-      plannedInput.disabled = true;
-      plannedInput.value = TS.timerPlanned || plannedInput.value;
-      startBtn.classList.add('hidden');
-      stopBtn.classList.remove('hidden');
-      if (TS.running) {
-        pauseBtn.classList.remove('hidden');
-        resumeBtn.classList.add('hidden');
-        statusDiv.textContent = `Running... (${TS.timerPlanned}min planned)`;
-        TS.intervalId = setInterval(updateDisplay, 1000);
-      } else {
-        pauseBtn.classList.add('hidden');
-        resumeBtn.classList.remove('hidden');
-        statusDiv.innerHTML = '<span style="color:var(--amber)">⏸ Paused</span>';
+    if (t.mode === 'pomodoro') {
+      freePanel.classList.add('hidden');
+      pomoPanel.classList.remove('hidden');
+      [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput].forEach(i => i.disabled = true);
+      if (t.pomodoro_config) {
+        workInput.value = t.pomodoro_config.work; shortBreakInput.value = t.pomodoro_config.short;
+        longBreakInput.value = t.pomodoro_config.long; blocksInput.value = t.pomodoro_config.blocks;
+        longEveryInput.value = t.pomodoro_config.every;
+        estimateTotal();
       }
-      updateDisplay();
-    } else if (TS.mode === 'pomodoro' && TS.pomo) {
-      [workInput, shortBreakInput, longBreakInput, blocksInput, longEveryInput, subjectSel].forEach(i => i.disabled = true);
-      workInput.value = TS.pomo.config.work;
-      shortBreakInput.value = TS.pomo.config.short;
-      longBreakInput.value = TS.pomo.config.long;
-      blocksInput.value = TS.pomo.config.blocks;
-      longEveryInput.value = TS.pomo.config.every;
       pomoStartBtn.classList.add('hidden');
       pomoStopBtn.classList.remove('hidden');
-      pomoSkipBtn.classList.remove('hidden');
-      enterPomodoroPhase(true);
+      pomoCancelBtn.classList.remove('hidden');
+      if (t.status === 'awaiting_rating') {
+        pomoSkipBtn.classList.add('hidden');
+        phaseLabel.textContent = '🎉 Pomodoro complete — press Stop & Save to rate it!';
+      } else {
+        pomoSkipBtn.classList.remove('hidden');
+        const icon = t.phase === 'work' ? '🍅' : (t.phase === 'long' ? '🌴' : '☕');
+        const label = t.phase === 'work' ? `Work Block ${t.phase_block}/${t.pomodoro_total_blocks}` : (t.phase === 'long' ? 'Long Break' : 'Short Break');
+        phaseLabel.textContent = `${icon} ${label}`;
+      }
+    } else {
+      pomoPanel.classList.add('hidden');
+      freePanel.classList.remove('hidden');
+      plannedInput.value = t.planned_minutes || plannedInput.value;
+      plannedInput.disabled = true;
+      startBtn.classList.add('hidden');
+      stopBtn.classList.remove('hidden');
+      cancelBtn.classList.remove('hidden');
+      if (t.status === 'running') {
+        pauseBtn.classList.remove('hidden'); resumeBtn.classList.add('hidden');
+        statusDiv.textContent = `Running... (${t.planned_minutes}min planned)`;
+      } else {
+        pauseBtn.classList.add('hidden'); resumeBtn.classList.remove('hidden');
+        statusDiv.innerHTML = '<span style="color:var(--amber)">⏸ Paused</span>';
+      }
     }
   }
 
   estimateTotal();
-  syncUIFromState();
+  applyStateToDOM();
+  paintTimerNumbers();
 
   return el('div', {}, [
     modeTabs,
@@ -1703,7 +1526,8 @@ async function renderTimetable(c) {
     //
     // Timer/Pomodoro sessions additionally carry `segments` — the
     // actual wall-clock study/break sub-blocks recorded while the
-    // timer ran (see TS.segments in the timer widget). When present,
+    // timer ran (now tracked server-side as the shared timer's own
+    // segments — see server.py's timer model). When present,
     // each segment becomes its own timed block (study blocks styled
     // normally, break blocks styled distinctly in amber), all sharing
     // a `groupKey` of the record's id so hovering any one of them can
@@ -3919,6 +3743,63 @@ async function renderProgression(c) {
 }
 
 // ═══════════════════════════════════════════
+// UPDATES
+// ═══════════════════════════════════════════
+async function renderUpdatesCard() {
+  const card = $('#updatesCard');
+  if (!card) return;
+  let status;
+  try {
+    status = await api('/api/update/check');
+  } catch (e) {
+    card.innerHTML = '';
+    card.appendChild(el('div', { class: 'card-title', text: '\u2B06\uFE0F Updates' }));
+    card.appendChild(el('div', { class: 'text-dim text-sm', text: 'Could not check for updates right now.' }));
+    return;
+  }
+  card.innerHTML = '';
+  card.appendChild(el('div', { class: 'card-title', text: '\u2B06\uFE0F Updates' }));
+  if (!status.ok) {
+    card.appendChild(el('div', { class: 'text-dim text-sm', text: status.error || 'Could not check for updates.' }));
+    return;
+  }
+  if (!status.update_available) {
+    card.appendChild(el('div', { class: 'text-dim text-sm', text: `You're up to date (${(status.current_sha || '').slice(0, 7)}).` }));
+    card.appendChild(el('button', { class: 'btn btn-sm btn-outline mt-8', text: 'Check Again', onclick: renderUpdatesCard }));
+    return;
+  }
+  card.appendChild(el('div', { class: 'text-sm mb-8' }, [
+    el('span', { style: 'font-weight:700;color:var(--accent)', text: 'An update is available. ' }),
+    el('span', { class: 'text-dim', text: status.message || '' })
+  ]));
+  card.appendChild(el('div', { class: 'text-dim text-sm mb-8', text: `${(status.current_sha || '').slice(0, 7)} \u2192 ${(status.latest_sha || '').slice(0, 7)}` }));
+  if (status.frozen) {
+    card.appendChild(el('div', { class: 'text-dim text-sm', text: 'This is a packaged .exe build — please download the latest release manually from the GitHub repo; auto-update only works when running from source (start.bat / launcher.bat).' }));
+    return;
+  }
+  const applyBtn = el('button', { class: 'btn btn-sm', text: 'Download & Install Update', onclick: async () => {
+    applyBtn.disabled = true;
+    applyBtn.textContent = 'Downloading...';
+    try {
+      const result = await api('/api/update/apply', { method: 'POST' });
+      if (!result.ok) { alert('Update failed: ' + (result.error || 'unknown error')); applyBtn.disabled = false; applyBtn.textContent = 'Download & Install Update'; return; }
+      applyBtn.textContent = 'Restarting...';
+      await api('/api/update/restart', { method: 'POST' });
+      // The server process is about to swap itself out — give it a
+      // moment, then reload the page so the person lands on the freshly
+      // restarted (and updated) app instead of staring at a dead tab.
+      setTimeout(() => { window.location.reload(); }, 3500);
+    } catch (e) {
+      alert('Update failed: ' + e.message);
+      applyBtn.disabled = false;
+      applyBtn.textContent = 'Download & Install Update';
+    }
+  } });
+  card.appendChild(applyBtn);
+  card.appendChild(el('div', { class: 'text-dim text-sm mt-8', text: 'This restarts the server automatically once applied — this browser tab will reload itself in a few seconds.' }));
+}
+
+// ═══════════════════════════════════════════
 // SETTINGS
 // ═══════════════════════════════════════════
 async function renderSettings(c) {
@@ -3937,6 +3818,15 @@ async function renderSettings(c) {
       el('button', { class: 'btn btn-outline', text: 'Wipe Data', onclick: wipeData })
     ])
   ]));
+
+  // Updates — checks the GitHub repo for a newer commit than this
+  // install last synced to, and can download + apply + restart in one
+  // flow. See renderUpdatesCard() below.
+  c.appendChild(el('div', { class: 'card fade-in', id: 'updatesCard' }, [
+    el('div', { class: 'card-title', text: '\u2B06\uFE0F Updates' }),
+    el('div', { class: 'text-dim text-sm', text: 'Checking...' })
+  ]));
+  renderUpdatesCard();
 
   // Preferences — attendance default mode + ML prediction toggle
   c.appendChild(el('div', { class: 'card fade-in' }, [
@@ -4063,13 +3953,35 @@ async function renderSettings(c) {
     ])))
   ]));
 
-  // Subjects
+  // Subjects — category management lives inline at the top of this
+  // card, mirroring the Skills card below exactly: a category can be
+  // created (and deleted) on its own, with zero subjects assigned to
+  // it, the same way Skill Categories always could.
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: '📚 Subjects' }),
+    el('div', { class: 'text-dim text-sm mb-8', text: 'Categories group related subjects together (e.g. "Mathematics" holding both "Algebra" and "Analysis"). A category can be reused as a Skill Category too — they\'re independent, so the same real-world topic can label both.' }),
+    el('div', { class: 'row', style: 'gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end' }, [
+      el('div', {}, [el('label', { text: 'New Category', style: 'margin:0 0 4px' }), el('input', { id: 'newSubCatName', placeholder: 'e.g. Mathematics', style: 'width:200px' })]),
+      el('button', { class: 'btn btn-sm btn-outline', text: '+ Add Category', onclick: addSubjectCategory })
+    ]),
+    (cfg.subject_categories || []).length ? el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-bottom:8px' },
+      cfg.subject_categories.map(sc => el('span', { class: 'tag', style: 'background:var(--bg3);color:var(--text);display:inline-flex;align-items:center;gap:6px' }, [
+        el('span', { text: sc.name }),
+        el('span', { style: 'cursor:pointer;opacity:.7', text: '✕', title: 'Delete category (subjects keep their data, just lose this grouping)', onclick: async () => {
+          if (!confirm(`Delete category "${sc.name}"? Its subjects will become uncategorized.`)) return;
+          await api(`/api/${currentProfile}/subject_categories/${sc.id}`, { method: 'DELETE' });
+          await loadConfig(); render();
+        } })
+      ]))
+    ) : null,
     el('div', { class: 'row', style: 'gap:8px;margin-bottom:12px;flex-wrap:wrap' }, [
       el('input', { id: 'newSubName', placeholder: 'Subject name', style: 'width:180px' }),
       el('input', { id: 'newSubColor', type: 'color', value: '#4a90d9', style: 'width:40px' }),
       el('input', { id: 'newSubDiff', type: 'number', min: '1', max: '10', value: '5', style: 'width:74px', title: 'Baseline difficulty (1 easiest, 10 hardest) — used as the default starting point when rating a session, and as a stable signal for exam-score predictions. Each individual study session logs its own difficulty separately.' }),
+      el('select', { id: 'newSubCat', style: 'width:auto' }, [
+        el('option', { value: '', text: 'No category' }),
+        ...(cfg.subject_categories || []).map(sc => el('option', { value: sc.id, text: sc.name }))
+      ]),
       // Year field was missing here entirely — subjects created via
       // Settings could never be assigned a year_id, so the Timetable's
       // year filter always had nothing to match against.
@@ -4118,17 +4030,28 @@ async function renderSettings(c) {
         : cfg.subjects.filter(s => s.year_id === subjectListYearFilter);
       return subjectsToShow.length ? el('div', { style: 'max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:var(--r-sm)' }, [
         el('table', { style: 'margin:0' }, [
-          el('thead', {}, el('tr', {}, [el('th', { text: 'Color' }), el('th', { text: 'Name' }), el('th', { text: 'Diff' }), el('th', { text: 'Year' }), el('th', { text: 'Schedule' }), el("th", { text: "" })])),
+          el('thead', {}, el('tr', {}, [el('th', { text: 'Color' }), el('th', { text: 'Name' }), el('th', { text: 'Diff' }), el('th', { text: 'Category' }), el('th', { text: 'Year' }), el('th', { text: 'Schedule' }), el("th", { text: "" })])),
           el('tbody', {}, subjectsToShow.map(s => {
         const yr = cfg.academic_years.find(y => y.id === s.year_id);
+        const catSel = el('select', { style: 'width:auto;min-width:120px', title: 'Assign to a Subject Category — also moves its File Explorer folder' }, [
+          el('option', { value: '', text: 'Uncategorized' }),
+          ...(cfg.subject_categories || []).map(sc => el('option', { value: sc.id, text: sc.name }))
+        ]);
+        catSel.value = s.category_id || '';
+        catSel.addEventListener('change', async () => {
+          try { await api(`/api/${currentProfile}/subjects/${s.id}`, { method: 'PUT', body: JSON.stringify({ category_id: catSel.value }) }); await loadConfig(); render(); }
+          catch (e) { alert(e.message); }
+        });
         return el('tr', {}, [
           el('td', {}, el('div', { style: `width:20px;height:20px;border-radius:4px;background:${s.color}` })),
           el('td', { text: s.name }),
           el('td', { text: s.difficulty + '/10' }),
+          el('td', {}, catSel),
           el('td', { class: 'text-sm text-dim', text: yr ? yr.label : '—' }),
           el('td', { class: 'text-sm text-dim', text: (s.schedule || []).map(sc => `${sc.day} ${lessonTypeLabel(sc.type)}`).join(', ') || '—' }),
           el('td', {}, el('div', { class: 'btn-group' }, [
             el('button', { class: 'btn btn-sm btn-outline', text: '📅', title: 'Manage schedule (add more than one slot per week)', onclick: () => showManageScheduleModal(s) }),
+            el('button', { class: 'btn btn-sm btn-outline', text: '📁', title: 'Open in File Explorer', onclick: () => { navigate('files'); pendingFileExplorerOpen = { ref_type: 'subject', ref_id: s.id }; render(); } }),
             el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
               if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session, attendance record, exam, and file linked to this subject too — including all mastery progress earned for it. This cannot be undone.`)) return;
               await api(`/api/${currentProfile}/subjects/${s.id}`, { method: 'DELETE' });
@@ -4150,6 +4073,16 @@ async function renderSettings(c) {
       el('div', {}, [el('label', { text: 'New Category', style: 'margin:0 0 4px' }), el('input', { id: 'newSkillCatName', placeholder: 'e.g. Software Engineering', style: 'width:200px' })]),
       el('button', { class: 'btn btn-sm btn-outline', text: '+ Add Category', onclick: addSkillCategory })
     ]),
+    cfg.skill_categories.length ? el('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-bottom:8px' },
+      cfg.skill_categories.map(sc => el('span', { class: 'tag', style: 'background:var(--bg3);color:var(--text);display:inline-flex;align-items:center;gap:6px' }, [
+        el('span', { text: sc.name }),
+        el('span', { style: 'cursor:pointer;opacity:.7', text: '✕', title: 'Delete category (skills keep their data, just lose this grouping)', onclick: async () => {
+          if (!confirm(`Delete category "${sc.name}"? Its skills will become uncategorized.`)) return;
+          await api(`/api/${currentProfile}/skill_categories/${sc.id}`, { method: 'DELETE' });
+          await loadConfigAndGamification(); render();
+        } })
+      ]))
+    ) : null,
     el('div', { class: 'row', style: 'gap:8px;margin-bottom:12px;flex-wrap:wrap' }, [
       el('input', { id: 'newSkillName', placeholder: 'Skill name', style: 'width:180px' }),
       el('select', { id: 'newSkillCat', style: 'width:auto' }, [
@@ -4162,12 +4095,21 @@ async function renderSettings(c) {
       el('table', { style: 'margin:0' }, [
         el('thead', {}, el('tr', {}, [el('th', { text: 'Name' }), el('th', { text: 'Category' }), el("th", { text: "" })])),
         el('tbody', {}, cfg.skills.map(s => {
-          const cat = cfg.skill_categories.find(c => c.id === s.category_id);
+          const catSel = el('select', { style: 'width:auto;min-width:120px', title: 'Assign to a Skill Category — also moves its File Explorer folder' }, [
+            el('option', { value: '', text: 'Uncategorized' }),
+            ...cfg.skill_categories.map(c => el('option', { value: c.id, text: c.name }))
+          ]);
+          catSel.value = s.category_id || '';
+          catSel.addEventListener('change', async () => {
+            try { await api(`/api/${currentProfile}/skills/${s.id}`, { method: 'PUT', body: JSON.stringify({ category_id: catSel.value }) }); await loadConfigAndGamification(); render(); }
+            catch (e) { alert(e.message); }
+          });
           return el('tr', {}, [
           el('td', { text: s.name }),
-          el('td', { class: 'text-dim', text: cat ? cat.name : '—' }),
+          el('td', {}, catSel),
           el('td', {}, el('div', { class: 'btn-group' }, [
             el('button', { class: 'btn btn-sm btn-outline', text: '✏️', title: 'Rename skill', onclick: () => showRenameSkillModal(s) }),
+            el('button', { class: 'btn btn-sm btn-outline', text: '📁', title: 'Open in File Explorer', onclick: () => { navigate('files'); pendingFileExplorerOpen = { ref_type: 'skill', ref_id: s.id }; render(); } }),
             el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
               if (!dangerConfirm(`Delete "${s.name}"? This PERMANENTLY deletes every self-study session and file linked to this skill too — including all mastery progress earned for it. This cannot be undone.`)) return;
               await api(`/api/${currentProfile}/skills/${s.id}`, { method: 'DELETE' });
@@ -4180,11 +4122,11 @@ async function renderSettings(c) {
     ]) : el('div', { class: 'text-dim text-sm', text: 'No skills yet.' })
   ]));
 
-  // Files browser
+  // Files — the rich freeform file explorer now lives on its own page.
   c.appendChild(el('div', { class: 'card fade-in' }, [
     el('div', { class: 'card-title', text: '📁 Subject/Skill Files' }),
-    el('div', { class: 'text-dim text-sm', text: 'Upload and manage files for each subject and skill in their respective folders under saves/_files/.' }),
-    el('div', { class: 'mt-16', id: 'filesList' })
+    el('div', { class: 'text-dim text-sm mb-8', text: 'File uploads, folders, notes, and media playback now live in their own dedicated File Explorer — richer than fits in this settings list.' }),
+    el('button', { class: 'btn btn-sm', text: 'Open File Explorer →', onclick: () => navigate('files') })
   ]));
 
   if (pendingSettingsScroll === 'progression') {
@@ -4194,7 +4136,6 @@ async function renderSettings(c) {
       if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 0);
   }
-  renderFilesList();
 }
 
 function showProfileModal() {
@@ -4240,6 +4181,7 @@ async function addSubject() {
   const name = $('#newSubName').value.trim();
   const color = $('#newSubColor').value;
   const diff = parseInt($('#newSubDiff').value) || 5;
+  const categoryId = $('#newSubCat') ? $('#newSubCat').value : '';
   const yearId = $('#newSubYear') ? $('#newSubYear').value : '';
   const day = $('#newSubDay')?.value || '';
   const type = $('#newSubType')?.value || 'C';
@@ -4249,11 +4191,21 @@ async function addSubject() {
   if ((day || start || end) && (!day || !start || !end)) { alert('Pick a day, start, and end time for the schedule slot'); return; }
   try {
     await api(`/api/${currentProfile}/subjects`, { method: 'POST', body: JSON.stringify({
-      name, color, difficulty: diff, year_id: yearId,
+      name, color, difficulty: diff, year_id: yearId, category_id: categoryId,
       schedule: day ? [{ day, type, start, end }] : []
     }) });
     $('#newSubName').value = '';
     await loadConfigAndGamification(); render();
+  } catch (e) { alert(e.message); }
+}
+
+async function addSubjectCategory() {
+  const name = $('#newSubCatName').value.trim();
+  if (!name) { alert('Enter a category name'); return; }
+  try {
+    await api(`/api/${currentProfile}/subject_categories`, { method: 'POST', body: JSON.stringify({ name }) });
+    $('#newSubCatName').value = '';
+    await loadConfig(); render();
   } catch (e) { alert(e.message); }
 }
 
@@ -4328,62 +4280,730 @@ async function wipeData() {
   render();
 }
 
-async function renderFilesList() {
-  const container = $('#filesList');
-  if (!container) return;
-  const cfg = cachedConfig;
-  if (!cfg) return;
-  container.innerHTML = '';
+// ═══════════════════════════════════════════
+// FILE EXPLORER — freeform per-subject/skill file navigator
+// ═══════════════════════════════════════════
+let fileExplorerRef = null;     // { ref_type, ref_id, name, kindLabel }
+let fileExplorerPath = '';      // '/'-separated, relative to the item's own root
+let fileExplorerData = null;    // last-loaded {folders, files} for current path
+let fileExplorerDragPath = null; // path currently being dragged (file or folder)
 
-  const allItems = [
-    ...(cfg.subjects || []).map(s => ({ type: 'subject', id: s.id, name: s.name })),
-    ...(cfg.skills || []).map(s => ({ type: 'skill', id: s.id, name: s.name }))
-  ];
+function fileDownloadUrl(ref, path, attachment) {
+  const p = encodeURIComponent(path || '');
+  return `/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/download?path=${p}${attachment ? '&as_attachment=1' : ''}`;
+}
+function joinFePath(base, name) { return base ? `${base}/${name}` : name; }
+function feParentPath(path) { const i = path.lastIndexOf('/'); return i === -1 ? '' : path.slice(0, i); }
 
-  for (const item of allItems) {
-    let files = [];
+const FILE_KIND_ICONS = { audio: '🎵', video: '🎬', pdf: '📕', image: '🖼️', text: '📝', markdown: '📘', file: '📄' };
+
+async function renderFiles(c) {
+  const cfg = cachedConfig || { subjects: [], skills: [], subject_categories: [], skill_categories: [] };
+
+  if (pendingFileExplorerOpen) {
+    const item = pendingFileExplorerOpen.ref_type === 'skill'
+      ? (cfg.skills || []).find(s => s.id === pendingFileExplorerOpen.ref_id)
+      : (cfg.subjects || []).find(s => s.id === pendingFileExplorerOpen.ref_id);
+    if (item) { fileExplorerRef = { ref_type: pendingFileExplorerOpen.ref_type, ref_id: item.id, name: item.name }; fileExplorerPath = ''; }
+    pendingFileExplorerOpen = null;
+  }
+
+  c.innerHTML = '';
+  c.appendChild(el('h2', { style: 'margin-bottom:16px', text: '📁 File Explorer' }));
+
+  const layout = el('div', { class: 'fe-layout' });
+
+  // ── Sidebar: Category > Subject/Skill tree ──
+  const sidebar = el('div', { class: 'fe-sidebar' });
+  function sidebarSection(title, categories, items, refType) {
+    sidebar.appendChild(el('div', { class: 'fe-sidebar-heading', text: title }));
+    const byCategory = new Map();
+    const uncategorized = [];
+    items.forEach(it => {
+      if (it.category_id && categories.find(cc => cc.id === it.category_id)) {
+        if (!byCategory.has(it.category_id)) byCategory.set(it.category_id, []);
+        byCategory.get(it.category_id).push(it);
+      } else uncategorized.push(it);
+    });
+    categories.forEach(cat => {
+      const kids = byCategory.get(cat.id) || [];
+      if (!kids.length) return;
+      sidebar.appendChild(el('div', { class: 'fe-sidebar-cat', text: `🗂 ${cat.name}` }));
+      kids.forEach(it => sidebar.appendChild(sidebarItemBtn(it, refType)));
+    });
+    uncategorized.forEach(it => sidebar.appendChild(sidebarItemBtn(it, refType)));
+  }
+  function sidebarItemBtn(it, refType) {
+    const active = fileExplorerRef && fileExplorerRef.ref_type === refType && fileExplorerRef.ref_id === it.id;
+    return el('button', {
+      class: `fe-sidebar-item${active ? ' active' : ''}`, text: it.name,
+      onclick: () => { fileExplorerRef = { ref_type: refType, ref_id: it.id, name: it.name }; fileExplorerPath = ''; render(); }
+    });
+  }
+  sidebarSection('Subjects', cfg.subject_categories || [], cfg.subjects || [], 'subject');
+  sidebarSection('Skills', cfg.skill_categories || [], cfg.skills || [], 'skill');
+  if (!(cfg.subjects || []).length && !(cfg.skills || []).length) {
+    sidebar.appendChild(el('div', { class: 'text-dim text-sm', style: 'padding:8px', text: 'Add a subject or skill in Settings to get a folder here.' }));
+  }
+  layout.appendChild(sidebar);
+
+  // ── Main panel ──
+  const main = el('div', { class: 'fe-main' });
+  if (!fileExplorerRef) {
+    main.appendChild(el('div', { class: 'empty-state' }, [
+      el('div', { class: 'empty-state-icon', text: '📁' }),
+      el('div', { text: 'Pick a subject or skill on the left to browse its files.' })
+    ]));
+  } else {
+    let data;
     try {
-      files = await api(`/api/${currentProfile}/files/${item.type}/${item.id}`);
-    } catch (e) {}
+      data = await api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}?path=${encodeURIComponent(fileExplorerPath)}`);
+    } catch (e) {
+      main.appendChild(el('div', { class: 'text-dim', text: `Could not load folder: ${esc(e.message)}` }));
+      layout.appendChild(main); c.appendChild(layout); return;
+    }
+    fileExplorerData = data;
 
-    const fileList = el('div', { style: 'margin-bottom:8px' });
-    files.forEach(f => {
-      fileList.appendChild(el('div', { class: 'file-item' }, [
-        el('span', { class: 'file-icon', text: '📄' }),
-        el('span', { class: 'flex-1 truncate', text: f.name }),
-        el('span', { class: 'text-dim text-sm', text: Math.round(f.size/1024) + 'KB' }),
-        el('button', { class: 'btn btn-sm btn-outline', text: '📥', onclick: () => window.open(`/api/${currentProfile}/files/${item.type}/${item.id}/${f.name}`) }),
-        el('button', { class: 'btn btn-sm btn-danger', text: '✕', onclick: async () => {
-          await api(`/api/${currentProfile}/files/${item.type}/${item.id}/${f.name}`, { method: 'DELETE' });
-          renderFilesList();
-        } })
+    // Breadcrumb
+    const crumbWrap = el('div', { class: 'fe-breadcrumb' });
+    crumbWrap.appendChild(el('span', { class: 'fe-crumb', text: fileExplorerRef.name, onclick: () => { fileExplorerPath = ''; render(); } }));
+    let acc = '';
+    fileExplorerPath.split('/').filter(Boolean).forEach(part => {
+      acc = joinFePath(acc, part);
+      const p = acc;
+      crumbWrap.appendChild(el('span', { class: 'fe-crumb-sep', text: '/' }));
+      crumbWrap.appendChild(el('span', { class: 'fe-crumb', text: part, onclick: () => { fileExplorerPath = p; render(); } }));
+    });
+    main.appendChild(crumbWrap);
+
+    // Toolbar
+    const fileInput = el('input', { type: 'file', multiple: true, style: 'display:none', onchange: async (e) => {
+      const files = [...e.target.files];
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('path', fileExplorerPath);
+        try { await fetch(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/upload`, { method: 'POST', body: fd }); }
+        catch (err) { alert('Upload failed: ' + err.message); }
+      }
+      fileInput.value = '';
+      render();
+    } });
+    main.appendChild(el('div', { class: 'fe-toolbar' }, [
+      el('button', { class: 'btn btn-sm btn-outline', text: '📁+ New Folder', onclick: () => showFeNewFolderModal() }),
+      el('button', { class: 'btn btn-sm btn-outline', text: '📝+ New File', onclick: () => showFeNewFileModal() }),
+      el('button', { class: 'btn btn-sm', text: '⬆ Upload', onclick: () => fileInput.click() }),
+      fileInput,
+      el('div', { class: 'flex-1' }),
+      el('span', { class: 'text-dim text-sm', text: `${data.folders.length} folder${data.folders.length === 1 ? '' : 's'} · ${data.files.length} file${data.files.length === 1 ? '' : 's'}` })
+    ]));
+
+    const grid = el('div', { class: 'fe-grid' });
+
+    if (fileExplorerPath) {
+      grid.appendChild(el('div', {
+        class: 'fe-card fe-folder-card fe-up', title: 'Up one level',
+        onclick: () => { fileExplorerPath = feParentPath(fileExplorerPath); render(); },
+        ondragover: (e) => e.preventDefault(),
+        ondrop: (e) => feHandleDrop(e, feParentPath(fileExplorerPath))
+      }, [el('div', { class: 'fe-card-icon', text: '⬆️' }), el('div', { class: 'fe-card-name', text: '.. (up)' })]));
+    }
+
+    data.folders.forEach(f => {
+      grid.appendChild(el('div', {
+        class: 'fe-card fe-folder-card', draggable: true,
+        onclick: () => { fileExplorerPath = joinFePath(fileExplorerPath, f.name); render(); },
+        ondragstart: (e) => { fileExplorerDragPath = joinFePath(fileExplorerPath, f.name); e.dataTransfer.setData('text/plain', fileExplorerDragPath); },
+        ondragover: (e) => e.preventDefault(),
+        ondrop: (e) => feHandleDrop(e, joinFePath(fileExplorerPath, f.name))
+      }, [
+        el('div', { class: 'fe-card-icon', text: '📂' }),
+        el('div', { class: 'fe-card-name', text: f.name }),
+        el('div', { class: 'fe-card-meta', text: `${f.file_count} file${f.file_count === 1 ? '' : 's'}` }),
+        feCardMenu(joinFePath(fileExplorerPath, f.name), f.name, true)
       ]));
     });
 
-    // Upload button
-    const fileInput = el('input', { type: 'file', style: 'display:none', onchange: async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const formData = new FormData();
-      formData.append('file', file);
-      try {
-        await fetch(`/api/${currentProfile}/files/${item.type}/${item.id}`, { method: 'POST', body: formData });
-        renderFilesList();
-      } catch (err) { alert('Upload failed: ' + err.message); }
-    }});
-    const uploadBtn = el('button', { class: 'btn btn-sm btn-outline', text: '📤 Upload', onclick: () => fileInput.click() });
+    data.files.forEach(f => {
+      const fullPath = joinFePath(fileExplorerPath, f.name);
+      grid.appendChild(el('div', {
+        class: 'fe-card fe-file-card', draggable: true,
+        onclick: () => openFileViewer(fileExplorerRef, fullPath, f),
+        ondragstart: (e) => { fileExplorerDragPath = fullPath; e.dataTransfer.setData('text/plain', fullPath); }
+      }, [
+        el('div', { class: 'fe-card-icon', text: FILE_KIND_ICONS[f.kind] || '📄' }),
+        el('div', { class: 'fe-card-name', text: f.name }),
+        el('div', { class: 'fe-card-meta', text: `${(f.size / 1024).toFixed(0)}KB${f.has_notes ? ' · 📝' : ''}` }),
+        feCardMenu(fullPath, f.name, false, f)
+      ]));
+    });
 
-    container.appendChild(el('div', { style: 'margin-bottom:12px' }, [
-      el('div', { style: 'font-weight:600;margin-bottom:4px', text: `${item.name} (${item.type})` }),
-      fileList,
-      fileInput, uploadBtn
+    if (!data.folders.length && !data.files.length) {
+      grid.appendChild(el('div', { class: 'empty-state', style: 'grid-column:1/-1' }, [
+        el('div', { class: 'empty-state-icon', text: '🗃️' }),
+        el('div', { text: 'This folder is empty. Upload a file or create a subfolder.' })
+      ]));
+    }
+    main.appendChild(grid);
+  }
+  layout.appendChild(main);
+  c.appendChild(layout);
+}
+
+function feHandleDrop(e, toPath) {
+  e.preventDefault();
+  const path = fileExplorerDragPath || e.dataTransfer.getData('text/plain');
+  if (!path || path === toPath) return;
+  api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/move`, {
+    method: 'POST', body: JSON.stringify({ path, to_path: toPath })
+  }).then(() => render()).catch(err => alert(err.message));
+}
+
+// Small "..." menu per card — rename/delete for everything, plus
+// Play/Queue for audio files right from the grid (see requested "3-dot
+// interaction menu" for sibling audio browsing, mirrored here too).
+function feCardMenu(path, displayName, isFolder, fileInfo) {
+  const btn = el('button', { class: 'fe-card-menu-btn', text: '⋮', onclick: (e) => {
+    e.stopPropagation();
+    const existing = document.querySelector('.fe-card-menu-popover');
+    if (existing) existing.remove();
+    const pop = el('div', { class: 'fe-card-menu-popover' });
+    if (!isFolder && fileInfo && fileInfo.kind === 'audio') {
+      pop.appendChild(el('div', { class: 'fe-menu-item', text: '▶ Play Now', onclick: () => { playAudioTrack(fileExplorerRef, path, displayName); pop.remove(); } }));
+      pop.appendChild(el('div', { class: 'fe-menu-item', text: '➕ Add to Queue', onclick: () => { audioQueueAdd({ ref: fileExplorerRef, path, name: displayName }); pop.remove(); } }));
+    }
+    if (!isFolder && fileInfo && (fileInfo.kind === 'text' || fileInfo.kind === 'markdown')) {
+      pop.appendChild(el('div', { class: 'fe-menu-item', text: '✏️ Edit', onclick: () => { pop.remove(); openTextEditor(fileExplorerRef, path, displayName, fileInfo.kind); } }));
+    }
+    pop.appendChild(el('div', { class: 'fe-menu-item', text: '✏️ Rename', onclick: () => { pop.remove(); showFeRenameModal(path, displayName); } }));
+    pop.appendChild(el('div', { class: 'fe-menu-item fe-menu-danger', text: '🗑 Delete', onclick: async () => {
+      pop.remove();
+      if (!confirm(`Delete "${displayName}"?${isFolder ? ' This deletes everything inside it too.' : ''}`)) return;
+      await api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/delete`, { method: 'POST', body: JSON.stringify({ path }) });
+      render();
+    } }));
+    document.body.appendChild(pop);
+    const rect = btn.getBoundingClientRect();
+    const popWidth = 190; // matches .fe-card-menu-popover's min-width
+    pop.style.top = `${rect.bottom + 4}px`;
+    // Anchor to the BUTTON's right edge (rect.right), not its left — a
+    // popover anchored at rect.left can render far from the ⋮ it came
+    // from once its own width is accounted for, especially near the
+    // right side of the screen where rect.left is already close to
+    // window.innerWidth. Clamp both edges so it never runs off-screen.
+    let left = rect.right - popWidth;
+    left = Math.max(8, Math.min(left, window.innerWidth - popWidth - 8));
+    pop.style.left = `${left}px`;
+    setTimeout(() => document.addEventListener('click', () => pop.remove(), { once: true }), 0);
+  } });
+  return btn;
+}
+
+function showFeNewFolderModal() {
+  const nameInput = el('input', { placeholder: 'Folder name' });
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [el('div', { class: 'modal-title', text: 'New Folder' }), el('button', { class: 'modal-close', onclick: closeModal, text: '×' })]),
+    el('label', { text: 'Name' }), nameInput,
+    el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
+      el('button', { class: 'btn', text: 'Create', onclick: async () => {
+        if (!nameInput.value.trim()) { alert('Enter a name'); return; }
+        try {
+          await api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/mkdir`, { method: 'POST', body: JSON.stringify({ path: fileExplorerPath, name: nameInput.value.trim() }) });
+          closeModal(); render();
+        } catch (e) { alert(e.message); }
+      } })
+    ])
+  ]);
+  showModal(content);
+}
+
+function showFeNewFileModal() {
+  const nameInput = el('input', { placeholder: 'e.g. notes.md, todo.txt' });
+  const typeHint = el('div', { class: 'text-dim text-sm mt-8', text: 'Markdown (.md), plain text (.txt), and common code/config types can be created and edited right in the app.' });
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [el('div', { class: 'modal-title', text: 'New Text/Markdown File' }), el('button', { class: 'modal-close', onclick: closeModal, text: '×' })]),
+    el('label', { text: 'Filename (with extension)' }), nameInput, typeHint,
+    el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
+      el('button', { class: 'btn', text: 'Create & Open', onclick: async () => {
+        const filename = nameInput.value.trim();
+        if (!filename) { alert('Enter a filename'); return; }
+        try {
+          const resp = await api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/newfile`, { method: 'POST', body: JSON.stringify({ path: fileExplorerPath, name: filename, content: '' }) });
+          closeModal();
+          const fullPath = joinFePath(fileExplorerPath, resp.filename);
+          openTextEditor(fileExplorerRef, fullPath, resp.filename, resp.kind);
+          render();
+        } catch (e) { alert(e.message); }
+      } })
+    ])
+  ]);
+  showModal(content);
+}
+
+function showFeRenameModal(path, currentName) {
+  const nameInput = el('input', { value: currentName });
+  const content = el('div', {}, [
+    el('div', { class: 'modal-header' }, [el('div', { class: 'modal-title', text: 'Rename' }), el('button', { class: 'modal-close', onclick: closeModal, text: '×' })]),
+    el('label', { text: 'New name' }), nameInput,
+    el('div', { class: 'btn-group', style: 'margin-top:16px;justify-content:flex-end' }, [
+      el('button', { class: 'btn', text: 'Save', onclick: async () => {
+        if (!nameInput.value.trim()) { alert('Enter a name'); return; }
+        try {
+          await api(`/api/${currentProfile}/filetree/${fileExplorerRef.ref_type}/${fileExplorerRef.ref_id}/rename`, { method: 'POST', body: JSON.stringify({ path, new_name: nameInput.value.trim() }) });
+          closeModal(); render();
+        } catch (e) { alert(e.message); }
+      } })
+    ])
+  ]);
+  showModal(content);
+}
+
+// ── File viewers dispatch ──
+function openFileViewer(ref, path, fileInfo) {
+  if (fileInfo.kind === 'audio') { playAudioTrack(ref, path, fileInfo.name); return; }
+  if (fileInfo.kind === 'video') { openVideoViewer(ref, path, fileInfo.name); return; }
+  if (fileInfo.kind === 'pdf') { openPdfViewer(ref, path, fileInfo.name); return; }
+  if (fileInfo.kind === 'image') { openImageViewer(ref, path, fileInfo.name); return; }
+  if (fileInfo.kind === 'text' || fileInfo.kind === 'markdown') { openTextEditor(ref, path, fileInfo.name, fileInfo.kind); return; }
+  // Local app — there's nothing to "download" (the file already lives in
+  // the app's own folder), so just let the browser open it however it
+  // naturally would; it'll fall back to a save prompt on its own for
+  // types it genuinely can't render inline.
+  window.open(fileDownloadUrl(ref, path, false), '_blank');
+}
+
+let _localIdCounter = 0;
+function _localId(prefix) { return `${prefix}_${++_localIdCounter}_${Date.now()}`; }
+
+// Shared viewer chrome: a fullscreen toggle (the viewer modal is also
+// manually resizable — see .fe-viewer-modal's CSS `resize: both`) so a
+// PDF/video/image opened on a big monitor isn't stuck at the same small
+// default size every other modal uses.
+function toggleViewerFullscreen() {
+  document.getElementById('modalContent').classList.toggle('fe-viewer-fullscreen');
+}
+function viewerHeader(title, onClose, extraButtons) {
+  return el('div', { class: 'modal-header' }, [
+    el('div', { class: 'modal-title truncate', text: title }),
+    el('div', { class: 'row', style: 'gap:4px;flex-shrink:0' }, [
+      ...(extraButtons || []),
+      el('button', { class: 'btn btn-sm btn-outline', text: '⛶', title: 'Toggle fullscreen', onclick: toggleViewerFullscreen }),
+      el('button', { class: 'modal-close', onclick: onClose || closeModal, text: '×' })
+    ])
+  ]);
+}
+
+function openImageViewer(ref, path, name) {
+  showModal(el('div', { class: 'text-center' }, [
+    viewerHeader(name, closeModal),
+    el('img', { src: fileDownloadUrl(ref, path), style: 'max-width:100%;max-height:100%;display:inline-block;border-radius:var(--r-sm)' })
+  ]));
+  document.getElementById('modalContent').classList.add('fe-viewer-modal');
+}
+
+// ── Text / Markdown / Code editor — a quick-edit box for the kind of
+// small change that doesn't deserve firing up a real code editor.
+// Markdown gets a rendered Preview tab (via marked.js); anything else
+// gets a syntax-highlighted Preview (via highlight.js) — both loaded
+// from CDN in index.html. Edit is always the plain textarea; Save
+// writes straight back to the file on disk. ──
+const HLJS_EXT_LANG_MAP = { js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', sh: 'bash', yml: 'yaml', md: 'markdown', htm: 'html' };
+
+async function openTextEditor(ref, path, name, kind) {
+  showModal(el('div', {}, [viewerHeader(name, closeModal), el('div', { class: 'text-dim mt-16', text: 'Loading...' })]));
+  document.getElementById('modalContent').classList.add('fe-viewer-modal');
+
+  let content = '';
+  let loadError = null;
+  try {
+    const resp = await api(`/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/read_text?path=${encodeURIComponent(path)}`);
+    content = resp.content;
+  } catch (e) { loadError = e.message; }
+
+  const isMarkdown = kind === 'markdown';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const hljsLang = HLJS_EXT_LANG_MAP[ext] || ext;
+
+  const textarea = el('textarea', { class: 'fe-text-editor', value: content, spellcheck: 'false' });
+  const previewPane = el('div', { class: 'fe-text-preview hidden' });
+  const editTabBtn = el('button', { class: 'btn btn-sm', text: '✏️ Edit' });
+  const previewTabBtn = el('button', { class: 'btn btn-sm btn-outline', text: isMarkdown ? '👁 Preview' : '🎨 Highlighted' });
+  const statusSpan = el('span', { class: 'text-dim text-sm' });
+
+  function renderPreview() {
+    previewPane.innerHTML = '';
+    if (isMarkdown && window.marked) {
+      previewPane.classList.add('fe-markdown-body');
+      previewPane.innerHTML = window.marked.parse(textarea.value);
+      if (window.hljs) previewPane.querySelectorAll('pre code').forEach(b => window.hljs.highlightElement(b));
+    } else if (window.hljs) {
+      const code = el('code', { class: hljsLang ? `language-${hljsLang}` : '' });
+      code.textContent = textarea.value;
+      const pre = el('pre', {}, [code]);
+      previewPane.appendChild(pre);
+      window.hljs.highlightElement(code);
+    } else {
+      previewPane.appendChild(el('pre', { text: textarea.value }));
+    }
+  }
+  function showEditMode() {
+    textarea.classList.remove('hidden'); previewPane.classList.add('hidden');
+    editTabBtn.classList.remove('btn-outline'); previewTabBtn.classList.add('btn-outline');
+  }
+  function showPreviewMode() {
+    renderPreview();
+    textarea.classList.add('hidden'); previewPane.classList.remove('hidden');
+    previewTabBtn.classList.remove('btn-outline'); editTabBtn.classList.add('btn-outline');
+  }
+  editTabBtn.onclick = showEditMode;
+  previewTabBtn.onclick = showPreviewMode;
+
+  const saveBtn = el('button', { class: 'btn btn-sm btn-success', text: '💾 Save', onclick: async () => {
+    try {
+      await api(`/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/write_text`, { method: 'PUT', body: JSON.stringify({ path, content: textarea.value }) });
+      statusSpan.textContent = 'Saved ✓';
+      setTimeout(() => { statusSpan.textContent = ''; }, 2500);
+    } catch (e) { alert('Could not save: ' + e.message); }
+  } });
+
+  const body = loadError
+    ? el('div', { class: 'recommendation warning mt-16', text: loadError })
+    : el('div', {}, [
+        el('div', { class: 'row', style: 'gap:8px;margin:8px 0;align-items:center' }, [
+          editTabBtn, previewTabBtn, el('div', { class: 'flex-1' }), statusSpan, saveBtn
+        ]),
+        textarea, previewPane
+      ]);
+
+  showModal(el('div', { class: 'fe-viewer-text' }, [viewerHeader(name, closeModal), body]));
+  document.getElementById('modalContent').classList.add('fe-viewer-modal');
+  if (!loadError) showEditMode();
+}
+
+// ── PDF viewer: native browser PDF rendering (iframe) + a page-anchored
+// notes panel, now with TABS — opening several PDFs keeps them all
+// available in one modal (switch via the tab bar) instead of replacing
+// each other, plus an optional side-by-side split view of any two open
+// tabs for comparing papers. The browser's own viewer already gives
+// page nav, zoom, search, and print for free — reimplementing a PDF
+// renderer from scratch would be enormous for what it adds; this layers
+// tabs/notes/a remembered "last page" on top of it instead. ──
+let pdfTabs = [];          // [{ id, ref, path, name, page, notes }]
+let pdfActiveTabId = null;
+let pdfSplitTabId = null;  // second pane's tab id, or null (single pane)
+
+function _pdfTabKey(ref, path) { return `${ref.ref_type}:${ref.ref_id}:${path}`; }
+
+async function openPdfViewer(ref, path, name) {
+  const key = _pdfTabKey(ref, path);
+  let tab = pdfTabs.find(t => t._key === key);
+  if (!tab) {
+    let meta = {};
+    try { meta = await api(`/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/meta?path=${encodeURIComponent(path)}`); } catch (e) {}
+    tab = { id: _localId('pdftab'), _key: key, ref, path, name, page: meta.pdf_last_page || 1, notes: meta.pdf_notes || [] };
+    pdfTabs.push(tab);
+  }
+  pdfActiveTabId = tab.id;
+  renderPdfViewerModal();
+}
+function pdfCloseTab(id) {
+  pdfTabs = pdfTabs.filter(t => t.id !== id);
+  if (pdfSplitTabId === id) pdfSplitTabId = null;
+  if (pdfActiveTabId === id) pdfActiveTabId = pdfTabs.length ? pdfTabs[pdfTabs.length - 1].id : null;
+  if (!pdfTabs.length) { closeModal(); return; }
+  renderPdfViewerModal();
+}
+function pdfSavePageMeta(tab) {
+  api(`/api/${currentProfile}/filetree/${tab.ref.ref_type}/${tab.ref.ref_id}/meta`, { method: 'PUT', body: JSON.stringify({ path: tab.path, pdf_last_page: tab.page }) }).catch(() => {});
+}
+function pdfSaveNotesMeta(tab) {
+  api(`/api/${currentProfile}/filetree/${tab.ref.ref_type}/${tab.ref.ref_id}/meta`, { method: 'PUT', body: JSON.stringify({ path: tab.path, pdf_notes: tab.notes }) }).catch(() => {});
+}
+function renderPdfPane(tab) {
+  const pageInput = el('input', { type: 'number', min: '1', value: String(tab.page), style: 'width:64px' });
+  const iframe = el('iframe', { src: `${fileDownloadUrl(tab.ref, tab.path)}#page=${tab.page}`, class: 'fe-pdf-iframe' });
+  function goToPage() {
+    const p = Math.max(1, parseInt(pageInput.value) || 1);
+    tab.page = p;
+    iframe.src = `${fileDownloadUrl(tab.ref, tab.path)}#page=${p}`;
+    pdfSavePageMeta(tab);
+  }
+  const notesList = el('div', { class: 'fe-notes-list' });
+  function renderNotes() {
+    notesList.innerHTML = '';
+    if (!tab.notes.length) { notesList.appendChild(el('div', { class: 'text-dim text-sm', text: 'No notes yet — jump to a page and add one.' })); return; }
+    [...tab.notes].sort((a, b) => a.page - b.page).forEach(n => {
+      notesList.appendChild(el('div', { class: 'fe-note-item' }, [
+        el('div', { class: 'fe-note-item-header' }, [
+          el('span', { class: 'fe-note-jump', text: `p.${n.page}`, onclick: () => { pageInput.value = n.page; goToPage(); } }),
+          el('button', { class: 'btn btn-sm btn-outline', text: '✕', onclick: () => { tab.notes = tab.notes.filter(x => x !== n); pdfSaveNotesMeta(tab); renderNotes(); } })
+        ]),
+        el('div', { class: 'text-sm', text: n.text })
+      ]));
+    });
+  }
+  const newNoteText = el('textarea', { placeholder: 'Add a note for the current page...', style: 'min-height:40px' });
+  renderNotes();
+  return el('div', { class: 'fe-pdf-pane' }, [
+    el('div', { class: 'row', style: 'gap:6px;align-items:center;margin-bottom:6px' }, [
+      el('span', { class: 'truncate text-sm', style: 'font-weight:700;flex:1', text: tab.name }),
+      el('label', { text: 'Page', style: 'margin:0' }), pageInput,
+      el('button', { class: 'btn btn-sm btn-outline', text: 'Go', onclick: goToPage })
+    ]),
+    el('div', { class: 'fe-pdf-split' }, [
+      iframe,
+      el('div', { class: 'fe-notes-panel' }, [
+        el('div', { style: 'font-weight:700;margin-bottom:6px', text: '📝 Notes' }),
+        notesList, newNoteText,
+        el('button', { class: 'btn btn-sm mt-8', text: '+ Add note', onclick: () => {
+          if (!newNoteText.value.trim()) return;
+          tab.notes.push({ page: parseInt(pageInput.value) || tab.page, text: newNoteText.value.trim() });
+          newNoteText.value = '';
+          pdfSaveNotesMeta(tab); renderNotes();
+        } })
+      ])
+    ])
+  ]);
+}
+function renderPdfViewerModal() {
+  if (!pdfTabs.length) return;
+  const activeTab = pdfTabs.find(t => t.id === pdfActiveTabId) || pdfTabs[0];
+  pdfActiveTabId = activeTab.id;
+
+  const tabBar = el('div', { class: 'fe-tab-bar' }, pdfTabs.map(t => el('div', {
+    class: `fe-tab${t.id === pdfActiveTabId ? ' active' : ''}`, onclick: () => { pdfActiveTabId = t.id; renderPdfViewerModal(); }
+  }, [
+    el('span', { class: 'truncate', style: 'max-width:140px', text: t.name }),
+    el('span', { class: 'fe-tab-close', text: '×', title: 'Close tab', onclick: (e) => { e.stopPropagation(); pdfCloseTab(t.id); } })
+  ])));
+
+  const splitRow = pdfTabs.length > 1 ? el('div', { class: 'row', style: 'gap:8px;align-items:center;margin:8px 0' }, [
+    el('span', { class: 'text-dim text-sm', text: '⊞ Split view with:' }),
+    el('select', { style: 'width:auto', onchange: (e) => { pdfSplitTabId = e.target.value || null; renderPdfViewerModal(); } }, [
+      el('option', { value: '', text: 'None (single pane)' }),
+      ...pdfTabs.filter(t => t.id !== pdfActiveTabId).map(t => el('option', { value: t.id, text: t.name, selected: t.id === pdfSplitTabId }))
+    ])
+  ]) : null;
+
+  const panes = el('div', { class: `fe-pdf-panes${pdfSplitTabId ? ' split' : ''}` }, [
+    renderPdfPane(activeTab),
+    pdfSplitTabId ? renderPdfPane(pdfTabs.find(t => t.id === pdfSplitTabId) || activeTab) : null
+  ]);
+
+  const content = el('div', { class: 'fe-viewer-pdf' }, [
+    viewerHeader('📕 PDF Viewer', closeModal, [
+      pdfTabs.length > 1 ? el('button', { class: 'btn btn-sm btn-outline', text: 'Close All', onclick: () => { pdfTabs = []; pdfActiveTabId = null; pdfSplitTabId = null; closeModal(); } }) : null
+    ]),
+    tabBar, splitRow, panes
+  ]);
+  showModal(content);
+  document.getElementById('modalContent').classList.add('fe-viewer-modal', 'fe-viewer-pdf-modal');
+}
+
+// ── Video viewer: timestamped notes, click a note to seek+play ──
+async function openVideoViewer(ref, path, name) {
+  let meta = {};
+  try { meta = await api(`/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/meta?path=${encodeURIComponent(path)}`); } catch (e) {}
+  let notes = meta.video_notes || [];
+
+  const video = el('video', { src: fileDownloadUrl(ref, path), controls: true, class: 'fe-video-el' });
+  const notesList = el('div', { class: 'fe-notes-list' });
+  const newNoteText = el('textarea', { placeholder: 'Add a note at the current timestamp...', style: 'min-height:44px' });
+  const curTimeLabel = el('span', { class: 'text-dim text-sm', text: '00:00' });
+  video.addEventListener('timeupdate', () => { curTimeLabel.textContent = formatClock(video.currentTime); });
+
+  function renderNotes() {
+    notesList.innerHTML = '';
+    if (!notes.length) { notesList.appendChild(el('div', { class: 'text-dim text-sm', text: 'No notes yet — play the video and add one at any moment.' })); return; }
+    [...notes].sort((a, b) => a.t - b.t).forEach(n => {
+      notesList.appendChild(el('div', { class: 'fe-note-item' }, [
+        el('div', { class: 'fe-note-item-header' }, [
+          el('span', { class: 'fe-note-jump', text: formatClock(n.t), onclick: () => { video.currentTime = n.t; video.play(); } }),
+          el('button', { class: 'btn btn-sm btn-outline', text: '✕', onclick: () => { notes = notes.filter(x => x !== n); saveNotes(); } })
+        ]),
+        el('div', { class: 'text-sm', text: n.text })
+      ]));
+    });
+  }
+  async function saveNotes() {
+    try { await api(`/api/${currentProfile}/filetree/${ref.ref_type}/${ref.ref_id}/meta`, { method: 'PUT', body: JSON.stringify({ path, video_notes: notes }) }); } catch (e) {}
+    renderNotes();
+  }
+
+  const content = el('div', { class: 'fe-viewer-video' }, [
+    viewerHeader(name, closeModal),
+    video,
+    el('div', { class: 'fe-notes-panel mt-8' }, [
+      el('div', { class: 'row', style: 'justify-content:space-between;align-items:center' }, [
+        el('div', { style: 'font-weight:700', text: '📝 Timestamped Notes' }),
+        curTimeLabel
+      ]),
+      notesList,
+      newNoteText,
+      el('button', { class: 'btn btn-sm mt-8', text: '+ Add note @ current time', onclick: () => {
+        if (!newNoteText.value.trim()) return;
+        notes.push({ t: video.currentTime, text: newNoteText.value.trim() });
+        newNoteText.value = '';
+        saveNotes();
+      } })
+    ])
+  ]);
+  showModal(content);
+  document.getElementById('modalContent').classList.add('fe-viewer-modal');
+  renderNotes();
+}
+
+// ═══════════════════════════════════════════
+// PERSISTENT AUDIO PLAYER — module-level state + a single <audio>
+// element, mounted into #audioPlayerBar (outside #content, see
+// index.html) so it survives every navigate() re-render untouched.
+// Playback keeps going no matter what page is open; only closing the
+// bar itself (or the tab) stops it.
+// ═══════════════════════════════════════════
+const audioEl = new Audio();
+let audioState = {
+  current: null,      // { ref, path, name }
+  queue: [],           // [{ ref, path, name }, ...] — plays next, in order
+  minimized: false,
+  siblingsOpen: false,
+};
+audioEl.addEventListener('ended', () => audioPlayNext());
+audioEl.addEventListener('timeupdate', () => updateAudioProgressUI());
+audioEl.addEventListener('loadedmetadata', () => updateAudioProgressUI());
+
+function playAudioTrack(ref, path, name) {
+  audioState.current = { ref, path, name };
+  audioEl.src = fileDownloadUrl(ref, path);
+  audioEl.play().catch(() => {});
+  audioState.minimized = false;
+  renderAudioPlayerBar();
+}
+function audioQueueAdd(track) {
+  audioState.queue.push(track);
+  if (!audioState.current) { audioPlayNext(); }
+  else renderAudioPlayerBar();
+}
+function audioQueueRemove(idx) {
+  audioState.queue.splice(idx, 1);
+  renderAudioPlayerBar();
+}
+function audioPlayNext() {
+  const next = audioState.queue.shift();
+  if (next) playAudioTrack(next.ref, next.path, next.name);
+  else { audioState.current = null; audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); renderAudioPlayerBar(); }
+}
+function audioTogglePlay() {
+  if (!audioState.current) return;
+  if (audioEl.paused) audioEl.play().catch(() => {}); else audioEl.pause();
+  updateAudioProgressUI();
+}
+function audioSeekRelative(sec) {
+  if (!audioState.current) return;
+  audioEl.currentTime = Math.max(0, Math.min(audioEl.duration || Infinity, audioEl.currentTime + sec));
+}
+function audioStopAndClose() {
+  audioEl.pause();
+  audioEl.removeAttribute('src');
+  // Some browsers keep playing already-buffered audio for a moment
+  // after pause()+removeAttribute('src') alone — load() forces the
+  // element to actually reset and abort any in-flight buffered audio,
+  // matching the bar's own instant visual disappearance.
+  audioEl.load();
+  audioState.current = null;
+  audioState.queue = [];
+  renderAudioPlayerBar();
+}
+
+function updateAudioProgressUI() {
+  const fill = document.getElementById('audioProgressFill');
+  const curEl = document.getElementById('audioCurTime');
+  const durEl = document.getElementById('audioDurTime');
+  const playBtn = document.getElementById('audioPlayBtn');
+  if (fill && audioEl.duration) fill.style.width = `${(audioEl.currentTime / audioEl.duration) * 100}%`;
+  if (curEl) curEl.textContent = formatClock(audioEl.currentTime || 0);
+  if (durEl) durEl.textContent = formatClock(audioEl.duration || 0);
+  if (playBtn) playBtn.textContent = audioEl.paused ? '▶' : '⏸';
+}
+
+async function toggleAudioSiblingsDropdown() {
+  const pop = document.getElementById('audioSiblingsPopover');
+  if (pop) { pop.remove(); return; }
+  if (!audioState.current) return;
+  let data;
+  try {
+    data = await api(`/api/${currentProfile}/filetree/${audioState.current.ref.ref_type}/${audioState.current.ref.ref_id}/siblings?path=${encodeURIComponent(audioState.current.path)}&kind=audio`);
+  } catch (e) { return; }
+  const box = el('div', { id: 'audioSiblingsPopover', class: 'audio-siblings-popover' }, [
+    el('div', { style: 'font-weight:700;margin-bottom:6px', text: '🎵 More in this folder' }),
+    ...(data.items.length ? data.items.map(it => el('div', { class: 'fe-menu-item', text: it.name }, )) : [el('div', { class: 'text-dim text-sm', text: 'No other audio files here.' })])
+  ]);
+  // Wire click handlers separately (avoids re-declaring el() children with closures over `it` awkwardly above)
+  data.items.forEach((it, i) => {
+    box.children[i + 1].onclick = () => { playAudioTrack(audioState.current.ref, it.path, it.name); box.remove(); };
+    box.children[i + 1].style.cursor = 'pointer';
+    box.children[i + 1].appendChild(el('button', { class: 'btn btn-sm btn-outline', style: 'float:right', text: '➕', title: 'Add to queue', onclick: (e) => { e.stopPropagation(); audioQueueAdd({ ref: audioState.current.ref, path: it.path, name: it.name }); } }));
+  });
+  document.getElementById('audioPlayerBar').appendChild(box);
+  setTimeout(() => document.addEventListener('click', (e) => { if (!box.contains(e.target)) box.remove(); }, { once: true }), 0);
+}
+
+function renderAudioPlayerBar() {
+  const bar = $('#audioPlayerBar');
+  if (!bar) return;
+  if (!audioState.current) {
+    bar.classList.add('hidden'); bar.innerHTML = '';
+    document.body.classList.remove('has-audio-bar', 'has-audio-bar-minimized');
+    return;
+  }
+  bar.classList.remove('hidden');
+  bar.classList.toggle('minimized', audioState.minimized);
+  document.body.classList.add('has-audio-bar');
+  document.body.classList.toggle('has-audio-bar-minimized', audioState.minimized);
+  bar.innerHTML = '';
+
+  if (audioState.minimized) {
+    bar.appendChild(el('div', { class: 'audio-mini-row' }, [
+      el('span', { text: '🎵' }),
+      el('span', { class: 'truncate', style: 'max-width:160px', text: audioState.current.name }),
+      el('button', { class: 'btn btn-sm btn-outline', id: 'audioPlayBtn', text: audioEl.paused ? '▶' : '⏸', onclick: audioTogglePlay }),
+      el('button', { class: 'btn btn-sm btn-outline', text: '⤢', title: 'Expand', onclick: () => { audioState.minimized = false; renderAudioPlayerBar(); } })
     ]));
-
+    return;
   }
 
-  if (allItems.length === 0) {
-    container.appendChild(el('div', { class: 'text-dim text-sm', text: 'Add subjects or skills first to upload files.' }));
+  bar.appendChild(el('div', { class: 'audio-bar-top' }, [
+    el('div', { class: 'audio-bar-track-info' }, [
+      el('span', { text: '🎵' }),
+      el('span', { class: 'truncate', text: audioState.current.name })
+    ]),
+    el('div', { class: 'row', style: 'gap:4px' }, [
+      el('button', { class: 'btn btn-sm btn-outline', text: '⋮', title: 'More from this folder / queue', onclick: toggleAudioSiblingsDropdown }),
+      el('button', { class: 'btn btn-sm btn-outline', text: '−', title: 'Minimize', onclick: () => { audioState.minimized = true; renderAudioPlayerBar(); } }),
+      el('button', { class: 'btn btn-sm btn-outline', text: '✕', title: 'Close', onclick: audioStopAndClose })
+    ])
+  ]));
+  bar.appendChild(el('div', { class: 'audio-bar-controls' }, [
+    el('button', { class: 'btn btn-sm btn-outline', text: '⏮ 10s', onclick: () => audioSeekRelative(-10) }),
+    el('button', { class: 'btn btn-amber', id: 'audioPlayBtn', text: audioEl.paused ? '▶' : '⏸', onclick: audioTogglePlay }),
+    el('button', { class: 'btn btn-sm btn-outline', text: '10s ⏭', onclick: () => audioSeekRelative(10) }),
+    el('span', { class: 'text-dim text-sm', id: 'audioCurTime', text: formatClock(audioEl.currentTime || 0) }),
+    el('div', { class: 'audio-progress-track', onclick: (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (audioEl.duration) audioEl.currentTime = ((e.clientX - rect.left) / rect.width) * audioEl.duration;
+    } }, [el('div', { class: 'audio-progress-fill', id: 'audioProgressFill' })]),
+    el('span', { class: 'text-dim text-sm', id: 'audioDurTime', text: formatClock(audioEl.duration || 0) }),
+    el('button', { class: 'btn btn-sm btn-outline', text: '⏭ Next', disabled: !audioState.queue.length, onclick: audioPlayNext })
+  ]));
+  if (audioState.queue.length) {
+    bar.appendChild(el('div', { class: 'audio-queue-row' }, [
+      el('span', { class: 'text-dim text-sm', text: `Up next (${audioState.queue.length}):` }),
+      ...audioState.queue.slice(0, 4).map((t, i) => el('span', { class: 'audio-queue-chip' }, [
+        el('span', { text: t.name }),
+        el('span', { style: 'cursor:pointer;margin-left:6px;opacity:.7', text: '✕', onclick: () => audioQueueRemove(i) })
+      ]))
+    ]));
   }
+  updateAudioProgressUI();
 }
 
 // ── Init ──
@@ -4403,6 +5023,7 @@ async function init() {
     try { await api(`/api/${currentProfile}/attendance/autofill`, { method: 'POST' }); } catch (e) { /* non-fatal */ }
     await loadData();
     await loadGamification({ showCheckIn: true });
+    await refreshActiveTimerFromServer();
     lastKnownLevel = gamification?.level ?? null;
     lastKnownXp = gamification?.xp ?? null;
     lastKnownNerds = gamification?.nerds ?? null;
@@ -4411,6 +5032,10 @@ async function init() {
   updateTopLevelBar();
   updateNerdsBadge();
   render();
+  // Local-only 1s tick that repaints the visible clock numbers from
+  // whatever `activeTimer` currently holds — no network call, purely
+  // local math against wall-clock time.
+  setInterval(paintTimerNumbers, UI_MINI_TIMER_TICK_MS);
 }
 
 init();

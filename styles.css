@@ -1,4 +1,4 @@
-/* StudyTracker v2.0 — Themes
+/* Cultivar v2.3 — Themes
    Overhauled palette system: every theme now defines a fuller set of
    tokens (soft accent tints, gradients, elevated shadows) so components
    can use real depth and color instead of flat single-tone blocks. */
@@ -847,6 +847,141 @@ tr:hover td { background: var(--accent-soft); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
 .fade-in { animation: fadeIn .22s ease; }
+
+/* ═══════════════════════════════════════════
+   FILE EXPLORER
+   ═══════════════════════════════════════════ */
+.fe-layout { display: flex; gap: 16px; height: calc(100vh - 140px); min-height: 420px; }
+.fe-sidebar {
+  width: 240px; flex-shrink: 0; overflow-y: auto; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: var(--r); padding: 10px;
+}
+.fe-sidebar-heading { font-family: 'Share Tech Mono', monospace; font-size: var(--font-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--textdim); margin: 10px 4px 4px; }
+.fe-sidebar-heading:first-child { margin-top: 2px; }
+.fe-sidebar-cat { font-size: var(--font-xs); color: var(--accent); font-weight: 700; margin: 8px 4px 2px; }
+.fe-sidebar-item {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: var(--text); padding: 6px 10px; margin: 1px 0; border-radius: var(--r-sm);
+  cursor: pointer; font-size: var(--font-s); transition: background var(--trans-fast);
+}
+.fe-sidebar-item:hover { background: var(--accent-soft); }
+.fe-sidebar-item.active { background: var(--gradient); color: #fff; font-weight: 700; }
+.fe-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
+.fe-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-bottom: 10px; font-family: 'Share Tech Mono', monospace; font-size: var(--font-s); }
+.fe-crumb { cursor: pointer; color: var(--accent); padding: 2px 4px; border-radius: 4px; }
+.fe-crumb:hover { background: var(--accent-soft); }
+.fe-crumb:last-child { color: var(--text); font-weight: 700; }
+.fe-crumb-sep { color: var(--textdim); }
+.fe-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.fe-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; align-content: start; }
+.fe-card {
+  position: relative; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 14px 10px 10px; text-align: center; cursor: pointer;
+  transition: transform var(--trans-fast), box-shadow var(--trans-fast), border-color var(--trans-fast);
+}
+.fe-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.fe-card.fe-dragover { border-color: var(--accent); box-shadow: var(--glow); background: var(--accent-soft); }
+.fe-card-icon { font-size: 2rem; }
+.fe-card-name { font-size: var(--font-s); font-weight: 600; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fe-card-meta { font-size: var(--font-xxs); color: var(--textdim); margin-top: 2px; }
+.fe-card-menu-btn {
+  position: absolute; top: 4px; right: 4px; background: none; border: none; color: var(--textdim);
+  font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px; line-height: 1;
+}
+.fe-card-menu-btn:hover { background: var(--bg3); color: var(--text); }
+.fe-card-menu-popover, .audio-siblings-popover {
+  position: fixed; z-index: 3100; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-lg); min-width: 170px; padding: 4px;
+}
+.fe-menu-item { padding: 7px 10px; border-radius: var(--r-sm); font-size: var(--font-s); cursor: pointer; }
+.fe-menu-item:hover { background: var(--accent-soft); }
+.fe-menu-danger { color: var(--red); }
+
+/* Viewer modals (PDF/video/image/text) get a much larger default size
+   than the standard 500px modal, PLUS a real drag-to-resize handle
+   (bottom-right corner, native CSS `resize`) since a book/paper opened
+   at the same small size as an "Add Subject" popup was unreadable on a
+   real monitor. The ⛶ button (see viewerHeader() in app.js) additionally
+   snaps it to fill the whole viewport for anyone who'd rather not drag. */
+.modal.fe-viewer-modal {
+  max-width: 96vw; width: min(1400px, 96vw);
+  max-height: 94vh; height: 88vh;
+  min-width: 480px; min-height: 360px;
+  resize: both; overflow: auto;
+  display: flex; flex-direction: column;
+}
+.modal.fe-viewer-modal.fe-viewer-fullscreen {
+  position: fixed; inset: 3vh 2vw; max-width: none; width: 96vw; height: 94vh; margin: 0;
+  resize: none;
+}
+.fe-viewer-pdf, .fe-viewer-video, .fe-viewer-text { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+.fe-tab-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; flex-shrink: 0; }
+.fe-tab {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: var(--r-sm) var(--r-sm) 0 0; background: var(--bg3); border: 1px solid var(--border);
+  border-bottom: none; cursor: pointer; font-size: var(--font-s); color: var(--textdim);
+}
+.fe-tab.active { background: var(--bg); color: var(--text); font-weight: 700; border-color: var(--accent); }
+.fe-tab-close { opacity: .6; padding: 0 2px; border-radius: 4px; }
+.fe-tab-close:hover { opacity: 1; background: var(--red); color: #fff; }
+
+.fe-pdf-panes { display: flex; gap: 10px; flex: 1; min-height: 0; }
+.fe-pdf-panes > .fe-pdf-pane { flex: 1; min-width: 0; }
+.fe-pdf-panes.split > .fe-pdf-pane { flex: 1 1 50%; }
+.fe-pdf-pane { display: flex; flex-direction: column; min-height: 0; }
+.fe-pdf-split { display: flex; gap: 12px; align-items: stretch; flex: 1; min-height: 0; flex-wrap: wrap; }
+.fe-pdf-iframe { flex: 2 1 420px; min-width: 280px; min-height: 300px; width: 100%; height: 100%; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; }
+.fe-notes-panel { flex: 1 1 240px; min-width: 220px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; overflow-y: auto; }
+.fe-notes-list { max-height: 220px; overflow-y: auto; margin-bottom: 8px; }
+.fe-note-item { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.fe-note-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+.fe-note-jump { color: var(--accent); font-weight: 700; cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: var(--font-xs); }
+.fe-note-jump:hover { text-decoration: underline; }
+
+.fe-video-el { width: 100%; flex: 1; min-height: 0; background: #000; border-radius: var(--r-sm); }
+
+/* ── Text / Markdown / Code editor ── */
+.fe-text-editor {
+  flex: 1; min-height: 0; width: 100%; resize: none;
+  font-family: 'Share Tech Mono', monospace; font-size: var(--font-s); line-height: 1.5;
+  background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 12px; tab-size: 2;
+}
+.fe-text-preview { flex: 1; min-height: 0; overflow: auto; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 16px; }
+.fe-text-preview pre { background: transparent !important; margin: 0; }
+.fe-text-preview.fe-markdown-body { line-height: 1.7; }
+.fe-markdown-body h1, .fe-markdown-body h2, .fe-markdown-body h3 { margin: .6em 0 .3em; color: var(--accent); }
+.fe-markdown-body p { margin-bottom: .8em; }
+.fe-markdown-body code { background: var(--bg4); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+.fe-markdown-body pre code { background: transparent; padding: 0; }
+.fe-markdown-body pre { padding: 10px; border-radius: var(--r-sm); overflow-x: auto; }
+.fe-markdown-body ul, .fe-markdown-body ol { padding-left: 1.4em; margin-bottom: .8em; }
+.fe-markdown-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--textdim); margin: .6em 0; }
+.fe-markdown-body table { border-collapse: collapse; margin-bottom: .8em; }
+.fe-markdown-body th, .fe-markdown-body td { border: 1px solid var(--border); padding: 4px 8px; }
+.fe-markdown-body img { max-width: 100%; }
+
+/* ═══════════════════════════════════════════
+   PERSISTENT AUDIO PLAYER BAR
+   ═══════════════════════════════════════════ */
+body.has-audio-bar .content { padding-bottom: 96px; }
+body.has-audio-bar.has-audio-bar-minimized .content { padding-bottom: 46px; }
+.audio-player-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2400;
+  background: var(--bg2); border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 20px rgba(0,0,0,.25); padding: 10px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.audio-player-bar.minimized { padding: 6px 12px; }
+.audio-mini-row { display: flex; align-items: center; gap: 10px; font-size: var(--font-s); }
+.audio-bar-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.audio-bar-track-info { display: flex; align-items: center; gap: 8px; font-weight: 700; min-width: 0; flex: 1; }
+.audio-bar-controls { display: flex; align-items: center; gap: 10px; }
+.audio-progress-track { flex: 1; height: 8px; border-radius: 999px; background: var(--bg4); cursor: pointer; overflow: hidden; }
+.audio-progress-fill { height: 100%; background: var(--gradient); border-radius: 999px; width: 0%; }
+.audio-queue-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--font-xs); }
+.audio-queue-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px; }
 
 /* Utility */
 .row { display: flex; gap: 10px; align-items: center; }
