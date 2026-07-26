@@ -1,9 +1,13 @@
 # Cultivar
+# Cultivar
 
 A personal study tracker I built for myself because I wanted something that actually understands my schedule instead of a generic to-do app.
 
 ## What it does
 
+- Tracks habits, skills and study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
+- Turns your studying into an RPG: XP, levels, a 10-tier badge system (Bachelor's I/II/III → Master's I/II/III → PhD I/II/III → Laureate), weekly quests, streaks
+- Buy and level up over 32 plants with unique and special bonuses in the flagship Botanarium, learn more about them in Clementine's Book of Wonders!
 - Tracks habits, skills and study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
 - Turns your studying into an RPG: XP, levels, a 10-tier badge system (Bachelor's I/II/III → Master's I/II/III → PhD I/II/III → Laureate), weekly quests, streaks
 - Buy and level up over 32 plants with unique and special bonuses in the flagship Botanarium, learn more about them in Clementine's Book of Wonders!
