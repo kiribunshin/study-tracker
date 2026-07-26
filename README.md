@@ -1,15 +1,16 @@
-# StudyTracker
+# Cultivar
 
 A personal study tracker I built for myself because I wanted something that actually understands my schedule instead of a generic to-do app.
 
 ## What it does
 
-- Tracks self-study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
-- Turns your studying into a little RPG — XP, levels, a 10-tier badge system (Bachelor's → Master's → PhD → Laureate), weekly quests, streaks
+- Tracks habits, skills and study sessions (with a free timer or Pomodoro mode), attendance, exams, and one-off events like meetings
+- Turns your studying into an RPG: XP, levels, a 10-tier badge system (Bachelor's I/II/III → Master's I/II/III → PhD I/II/III → Laureate), weekly quests, streaks
+- Buy and level up over 32 plants with unique and special bonuses in the flagship Botanarium, learn more about them in Clementine's Book of Wonders!
 - Unlockable themes as you level up (15 of them, from clean and minimal to full cyberpunk)
 - A real weekly timetable that auto-fills from your class schedule and shows your logged sessions, exams, and meetings side by side
-- Smart recommendations — a small ML model (that you can turn off if it stresses you out) predicts exam scores and flags subjects you're neglecting
-- Seaborn-rendered charts and a downloadable weekly PDF report, both themed to match whatever look you've got active
+- Smart recommendations: A small ML model (that you can turn off if it stresses you out) predicts exam scores and flags subjects you're neglecting
+- Seaborn-rendered charts and a downloadable weekly PDF report, both themed to match whatever look you've got active and packed with informative graphs that help shed light on your next step
 - Presence/absence auto-fill so you're not manually marking every single class you attend
 
 ## Stack
