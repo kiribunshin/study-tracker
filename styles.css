@@ -873,7 +873,7 @@ tr:hover td { background: var(--accent-soft); }
 .fe-crumb:last-child { color: var(--text); font-weight: 700; }
 .fe-crumb-sep { color: var(--textdim); }
 .fe-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-.fe-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; align-content: start; }
+.fe-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; align-content: start; }
 .fe-card {
   position: relative; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
   padding: 14px 10px 10px; text-align: center; cursor: pointer;
@@ -882,7 +882,12 @@ tr:hover td { background: var(--accent-soft); }
 .fe-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .fe-card.fe-dragover { border-color: var(--accent); box-shadow: var(--glow); background: var(--accent-soft); }
 .fe-card-icon { font-size: 2rem; }
-.fe-card-name { font-size: var(--font-s); font-weight: 600; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fe-card-name {
+  font-size: var(--font-s); font-weight: 600; margin-top: 6px;
+  white-space: normal; word-break: break-word; overflow-wrap: break-word;
+  line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; overflow: hidden; text-overflow: ellipsis;
+}
 .fe-card-meta { font-size: var(--font-xxs); color: var(--textdim); margin-top: 2px; }
 .fe-card-menu-btn {
   position: absolute; top: 4px; right: 4px; background: none; border: none; color: var(--textdim);

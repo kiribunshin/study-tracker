@@ -1,5 +1,4 @@
 # Cultivar
-# Cultivar
 
 A personal study tracker I built for myself because I wanted something that actually understands my schedule instead of a generic to-do app.
 
@@ -86,3 +85,12 @@ A lot of plants are planned for the future so stay tuned.
 - Changed: The `cmd` now disappears entirely when the app is running (still yet to implement a packaged .exe, but this is a step in the right way)
 - Fixed: A newly-acquired plant no longer appears as withered.
 - Dropped: The idea of cross-device synced use; has proven to be far too problematic in the current architecture with a relatively unimpressive gain.
+
+### v2.3.1 changes:
+This is an emergency hotfix patch meant to address bugs in the previous v2.3 update:
+- Fixed: Tiny visible area in the text editor, made it now stretch to fill its container.
+- Fixed: Spaces are no longer forced to be underscores in filenames (result of `werkzeug.utils.secure_filename`)
+- Fixed: Longer filenames are now permitted to be displayed.
+- Fixed: The last picked theme now persists across sessions.
+- Fixed: Taskbar icon now shows the app icon correctly.
+- Fixed: Pillow (`PIL`) and `pywebview` install made better in `start.bat`.

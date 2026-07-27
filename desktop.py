@@ -42,6 +42,26 @@ else:
 sys.path.insert(0, str(BASE_DIR))
 
 
+def _set_app_user_model_id():
+    """Tells Windows this process is its own distinct application rather
+    than lumping it in with python.exe/pythonw.exe's default identity.
+    This is the actual, well-known root cause of a Python GUI app
+    showing the generic "python with a page" icon in the taskbar/
+    Alt-Tab switcher even after the window's own icon (see
+    _force_taskbar_icon below) has been explicitly set — Explorer keys
+    the taskbar button's identity off the App User Model ID, and without
+    one, every pythonw.exe-launched script defaults to sharing pythonw's
+    own. Must run before any window is created. Never fatal; no-op on
+    non-Windows."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Cultivar.DesktopApp")
+    except Exception:
+        pass
+
+
 def _hide_console_window():
     """If this process happens to have a visible console attached (e.g.
     someone ran `python desktop.py` directly instead of via pythonw, or
@@ -222,18 +242,29 @@ def _launch_window(port):
     if icon_path:
         _force_taskbar_icon(icon_path)
 
+    # pywebview defaults `private_mode` to True (an incognito-style
+    # session), which silently wipes localStorage — including the saved
+    # theme (see app.js's st_theme key) — every time the window closes.
+    # private_mode=False makes the WebView2 profile persist normally
+    # across launches, the same way a regular browser tab would.
+    # Cascading fallback below in case an older/newer pywebview version
+    # doesn't accept one or both kwargs.
+    start_kwargs = {"private_mode": False}
+    if icon_path:
+        start_kwargs["icon"] = icon_path
     try:
-        if icon_path:
-            webview.start(icon=icon_path)
-        else:
-            webview.start()
+        webview.start(**start_kwargs)
     except TypeError:
-        # Older pywebview versions (<4.x) don't accept icon= at all —
-        # degrade gracefully to the default icon rather than crashing.
-        webview.start()
+        try:
+            webview.start(icon=icon_path) if icon_path else webview.start()
+        except TypeError:
+            # Oldest pywebview versions (<4.x) accept neither kwarg —
+            # degrade gracefully to defaults rather than crashing.
+            webview.start()
 
 
 def main():
+    _set_app_user_model_id()
     _hide_console_window()
 
     # If Cultivar is already open in another window on this PC,

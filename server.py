@@ -2163,6 +2163,28 @@ def _sanitize_folder_name(name):
         name = "untitled"
     return name[:80]
 
+_FILE_BAD_CHARS = '/\\:*?"<>|\0'
+
+def _sanitize_file_name(name):
+    """Like _sanitize_folder_name, but for FILE names — keeps spaces,
+    dashes, dots, and unicode characters intact, since files commonly
+    need those (extensions, "Book I - 3rd Edition", accented titles,
+    etc.). werkzeug's secure_filename, used here previously, aggressively
+    replaces spaces with underscores and strips anything non-ASCII —
+    turning "Genki Textbook I - 3rd Edition 2020.pdf" into
+    "Genki_Textbook_I_-_3rd_Edition_2020.pdf" (or worse, an empty string
+    for a fully non-ASCII name). This still strips path separators and
+    other characters that could escape the target folder or confuse a
+    real OS file manager."""
+    name = (name or "").strip()
+    for ch in _FILE_BAD_CHARS:
+        name = name.replace(ch, "")
+    name = name.strip(" .")
+    name = " ".join(name.split())  # collapse internal whitespace runs
+    if not name:
+        name = "untitled"
+    return name[:150]
+
 def _unique_dir(parent, wanted_name):
     """If `wanted_name` collides with an existing, DIFFERENT directory
     under `parent`, appends ' (2)', ' (3)', ... until it doesn't."""
@@ -4179,7 +4201,7 @@ def filetree_newfile(name, ref_type, ref_id):
     raw_name = (data.get("name") or "").strip()
     if not raw_name:
         return jsonify({"error": "Enter a filename"}), 400
-    safe_name = secure_filename(raw_name) or _sanitize_folder_name(raw_name)
+    safe_name = _sanitize_file_name(raw_name)
     if Path(safe_name).suffix.lower() not in TEXT_EXTENSIONS:
         return jsonify({"error": "Only text/markdown/code file types can be created here — upload anything else instead."}), 400
     dest = parent / safe_name
@@ -4243,7 +4265,7 @@ def filetree_rename(name, ref_type, ref_id):
     if target is None or not target.exists() or target == root:
         return jsonify({"error": "Not found"}), 404
     is_dir = target.is_dir()
-    new_name = _sanitize_folder_name(data.get("new_name", "")) if is_dir else secure_filename(data.get("new_name", "")) or _sanitize_folder_name(data.get("new_name", ""))
+    new_name = _sanitize_folder_name(data.get("new_name", "")) if is_dir else _sanitize_file_name(data.get("new_name", ""))
     if not new_name:
         return jsonify({"error": "Invalid name"}), 400
     dest = target.parent / new_name
@@ -4325,7 +4347,7 @@ def filetree_upload(name, ref_type, ref_id):
     target_dir = _safe_subpath(root, request.form.get("path", ""))
     if target_dir is None or not target_dir.is_dir():
         return jsonify({"error": "Invalid destination folder"}), 400
-    safe_name = secure_filename(file.filename)
+    safe_name = _sanitize_file_name(file.filename)
     if not safe_name:
         return jsonify({"error": "Invalid filename"}), 400
     dest = target_dir / safe_name

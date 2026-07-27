@@ -4411,7 +4411,7 @@ async function renderFiles(c) {
 
     data.folders.forEach(f => {
       grid.appendChild(el('div', {
-        class: 'fe-card fe-folder-card', draggable: true,
+        class: 'fe-card fe-folder-card', draggable: true, title: f.name,
         onclick: () => { fileExplorerPath = joinFePath(fileExplorerPath, f.name); render(); },
         ondragstart: (e) => { fileExplorerDragPath = joinFePath(fileExplorerPath, f.name); e.dataTransfer.setData('text/plain', fileExplorerDragPath); },
         ondragover: (e) => e.preventDefault(),
@@ -4427,7 +4427,7 @@ async function renderFiles(c) {
     data.files.forEach(f => {
       const fullPath = joinFePath(fileExplorerPath, f.name);
       grid.appendChild(el('div', {
-        class: 'fe-card fe-file-card', draggable: true,
+        class: 'fe-card fe-file-card', draggable: true, title: f.name,
         onclick: () => openFileViewer(fileExplorerRef, fullPath, f),
         ondragstart: (e) => { fileExplorerDragPath = fullPath; e.dataTransfer.setData('text/plain', fullPath); }
       }, [
@@ -4668,8 +4668,8 @@ async function openTextEditor(ref, path, name, kind) {
 
   const body = loadError
     ? el('div', { class: 'recommendation warning mt-16', text: loadError })
-    : el('div', {}, [
-        el('div', { class: 'row', style: 'gap:8px;margin:8px 0;align-items:center' }, [
+    : el('div', { style: 'flex:1;min-height:0;display:flex;flex-direction:column' }, [
+        el('div', { class: 'row', style: 'gap:8px;margin:8px 0;align-items:center;flex-shrink:0' }, [
           editTabBtn, previewTabBtn, el('div', { class: 'flex-1' }), statusSpan, saveBtn
         ]),
         textarea, previewPane

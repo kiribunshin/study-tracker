@@ -1,3 +1,14 @@
+# v2.3.1 changes:
+This is an emergency hotfix patch meant to address bugs in the previous v2.3 update:
+- Fixed: Tiny visible area in the text editor, made it now stretch to fill its container.
+- Fixed: Spaces are no longer forced to be underscores in filenames (result of `werkzeug.utils.secure_filename`)
+- Fixed: Longer filenames are now permitted to be displayed.
+- Fixed: The last picked theme now persists across sessions.
+- Fixed: Taskbar icon now shows the app icon correctly.
+- Fixed: Pillow (`PIL`) and `pywebview` install made better in `start.bat`.
+
+---
+
 # v2.3 changes:
 - Added: `File Explorer`: Drastically improved and built upon the existing file system, now having its own section in the `navbar` and is able to:
     - Read `.pdf` files and save notes on specific pages as well as open multiple at once and split-view
