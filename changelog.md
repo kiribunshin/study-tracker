@@ -1,3 +1,9 @@
+# v2.3.2 changes:
+Another hotfix patch
+- Changed: Live syntax-highlighting in-editor
+
+---
+
 # v2.3.1 changes:
 This is an emergency hotfix patch meant to address bugs in the previous v2.3 update:
 - Fixed: Tiny visible area in the text editor, made it now stretch to fill its container.

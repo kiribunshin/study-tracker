@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 # frontend (see APP_VERSION in app.js) to read and display, so the two
 # never drift apart or need editing in two places by hand.
 # ═══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.2"
 
 app = Flask(__name__)
 

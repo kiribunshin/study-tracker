@@ -94,3 +94,7 @@ This is an emergency hotfix patch meant to address bugs in the previous v2.3 upd
 - Fixed: The last picked theme now persists across sessions.
 - Fixed: Taskbar icon now shows the app icon correctly.
 - Fixed: Pillow (`PIL`) and `pywebview` install made better in `start.bat`.
+
+### v2.3.2 changes:
+Another hotfix patch
+- Changed: Live syntax-highlighting in-editor

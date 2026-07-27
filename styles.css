@@ -1,4 +1,4 @@
-/* Cultivar v2.3 — Themes
+/* Cultivar v2.3.2 — Themes
    Overhauled palette system: every theme now defines a fuller set of
    tokens (soft accent tints, gradients, elevated shadows) so components
    can use real depth and color instead of flat single-tone blocks. */
@@ -946,13 +946,37 @@ tr:hover td { background: var(--accent-soft); }
 
 .fe-video-el { width: 100%; flex: 1; min-height: 0; background: #000; border-radius: var(--r-sm); }
 
-/* ── Text / Markdown / Code editor ── */
-.fe-text-editor {
-  flex: 1; min-height: 0; width: 100%; resize: none;
-  font-family: 'Share Tech Mono', monospace; font-size: var(--font-s); line-height: 1.5;
-  background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm);
-  padding: 12px; tab-size: 2;
+/* ── Text / Markdown / Code editor — LIVE syntax highlighting ──
+   The textarea itself can't render colored text, so this stacks a
+   highlight.js-rendered <pre><code> directly BEHIND a textarea whose
+   own text is made transparent (only its caret stays visible) — the
+   textarea keeps driving typing/selection/scrolling exactly as normal,
+   while the colored version shows through beneath it. Both layers
+   share the exact same font/padding/line-height/whitespace rules so
+   every character in the textarea lines up perfectly with its colored
+   twin underneath; re-highlighting happens on every keystroke (see
+   openTextEditor's refreshHighlight() in app.js). */
+.fe-code-editor-stack {
+  position: relative; flex: 1; min-height: 0; width: 100%;
+  border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
 }
+.fe-code-editor-stack pre,
+.fe-code-editor-stack textarea {
+  position: absolute; inset: 0; margin: 0; width: 100%; height: 100%;
+  box-sizing: border-box; padding: 12px;
+  font-family: 'Share Tech Mono', monospace; font-size: var(--font-s); line-height: 1.5;
+  tab-size: 2; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+  border: none; border-radius: 0; overflow: auto;
+}
+.fe-code-highlight-pre {
+  z-index: 1; background: var(--bg3); color: var(--text); pointer-events: none;
+}
+.fe-code-highlight-pre code { background: transparent; font: inherit; white-space: inherit; }
+.fe-code-editor-input {
+  z-index: 2; background: transparent; color: transparent; caret-color: var(--text);
+  resize: none;
+}
+.fe-code-editor-input::selection { background: var(--accent-soft-2); color: transparent; }
 .fe-text-preview { flex: 1; min-height: 0; overflow: auto; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 16px; }
 .fe-text-preview pre { background: transparent !important; margin: 0; }
 .fe-text-preview.fe-markdown-body { line-height: 1.7; }

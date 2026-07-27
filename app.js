@@ -8,7 +8,7 @@
 // the two are edited independently but should generally be bumped
 // together when you ship a change that touches both.
 // ═══════════════════════════════════════════
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.3.2';
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -4624,10 +4624,53 @@ async function openTextEditor(ref, path, name, kind) {
   const ext = (name.split('.').pop() || '').toLowerCase();
   const hljsLang = HLJS_EXT_LANG_MAP[ext] || ext;
 
-  const textarea = el('textarea', { class: 'fe-text-editor', value: content, spellcheck: 'false' });
+  // ── Live-highlighted EDIT mode ──
+  // A highlight.js-rendered <pre><code> sits directly behind the
+  // textarea (see .fe-code-editor-stack in styles.css); the textarea's
+  // own text is made transparent so only its caret shows, while the
+  // colored twin underneath re-renders on every keystroke. Uses the
+  // low-level hljs.highlight() call (not highlightElement()) since the
+  // latter refuses to re-highlight the same element twice without
+  // manually clearing its data-highlighted flag first — awkward for
+  // something that needs to re-run on every keystroke.
+  const highlightCode = el('code');
+  const highlightPre = el('pre', { class: 'fe-code-highlight-pre', 'aria-hidden': 'true' }, [highlightCode]);
+  const textarea = el('textarea', { class: 'fe-code-editor-input', value: content, spellcheck: 'false' });
+  const editorStack = el('div', { class: 'fe-code-editor-stack' }, [highlightPre, textarea]);
+
+  function refreshHighlight() {
+    const text = textarea.value;
+    let html;
+    if (window.hljs) {
+      try {
+        html = hljsLang && window.hljs.getLanguage(hljsLang)
+          ? window.hljs.highlight(text, { language: hljsLang, ignoreIllegals: true }).value
+          : window.hljs.highlightAuto(text).value;
+      } catch (e) { html = esc(text); }
+    } else {
+      html = esc(text);
+    }
+    // A trailing newline renders one fewer visual line in a <pre> than
+    // in a <textarea> unless something follows it — keeps the two
+    // layers the same height so the caret never drifts below the
+    // colored text on the last line.
+    highlightCode.innerHTML = text.endsWith('\n') ? html + '\n' : html;
+  }
+  let highlightRaf = null;
+  function scheduleHighlight() {
+    if (highlightRaf) return;
+    highlightRaf = requestAnimationFrame(() => { highlightRaf = null; refreshHighlight(); });
+  }
+  textarea.addEventListener('input', scheduleHighlight);
+  textarea.addEventListener('scroll', () => {
+    highlightPre.scrollTop = textarea.scrollTop;
+    highlightPre.scrollLeft = textarea.scrollLeft;
+  });
+  refreshHighlight();
+
   const previewPane = el('div', { class: 'fe-text-preview hidden' });
   const editTabBtn = el('button', { class: 'btn btn-sm', text: '✏️ Edit' });
-  const previewTabBtn = el('button', { class: 'btn btn-sm btn-outline', text: isMarkdown ? '👁 Preview' : '🎨 Highlighted' });
+  const previewTabBtn = el('button', { class: 'btn btn-sm btn-outline', text: isMarkdown ? '👁 Preview' : '🎨 Rendered' });
   const statusSpan = el('span', { class: 'text-dim text-sm' });
 
   function renderPreview() {
@@ -4647,12 +4690,13 @@ async function openTextEditor(ref, path, name, kind) {
     }
   }
   function showEditMode() {
-    textarea.classList.remove('hidden'); previewPane.classList.add('hidden');
+    editorStack.classList.remove('hidden'); previewPane.classList.add('hidden');
     editTabBtn.classList.remove('btn-outline'); previewTabBtn.classList.add('btn-outline');
+    refreshHighlight();
   }
   function showPreviewMode() {
     renderPreview();
-    textarea.classList.add('hidden'); previewPane.classList.remove('hidden');
+    editorStack.classList.add('hidden'); previewPane.classList.remove('hidden');
     previewTabBtn.classList.remove('btn-outline'); editTabBtn.classList.add('btn-outline');
   }
   editTabBtn.onclick = showEditMode;
@@ -4672,7 +4716,7 @@ async function openTextEditor(ref, path, name, kind) {
         el('div', { class: 'row', style: 'gap:8px;margin:8px 0;align-items:center;flex-shrink:0' }, [
           editTabBtn, previewTabBtn, el('div', { class: 'flex-1' }), statusSpan, saveBtn
         ]),
-        textarea, previewPane
+        editorStack, previewPane
       ]);
 
   showModal(el('div', { class: 'fe-viewer-text' }, [viewerHeader(name, closeModal), body]));
