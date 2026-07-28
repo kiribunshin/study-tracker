@@ -98,3 +98,8 @@ This is an emergency hotfix patch meant to address bugs in the previous v2.3 upd
 ### v2.3.2 changes:
 Another hotfix patch
 - Changed: Live syntax-highlighting in-editor
+
+### v2.3.3 changes:
+Small QoL update for the code editor:
+- Changed: Editor now features rudimentary code editor features: brackets, parentheses, quotes, etc.. now feature autocomplete (writing an opening bracket automatically writes a paired closer for it). Tab now properly indents. Each parenthese/bracket/etc.. has its pair highlighted when selected. 
+- Fixed: Massive bug where pop-up menus are anchored to the screen and `x` doesn't close them. `Esc` now also works to close a currently displaying tab.

@@ -965,15 +965,27 @@ tr:hover td { background: var(--accent-soft); }
   position: absolute; inset: 0; margin: 0; width: 100%; height: 100%;
   box-sizing: border-box; padding: 12px;
   font-family: 'Share Tech Mono', monospace; font-size: var(--font-s); line-height: 1.5;
-  tab-size: 2; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+  tab-size: 4; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
   border: none; border-radius: 0; overflow: auto;
 }
 .fe-code-highlight-pre {
   z-index: 1; background: var(--bg3); color: var(--text); pointer-events: none;
 }
 .fe-code-highlight-pre code { background: transparent; font: inherit; white-space: inherit; }
+/* Sits above the syntax-color layer but below the (also transparent)
+   textarea — draws nothing but a small box around a matched bracket
+   pair; every other character here is fully transparent so the colored
+   glyph from the layer beneath keeps showing through untouched. */
+.fe-bracket-overlay-pre {
+  z-index: 2; background: transparent; color: transparent; pointer-events: none;
+}
+.fe-bracket-overlay-pre code { background: transparent; font: inherit; white-space: inherit; }
+.fe-bracket-match {
+  color: transparent; background: var(--accent-soft-2);
+  outline: 1.5px solid var(--accent); outline-offset: -1px; border-radius: 3px;
+}
 .fe-code-editor-input {
-  z-index: 2; background: transparent; color: transparent; caret-color: var(--text);
+  z-index: 3; background: transparent; color: transparent; caret-color: var(--text);
   resize: none;
 }
 .fe-code-editor-input::selection { background: var(--accent-soft-2); color: transparent; }

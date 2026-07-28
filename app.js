@@ -8,7 +8,7 @@
 // the two are edited independently but should generally be bumped
 // together when you ship a change that touches both.
 // ═══════════════════════════════════════════
-const APP_VERSION = '2.3.2';
+const APP_VERSION = '2.3.3';
 const API = '';
 let currentProfile = null;
 let currentPage = 'dashboard';
@@ -121,6 +121,28 @@ function navigate(page) {
 }
 
 // ── Modal ──
+// A backdrop click only counts as "close the modal" intent if the
+// mousedown ALSO started directly on the backdrop — otherwise, selecting
+// text inside the modal (e.g. dragging across a paragraph) and letting
+// go with the mouse slightly outside the modal's edge would close the
+// whole thing mid-selection, which is exactly the kind of thing that
+// makes an editor feel fragile instead of "dominant."
+let _modalMouseDownWasBackdrop = false;
+(function _wireModalBackdropMouseTracking() {
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay) {
+    overlay.addEventListener('mousedown', (e) => { _modalMouseDownWasBackdrop = (e.target === overlay); });
+  }
+})();
+// Escape always closes the topmost modal — a deliberate keypress, unlike
+// an accidental outside click, so this applies even to "dominant"
+// viewer/editor modals that ignore backdrop clicks.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('modalOverlay').classList.contains('show')) {
+    closeModal();
+  }
+});
+
 function showModal(content) {
   const mc = $('#modalContent');
   // A previous modal (e.g. the PDF/video viewer) may have left sizing
@@ -134,7 +156,22 @@ function showModal(content) {
   $('#modalOverlay').classList.add('show');
 }
 function closeModal(e) {
-  if (e && e.target !== e.currentTarget) return;
+  // The guard below only ever applies to a click that bubbled up to the
+  // OVERLAY's own click handler (e.currentTarget really is the overlay
+  // element in that case) — every other caller (a modal's × button, the
+  // Escape handler above, or a plain closeModal() call after saving)
+  // passes either no event at all or an event whose currentTarget is
+  // something else entirely, and those must always close the modal
+  // unconditionally. Applying this guard to every closeModal(e) call
+  // indiscriminately — the previous version's bug — ended up blocking
+  // the × button itself for "dominant" viewer modals, and for regular
+  // modals whenever no prior backdrop mousedown had been recorded yet.
+  const overlay = document.getElementById('modalOverlay');
+  if (e && e.currentTarget === overlay) {
+    const mc = $('#modalContent');
+    if (mc.classList.contains('fe-viewer-modal')) return;
+    if (e.target !== e.currentTarget || !_modalMouseDownWasBackdrop) return;
+  }
   $('#modalOverlay').classList.remove('show');
   const mc = $('#modalContent');
   // Hiding the overlay is purely visual — a <video>/<audio> element left
@@ -4609,6 +4646,15 @@ function openImageViewer(ref, path, name) {
 // writes straight back to the file on disk. ──
 const HLJS_EXT_LANG_MAP = { js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', rb: 'ruby', sh: 'bash', yml: 'yaml', md: 'markdown', htm: 'html' };
 
+// ── Editor behavior constants (Tab width, auto-close pairs, bracket
+// matching) — shared by every openTextEditor() instance. ──
+const EDITOR_TAB_WIDTH = 4;
+const EDITOR_AUTOCLOSE_PAIRS = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
+const EDITOR_AUTOCLOSE_CLOSERS = new Set(Object.values(EDITOR_AUTOCLOSE_PAIRS));
+const EDITOR_QUOTE_CHARS = new Set(['"', "'", '`']);
+const EDITOR_BRACKET_OPEN_TO_CLOSE = { '(': ')', '[': ']', '{': '}' };
+const EDITOR_BRACKET_CLOSE_TO_OPEN = { ')': '(', ']': '[', '}': '{' };
+
 async function openTextEditor(ref, path, name, kind) {
   showModal(el('div', {}, [viewerHeader(name, closeModal), el('div', { class: 'text-dim mt-16', text: 'Loading...' })]));
   document.getElementById('modalContent').classList.add('fe-viewer-modal');
@@ -4635,8 +4681,15 @@ async function openTextEditor(ref, path, name, kind) {
   // something that needs to re-run on every keystroke.
   const highlightCode = el('code');
   const highlightPre = el('pre', { class: 'fe-code-highlight-pre', 'aria-hidden': 'true' }, [highlightCode]);
+  // A second, transparent overlay sits ABOVE the syntax-color layer but
+  // BELOW the (also transparent) textarea — it only ever draws a small
+  // highlighted box around a matched bracket pair (see
+  // refreshBracketMatch below), letting the syntax-colored character
+  // underneath show through tinted rather than duplicating/covering it.
+  const bracketCode = el('code');
+  const bracketPre = el('pre', { class: 'fe-bracket-overlay-pre', 'aria-hidden': 'true' }, [bracketCode]);
   const textarea = el('textarea', { class: 'fe-code-editor-input', value: content, spellcheck: 'false' });
-  const editorStack = el('div', { class: 'fe-code-editor-stack' }, [highlightPre, textarea]);
+  const editorStack = el('div', { class: 'fe-code-editor-stack' }, [highlightPre, bracketPre, textarea]);
 
   function refreshHighlight() {
     const text = textarea.value;
@@ -4656,16 +4709,165 @@ async function openTextEditor(ref, path, name, kind) {
     // colored text on the last line.
     highlightCode.innerHTML = text.endsWith('\n') ? html + '\n' : html;
   }
+
+  // ── Bracket matching ── When the (collapsed) cursor sits directly
+  // next to a bracket, finds its partner and draws a small box around
+  // both — same visual language as a real code editor's "jump to
+  // match" highlight.
+  function findMatchingBracket(text, pos) {
+    const before = text[pos - 1], after = text[pos];
+    let idx = -1;
+    if (after && EDITOR_BRACKET_OPEN_TO_CLOSE[after]) idx = pos;
+    else if (before && EDITOR_BRACKET_OPEN_TO_CLOSE[before]) idx = pos - 1;
+    else if (after && EDITOR_BRACKET_CLOSE_TO_OPEN[after]) idx = pos;
+    else if (before && EDITOR_BRACKET_CLOSE_TO_OPEN[before]) idx = pos - 1;
+    if (idx === -1) return null;
+    const ch = text[idx];
+    if (EDITOR_BRACKET_OPEN_TO_CLOSE[ch]) {
+      const close = EDITOR_BRACKET_OPEN_TO_CLOSE[ch];
+      let depth = 0;
+      for (let i = idx; i < text.length; i++) {
+        if (text[i] === ch) depth++;
+        else if (text[i] === close) { depth--; if (depth === 0) return [idx, i]; }
+      }
+    } else {
+      const open = EDITOR_BRACKET_CLOSE_TO_OPEN[ch];
+      let depth = 0;
+      for (let i = idx; i >= 0; i--) {
+        if (text[i] === ch) depth++;
+        else if (text[i] === open) { depth--; if (depth === 0) return [i, idx]; }
+      }
+    }
+    return null;
+  }
+  function refreshBracketMatch() {
+    bracketCode.innerHTML = '';
+    if (textarea.selectionStart !== textarea.selectionEnd) return;
+    const text = textarea.value;
+    const match = findMatchingBracket(text, textarea.selectionStart);
+    if (!match) return;
+    const [a, b] = match;
+    let html = '';
+    for (let i = 0; i < text.length; i++) {
+      html += (i === a || i === b) ? `<span class="fe-bracket-match">${esc(text[i])}</span>` : esc(text[i]);
+    }
+    bracketCode.innerHTML = text.endsWith('\n') ? html + '\n' : html;
+  }
+
   let highlightRaf = null;
   function scheduleHighlight() {
     if (highlightRaf) return;
-    highlightRaf = requestAnimationFrame(() => { highlightRaf = null; refreshHighlight(); });
+    highlightRaf = requestAnimationFrame(() => { highlightRaf = null; refreshHighlight(); refreshBracketMatch(); });
+  }
+  let bracketRaf = null;
+  function scheduleBracketMatch() {
+    if (bracketRaf) return;
+    bracketRaf = requestAnimationFrame(() => { bracketRaf = null; refreshBracketMatch(); });
   }
   textarea.addEventListener('input', scheduleHighlight);
+  textarea.addEventListener('keyup', scheduleBracketMatch);
+  textarea.addEventListener('click', scheduleBracketMatch);
+  textarea.addEventListener('mouseup', scheduleBracketMatch);
   textarea.addEventListener('scroll', () => {
-    highlightPre.scrollTop = textarea.scrollTop;
-    highlightPre.scrollLeft = textarea.scrollLeft;
+    highlightPre.scrollTop = textarea.scrollTop; highlightPre.scrollLeft = textarea.scrollLeft;
+    bracketPre.scrollTop = textarea.scrollTop; bracketPre.scrollLeft = textarea.scrollLeft;
   });
+
+  // ── Tab / Shift+Tab indent, multi-line aware ──
+  function lineBoundsAround(text, start, end) {
+    const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = text.indexOf('\n', end);
+    if (lineEnd === -1) lineEnd = text.length;
+    return { lineStart, lineEnd };
+  }
+  const TAB_SPACES = ' '.repeat(EDITOR_TAB_WIDTH);
+  function indentSelection() {
+    const text = textarea.value;
+    const selStart = textarea.selectionStart, selEnd = textarea.selectionEnd;
+    if (!text.slice(selStart, selEnd).includes('\n')) {
+      document.execCommand('insertText', false, TAB_SPACES);
+      return;
+    }
+    const { lineStart, lineEnd } = lineBoundsAround(text, selStart, selEnd);
+    const newBlock = text.slice(lineStart, lineEnd).split('\n').map(l => TAB_SPACES + l).join('\n');
+    textarea.setSelectionRange(lineStart, lineEnd);
+    document.execCommand('insertText', false, newBlock);
+    textarea.setSelectionRange(selStart + EDITOR_TAB_WIDTH, lineStart + newBlock.length);
+  }
+  function dedentSelection() {
+    const text = textarea.value;
+    const selStart = textarea.selectionStart, selEnd = textarea.selectionEnd;
+    const { lineStart, lineEnd } = lineBoundsAround(text, selStart, selEnd);
+    let firstLineRemoved = 0;
+    const newLines = text.slice(lineStart, lineEnd).split('\n').map((line, i) => {
+      let removed = 0, out = line;
+      if (out.startsWith(TAB_SPACES)) { removed = EDITOR_TAB_WIDTH; out = out.slice(EDITOR_TAB_WIDTH); }
+      else if (out.startsWith('\t')) { removed = 1; out = out.slice(1); }
+      else { const m = out.match(/^ +/); if (m) { removed = Math.min(m[0].length, EDITOR_TAB_WIDTH); out = out.slice(removed); } }
+      if (i === 0) firstLineRemoved = removed;
+      return out;
+    });
+    const newBlock = newLines.join('\n');
+    textarea.setSelectionRange(lineStart, lineEnd);
+    document.execCommand('insertText', false, newBlock);
+    textarea.setSelectionRange(Math.max(lineStart, selStart - firstLineRemoved), lineStart + newBlock.length);
+  }
+
+  // ── Keydown: Tab indent, auto-close pairs, type-over, empty-pair
+  // backspace — everything routed through document.execCommand rather
+  // than assigning textarea.value directly, since a direct .value
+  // assignment resets the browser's native undo/redo history, while
+  // execCommand goes through the same pipeline as real typing and keeps
+  // Ctrl+Z/Ctrl+Y working exactly as expected throughout. This app only
+  // ever runs inside Windows' WebView2 (Chromium), so relying on
+  // execCommand's still-solid Chromium support is safe here even though
+  // it's deprecated for the general web.
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey) dedentSelection(); else indentSelection();
+      scheduleHighlight();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const val = textarea.value;
+    const selStart = textarea.selectionStart, selEnd = textarea.selectionEnd;
+
+    if (e.key === 'Backspace' && selStart === selEnd && selStart > 0) {
+      const before = val[selStart - 1], after = val[selStart];
+      if (EDITOR_AUTOCLOSE_PAIRS[before] === after) {
+        e.preventDefault();
+        textarea.setSelectionRange(selStart - 1, selStart + 1);
+        document.execCommand('delete', false);
+        scheduleHighlight();
+        return;
+      }
+    }
+    if (selStart === selEnd && EDITOR_AUTOCLOSE_CLOSERS.has(e.key) && val[selStart] === e.key) {
+      e.preventDefault();
+      textarea.setSelectionRange(selStart + 1, selStart + 1);
+      scheduleBracketMatch();
+      return;
+    }
+    if (EDITOR_AUTOCLOSE_PAIRS[e.key]) {
+      if (EDITOR_QUOTE_CHARS.has(e.key) && selStart === selEnd) {
+        const prevChar = val[selStart - 1];
+        if (prevChar && /[A-Za-z0-9_]/.test(prevChar)) return; // e.g. "don't" — let it type normally
+      }
+      e.preventDefault();
+      const close = EDITOR_AUTOCLOSE_PAIRS[e.key];
+      if (selStart !== selEnd) {
+        const selected = val.slice(selStart, selEnd);
+        document.execCommand('insertText', false, e.key + selected + close);
+        textarea.setSelectionRange(selStart + 1, selStart + 1 + selected.length);
+      } else {
+        document.execCommand('insertText', false, e.key + close);
+        textarea.setSelectionRange(selStart + 1, selStart + 1);
+      }
+      scheduleHighlight();
+    }
+  });
+
   refreshHighlight();
 
   const previewPane = el('div', { class: 'fe-text-preview hidden' });
@@ -4693,6 +4895,7 @@ async function openTextEditor(ref, path, name, kind) {
     editorStack.classList.remove('hidden'); previewPane.classList.add('hidden');
     editTabBtn.classList.remove('btn-outline'); previewTabBtn.classList.add('btn-outline');
     refreshHighlight();
+    refreshBracketMatch();
   }
   function showPreviewMode() {
     renderPreview();

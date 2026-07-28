@@ -5,7 +5,7 @@ title Cultivar
 
 echo.
 echo ===========================================================
-echo    Cultivar v2.3.0
+echo    Cultivar v2.3.3
 echo    Live to love. Love to learn. Learn to live.
 echo    The Desktop Update: No need for a browser anymore!
 echo ===========================================================
