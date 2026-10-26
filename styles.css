@@ -1,4 +1,4 @@
-/* Cultivar v2.3.2 — Themes
+/* Cultivar v3.0.0 - Themes
    Overhauled palette system: every theme now defines a fuller set of
    tokens (soft accent tints, gradients, elevated shadows) so components
    can use real depth and color instead of flat single-tone blocks. */
@@ -34,7 +34,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.06);
 }
 
-/* Dark theme — DEFAULT. Neon-on-near-black, inspired by a
+/* Dark theme - DEFAULT. Neon-on-near-black, inspired by a
    terminal/circuit aesthetic: glowing accents, a faint grid backdrop,
    Orbitron/Share Tech Mono for headers so it reads as something built
    for focused, technical work rather than a generic pastel planner. */
@@ -80,7 +80,7 @@
   --shadow-sm: 0 1px 4px rgba(0,255,136,.06);
 }
 
-/* Forest (new — earthy, calm) */
+/* Forest (new - earthy, calm) */
 [data-theme="forest"] {
   --bg: #f4f7f1; --bg2: #ffffff; --bg3: #e3ecdc; --bg4: #c3d9b3;
   --border: #a9c497; --accent: #4d7c3d; --accent2: #345a29; --accent3: #7fae5e;
@@ -94,7 +94,7 @@
   --shadow-sm: 0 1px 4px rgba(77,124,61,.10);
 }
 
-/* Sunset (new — warm gradient dark) */
+/* Sunset (new - warm gradient dark) */
 [data-theme="sunset"] {
   --bg: #1a1023; --bg2: #241631; --bg3: #331d43; --bg4: #4a2a5e;
   --border: #4a2a5e; --accent: #ff7849; --accent2: #d9534f; --accent3: #ffb347;
@@ -108,7 +108,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.3);
 }
 
-/* Ocean (unlock lvl 25 — cool teal/blue depths) */
+/* Ocean (unlock lvl 25 - cool teal/blue depths) */
 [data-theme="ocean"] {
   --bg: #08161e; --bg2: #0e2430; --bg3: #143544; --bg4: #1c4a5e;
   --border: #1c4a5e; --accent: #22c1c3; --accent2: #1a8f91; --accent3: #5fe0e3;
@@ -122,7 +122,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.25);
 }
 
-/* Rose Gold (unlock lvl 30 — soft luxe pink/gold) */
+/* Rose Gold (unlock lvl 30 - soft luxe pink/gold) */
 [data-theme="rosegold"] {
   --bg: #fdf5f2; --bg2: #ffffff; --bg3: #f6e3db; --bg4: #ecc7b6;
   --border: #e0b6a4; --accent: #b76e79; --accent2: #9c5a63; --accent3: #d9a679;
@@ -136,7 +136,7 @@
   --shadow-sm: 0 1px 4px rgba(183,110,121,.1);
 }
 
-/* Autumn (unlock lvl 40 — warm harvest tones) */
+/* Autumn (unlock lvl 40 - warm harvest tones) */
 [data-theme="autumn"] {
   --bg: #fbf3ea; --bg2: #ffffff; --bg3: #f0dcc0; --bg4: #e0b884;
   --border: #d3a05f; --accent: #c1622b; --accent2: #96431a; --accent3: #e08e3e;
@@ -150,7 +150,7 @@
   --shadow-sm: 0 1px 4px rgba(193,98,43,.1);
 }
 
-/* Cyberpunk (unlock lvl 50 — neon magenta/cyan on near-black) */
+/* Cyberpunk (unlock lvl 50 - neon magenta/cyan on near-black) */
 [data-theme="cyberpunk"] {
   --bg: #0a0a12; --bg2: #12121e; --bg3: #1c1c2e; --bg4: #2a2a42;
   --border: #3a2a4e; --accent: #ff2e88; --accent2: #b3005c; --accent3: #00e5ff;
@@ -164,7 +164,7 @@
   --shadow-sm: 0 1px 6px rgba(255,46,136,.15);
 }
 
-/* Nord (unlock lvl 65 — muted arctic blue-gray) */
+/* Nord (unlock lvl 65 - muted arctic blue-gray) */
 [data-theme="nord"] {
   --bg: #2e3440; --bg2: #3b4252; --bg3: #434c5e; --bg4: #4c566a;
   --border: #4c566a; --accent: #88c0d0; --accent2: #5e81ac; --accent3: #8fbcbb;
@@ -178,7 +178,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.25);
 }
 
-/* Mono (unlock lvl 80 — pure grayscale, minimalist prestige skin) */
+/* Mono (unlock lvl 80 - pure grayscale, minimalist prestige skin) */
 [data-theme="mono"] {
   --bg: #ffffff; --bg2: #f5f5f5; --bg3: #e5e5e5; --bg4: #cccccc;
   --border: #bbbbbb; --accent: #222222; --accent2: #000000; --accent3: #555555;
@@ -192,7 +192,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.06);
 }
 
-/* Candy (unlock lvl 100 — playful high-saturation pastel) */
+/* Candy (unlock lvl 100 - playful high-saturation pastel) */
 [data-theme="candy"] {
   --bg: #fff0fa; --bg2: #ffffff; --bg3: #ffd6f0; --bg4: #ffabe0;
   --border: #ff8ad8; --accent: #ff4fc3; --accent2: #d626a0; --accent3: #7bd6ff;
@@ -206,7 +206,7 @@
   --shadow-sm: 0 1px 4px rgba(255,79,195,.12);
 }
 
-/* Coffee (unlock lvl 125 — the prestige endgame skin) */
+/* Coffee (unlock lvl 125 - the prestige endgame skin) */
 [data-theme="coffee"] {
   --bg: #221a14; --bg2: #2c221a; --bg3: #3a2d22; --bg4: #4d3c2c;
   --border: #4d3c2c; --accent: #c8965a; --accent2: #8a5a2e; --accent3: #e0b888;
@@ -220,7 +220,7 @@
   --shadow-sm: 0 1px 4px rgba(0,0,0,.25);
 }
 
-/* Aurora (Market-purchasable — cool teal/violet northern-lights dark) */
+/* Aurora (Market-purchasable - cool teal/violet northern-lights dark) */
 [data-theme="aurora"] {
   --bg: #06111a; --bg2: #0c1c2a; --bg3: #122a3d; --bg4: #1c3d54;
   --border: #1c3d54; --accent: #45e8c4; --accent2: #7c5cff; --accent3: #45c4e8;
@@ -235,7 +235,7 @@
   --glow: 0 0 14px rgba(124,92,255,.3);
 }
 
-/* Velvet (Market-purchasable — deep plum/magenta luxury dark) */
+/* Velvet (Market-purchasable - deep plum/magenta luxury dark) */
 [data-theme="velvet"] {
   --bg: #170a17; --bg2: #221129; --bg3: #301a3a; --bg4: #452750;
   --border: #452750; --accent: #d946a8; --accent2: #7c2d8f; --accent3: #f0729e;
@@ -249,6 +249,217 @@
   --shadow-sm: 0 1px 6px rgba(217,70,168,.1);
 }
 
+/* ═══════════════════════════════════════════
+   v3.0 NEW STANDARD SHOP THEMES
+   ═══════════════════════════════════════════ */
+[data-theme="obsidian"] {
+  --bg: #0b0d10; --bg2: #12151a; --bg3: #1a1f26; --bg4: #262d38;
+  --border: #2a323d; --accent: #8fd9d9; --accent2: #5aa8a8; --accent3: #c9e8e8;
+  --green: #6fd6a0; --amber: #d9b46a; --red: #d9707a; --gold: #d9c98f;
+  --text: #eaf2f2; --textdim: #7c8e8e;
+  --accent-soft: rgba(143,217,217,.08); --accent-soft-2: rgba(143,217,217,.16);
+  --gradient: linear-gradient(135deg, var(--accent), var(--accent3));
+  --shadow: 0 2px 14px rgba(0,0,0,.4); --shadow-lg: 0 8px 34px rgba(0,0,0,.5); --shadow-sm: 0 1px 5px rgba(0,0,0,.3);
+}
+[data-theme="citrus"] {
+  --bg: #fffdf5; --bg2: #ffffff; --bg3: #fff2cc; --bg4: #ffe08a;
+  --border: #ffca4d; --accent: #ff9d1f; --accent2: #e8720c; --accent3: #ffc94d;
+  --green: #6bb33f; --amber: #ff9d1f; --red: #e8503a; --gold: #f2b705;
+  --text: #3a2c0c; --textdim: #8a7645;
+  --accent-soft: rgba(255,157,31,.09); --accent-soft-2: rgba(255,157,31,.18);
+  --gradient: linear-gradient(135deg, var(--accent), var(--green));
+  --shadow: 0 2px 12px rgba(255,157,31,.14); --shadow-lg: 0 8px 32px rgba(255,157,31,.2); --shadow-sm: 0 1px 4px rgba(255,157,31,.1);
+}
+[data-theme="copperline"] {
+  --bg: #1c1310; --bg2: #261a15; --bg3: #35251d; --bg4: #4a3527;
+  --border: #4a3527; --accent: #d9803e; --accent2: #a85a24; --accent3: #f0a868;
+  --green: #7ea15a; --amber: #d9a441; --red: #c26b4f; --gold: #d9b054;
+  --text: #f2e4d6; --textdim: #a5876f;
+  --accent-soft: rgba(217,128,62,.10); --accent-soft-2: rgba(217,128,62,.2);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 14px rgba(0,0,0,.32); --shadow-lg: 0 8px 34px rgba(0,0,0,.42); --shadow-sm: 0 1px 5px rgba(0,0,0,.26);
+}
+[data-theme="orchard"] {
+  --bg: #f6f8f0; --bg2: #ffffff; --bg3: #e4ecd6; --bg4: #cfe0b3;
+  --border: #b9d191; --accent: #7fae4a; --accent2: #5c8a30; --accent3: #e88fa0;
+  --green: #7fae4a; --amber: #d9a441; --red: #e0637a; --gold: #cba845;
+  --text: #2b3a1c; --textdim: #718a5c;
+  --accent-soft: rgba(127,174,74,.08); --accent-soft-2: rgba(127,174,74,.16);
+  --gradient: linear-gradient(135deg, var(--accent), var(--accent3));
+  --shadow: 0 2px 12px rgba(127,174,74,.12); --shadow-lg: 0 8px 32px rgba(127,174,74,.18); --shadow-sm: 0 1px 4px rgba(127,174,74,.09);
+}
+
+/* ═══════════════════════════════════════════
+   v3.0 PREMIUM TIER - richer glow/shadow treatment throughout,
+   deliberately more elaborate than any standard theme's tokens.
+   ═══════════════════════════════════════════ */
+[data-theme="wisteria_dream"] {
+  --bg: #16101f; --bg2: #201830; --bg3: #2e2245; --bg4: #443160;
+  --border: #443160; --accent: #b98af0; --accent2: #8a5fd9; --accent3: #e0b8ff;
+  --green: #7fd6b0; --amber: #e0b872; --red: #e0708f; --gold: #e8c9ff;
+  --text: #f3ecff; --textdim: #a695c2;
+  --accent-soft: rgba(185,138,240,.12); --accent-soft-2: rgba(185,138,240,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 18px rgba(185,138,240,.22); --shadow-lg: 0 10px 44px rgba(185,138,240,.3), 0 0 60px rgba(224,184,255,.14); --shadow-sm: 0 1px 6px rgba(185,138,240,.14);
+  --glow: 0 0 16px rgba(224,184,255,.4);
+}
+[data-theme="starfall"] {
+  --bg: #060812; --bg2: #0c1020; --bg3: #141a34; --bg4: #202950;
+  --border: #202950; --accent: #ffd76a; --accent2: #6a8aff; --accent3: #ffe9a8;
+  --green: #6affc0; --amber: #ffd76a; --red: #ff6a8a; --gold: #ffe9a8;
+  --text: #eef1ff; --textdim: #7684b8;
+  --accent-soft: rgba(255,215,106,.1); --accent-soft-2: rgba(106,138,255,.2);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent));
+  --shadow: 0 2px 18px rgba(106,138,255,.2); --shadow-lg: 0 10px 44px rgba(255,215,106,.22), 0 0 70px rgba(106,138,255,.18); --shadow-sm: 0 1px 6px rgba(106,138,255,.14);
+  --glow: 0 0 18px rgba(255,215,106,.45);
+}
+[data-theme="gilded_bloom"] {
+  --bg: #0f0d08; --bg2: #191510; --bg3: #26200f; --bg4: #3d3216;
+  --border: #4a3d1a; --accent: #f0c44a; --accent2: #b8912a; --accent3: #fce09a;
+  --green: #8fd699; --amber: #f0c44a; --red: #e0637a; --gold: #fce09a;
+  --text: #faf3de; --textdim: #a3936a;
+  --accent-soft: rgba(240,196,74,.12); --accent-soft-2: rgba(240,196,74,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 18px rgba(240,196,74,.22); --shadow-lg: 0 10px 44px rgba(240,196,74,.3); --shadow-sm: 0 1px 6px rgba(240,196,74,.15);
+  --glow: 0 0 16px rgba(252,224,154,.4);
+}
+[data-theme="void_bloom"] {
+  --bg: #08060d; --bg2: #100b1a; --bg3: #1c1230; --bg4: #2e1c4a;
+  --border: #33204f; --accent: #a83cff; --accent2: #5a1fa8; --accent3: #ff4ec7;
+  --green: #4ee8a0; --amber: #e0a84e; --red: #ff4e6a; --gold: #ff4ec7;
+  --text: #f0e4ff; --textdim: #8a6fa8;
+  --accent-soft: rgba(168,60,255,.13); --accent-soft-2: rgba(168,60,255,.24);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(168,60,255,.26); --shadow-lg: 0 10px 48px rgba(255,78,199,.28), 0 0 70px rgba(168,60,255,.2); --shadow-sm: 0 1px 6px rgba(168,60,255,.16);
+  --glow: 0 0 18px rgba(255,78,199,.45);
+}
+[data-theme="phoenix_ember"] {
+  --bg: #0f0704; --bg2: #1a0d07; --bg3: #2b160c; --bg4: #47230f;
+  --border: #4d2610; --accent: #ff6a2e; --accent2: #d93a14; --accent3: #ffc94e;
+  --green: #6fd68c; --amber: #ffc94e; --red: #ff3a2e; --gold: #ffc94e;
+  --text: #fff0e4; --textdim: #b3806a;
+  --accent-soft: rgba(255,106,46,.13); --accent-soft-2: rgba(255,106,46,.24);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(255,106,46,.26); --shadow-lg: 0 10px 48px rgba(255,201,78,.26), 0 0 70px rgba(255,58,46,.2); --shadow-sm: 0 1px 6px rgba(255,106,46,.16);
+  --glow: 0 0 18px rgba(255,201,78,.45);
+}
+
+/* ═══════════════════════════════════════════
+   VAULT TIER - hidden themes (see VAULT_THEME_CATALOG in server.py).
+   Never surfaced/unlockable until granted by a future Quest Book; the
+   CSS lives here so a granted vault theme renders correctly from day
+   one with zero extra deploy work.
+   ═══════════════════════════════════════════ */
+[data-theme="vault_eclipse_court"] {
+  /* Reworked to feel like an actual eclipse - a near-black sky lit by
+     a pale gold/white corona, instead of the old generic purple
+     fantasy palette. --accent2 keeps a deep violet-black role (the
+     moon's own shadowed disc), while --accent/--accent3 carry the
+     corona's gold-white light. */
+  --bg: #05050a; --bg2: #0c0c14; --bg3: #16151f; --bg4: #232030;
+  --border: #2a2738; --accent: #f0dfa8; --accent2: #3a2f52; --accent3: #d8ceff;
+  --green: #7cd6a0; --amber: #f0dfa8; --red: #ff5a7a; --gold: #f5e6b8;
+  --text: #f2eeff; --textdim: #7d7894;
+  --accent-soft: rgba(240,223,168,.10); --accent-soft-2: rgba(240,223,168,.18);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent3) 55%, var(--accent));
+  --shadow: 0 2px 20px rgba(240,223,168,.18); --shadow-lg: 0 12px 50px rgba(58,47,82,.4), 0 0 90px rgba(240,223,168,.14); --shadow-sm: 0 1px 6px rgba(240,223,168,.12);
+  --glow: 0 0 22px rgba(240,223,168,.45);
+}
+[data-theme="vault_marrow_garden"] {
+  --bg: #120d0e; --bg2: #1c1416; --bg3: #2c1e21; --bg4: #452b30;
+  --border: #4d2f34; --accent: #e0d6c9; --accent2: #b8342f; --accent3: #f2e8dc;
+  --green: #7a9a6f; --amber: #d9a45a; --red: #b8342f; --gold: #f2e8dc;
+  --text: #f5ede4; --textdim: #a3847d;
+  --accent-soft: rgba(184,52,47,.12); --accent-soft-2: rgba(184,52,47,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent));
+  --shadow: 0 2px 20px rgba(184,52,47,.24); --shadow-lg: 0 12px 50px rgba(184,52,47,.3); --shadow-sm: 0 1px 6px rgba(184,52,47,.15);
+  --glow: 0 0 18px rgba(242,232,220,.35);
+}
+[data-theme="vault_glass_monsoon"] {
+  --bg: #061014; --bg2: #0c1c22; --bg3: #143038; --bg4: #1f4a54;
+  --border: #1f4a54; --accent: #4ee8e0; --accent2: #1f9a94; --accent3: #a8fff5;
+  --green: #4ee8a0; --amber: #d9c94e; --red: #ff6a7a; --gold: #a8fff5;
+  --text: #e4fbfa; --textdim: #6fa3a0;
+  --accent-soft: rgba(78,232,224,.12); --accent-soft-2: rgba(78,232,224,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(78,232,224,.24); --shadow-lg: 0 12px 50px rgba(78,232,224,.3), 0 0 80px rgba(168,255,245,.16); --shadow-sm: 0 1px 6px rgba(78,232,224,.15);
+  --glow: 0 0 20px rgba(168,255,245,.5);
+}
+[data-theme="vault_gold_leaf_requiem"] {
+  --bg: #0a0906; --bg2: #14120c; --bg3: #201c12; --bg4: #362e18;
+  --border: #453a1c; --accent: #e8c559; --accent2: #a8842c; --accent3: #fff0c2;
+  --green: #7fcf8f; --amber: #e8c559; --red: #cf5a5a; --gold: #fff0c2;
+  --text: #fbf5e2; --textdim: #a8996f;
+  --accent-soft: rgba(232,197,89,.12); --accent-soft-2: rgba(232,197,89,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(232,197,89,.24); --shadow-lg: 0 12px 50px rgba(232,197,89,.3); --shadow-sm: 0 1px 6px rgba(232,197,89,.15);
+  --glow: 0 0 20px rgba(255,240,194,.5);
+}
+[data-theme="vault_cathedral_static"] {
+  --bg: #0b0c10; --bg2: #14161c; --bg3: #1f232c; --bg4: #303747;
+  --border: #333c4d; --accent: #5ec3ff; --accent2: #2c7fbf; --accent3: #bfe6ff;
+  --green: #6fe0a0; --amber: #d9b25a; --red: #ff5a6a; --gold: #bfe6ff;
+  --text: #eaf4ff; --textdim: #7f92ab;
+  --accent-soft: rgba(94,195,255,.12); --accent-soft-2: rgba(94,195,255,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(94,195,255,.22); --shadow-lg: 0 12px 50px rgba(94,195,255,.3); --shadow-sm: 0 1px 6px rgba(94,195,255,.14);
+  --glow: 0 0 20px rgba(191,230,255,.5);
+}
+[data-theme="vault_paper_lantern_sea"] {
+  --bg: #140a08; --bg2: #201210; --bg3: #331c16; --bg4: #4d2b1e;
+  --border: #4d2b1e; --accent: #ff8a4e; --accent2: #cc4e1f; --accent3: #ffd39a;
+  --green: #6fd68c; --amber: #ffd39a; --red: #ff4e4e; --gold: #ffd39a;
+  --text: #fff0e0; --textdim: #b38468;
+  --accent-soft: rgba(255,138,78,.13); --accent-soft-2: rgba(255,138,78,.24);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(255,138,78,.24); --shadow-lg: 0 12px 50px rgba(255,138,78,.3), 0 0 80px rgba(255,211,154,.16); --shadow-sm: 0 1px 6px rgba(255,138,78,.15);
+  --glow: 0 0 20px rgba(255,211,154,.5);
+}
+[data-theme="vault_iron_orchid"] {
+  --bg: #0d0c10; --bg2: #17151c; --bg3: #241f2c; --bg4: #3a2f47;
+  --border: #3a2f47; --accent: #e04ec2; --accent2: #8a4e9a; --accent3: #ff9ae0;
+  --green: #6fd6a8; --amber: #d9a85a; --red: #e04e6a; --gold: #ff9ae0;
+  --text: #f7ecf5; --textdim: #a08aab;
+  --accent-soft: rgba(224,78,194,.12); --accent-soft-2: rgba(224,78,194,.22);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 20px rgba(224,78,194,.24); --shadow-lg: 0 12px 50px rgba(224,78,194,.3); --shadow-sm: 0 1px 6px rgba(224,78,194,.15);
+  --glow: 0 0 20px rgba(255,154,224,.45);
+}
+[data-theme="vault_permafrost_atrium"] {
+  /* Was near-white with baby-blue accents - washed out its own snow/ice
+     particles and transition into near-invisibility (white-on-white).
+     Deep glacial blue as the base, with lighter icy cyan/white accents
+     that actually pop against it, fixes that. */
+  --bg: #04121c; --bg2: #081c2a; --bg3: #123145; --bg4: #1b4a63;
+  --border: #1f5068; --accent: #6fd6ff; --accent2: #2f9fd9; --accent3: #c8f2ff;
+  --green: #4fe0a8; --amber: #ffcf7a; --red: #ff6b7a; --gold: #c8f2ff;
+  --text: #eaf7ff; --textdim: #7fa8bd;
+  --accent-soft: rgba(111,214,255,.10); --accent-soft-2: rgba(111,214,255,.20);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 18px rgba(111,214,255,.2); --shadow-lg: 0 10px 44px rgba(111,214,255,.26), 0 0 70px rgba(200,242,255,.15); --shadow-sm: 0 1px 6px rgba(111,214,255,.14);
+  --glow: 0 0 20px rgba(200,242,255,.5);
+}
+[data-theme="vault_bioluminal_reef"] {
+  --bg: #040f10; --bg2: #081c1e; --bg3: #0f2f30; --bg4: #164a48;
+  --border: #17524f; --accent: #2effd1; --accent2: #17a893; --accent3: #9dffef;
+  --green: #2effd1; --amber: #d9c94e; --red: #ff5a7a; --gold: #9dffef;
+  --text: #e0fff9; --textdim: #5fa89e;
+  --accent-soft: rgba(46,255,209,.13); --accent-soft-2: rgba(46,255,209,.24);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 22px rgba(46,255,209,.28); --shadow-lg: 0 12px 54px rgba(46,255,209,.34), 0 0 90px rgba(157,255,239,.18); --shadow-sm: 0 1px 6px rgba(46,255,209,.16);
+  --glow: 0 0 22px rgba(157,255,239,.55);
+}
+[data-theme="vault_last_ember_kingdom"] {
+  --bg: #0f0605; --bg2: #1c0d0a; --bg3: #2e1410; --bg4: #4a1f16;
+  --border: #521f16; --accent: #ffb14e; --accent2: #cc3a1f; --accent3: #ffe0a8;
+  --green: #6fd68c; --amber: #ffb14e; --red: #cc3a1f; --gold: #ffe0a8;
+  --text: #fff2e0; --textdim: #b38868;
+  --accent-soft: rgba(255,177,78,.13); --accent-soft-2: rgba(255,177,78,.24);
+  --gradient: linear-gradient(135deg, var(--accent2), var(--accent), var(--accent3));
+  --shadow: 0 2px 22px rgba(255,177,78,.28); --shadow-lg: 0 12px 54px rgba(255,177,78,.34), 0 0 90px rgba(204,58,31,.2); --shadow-sm: 0 1px 6px rgba(255,177,78,.16);
+  --glow: 0 0 22px rgba(255,224,168,.55);
+}
+
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: var(--font); }
@@ -260,18 +471,462 @@ body {
   transition: background var(--trans), color var(--trans);
   position: relative;
 }
-/* Faint circuit-grid backdrop — visible mainly in dark/neon-leaning
-   themes since it's drawn with the accent color at very low opacity;
-   in light themes it's nearly invisible, which is the intent. */
-body::before {
-  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  background-image:
-    linear-gradient(var(--accent-soft) 1px, transparent 1px),
-    linear-gradient(90deg, var(--accent-soft) 1px, transparent 1px);
-  background-size: 42px 42px;
-  opacity: .5;
+/* ── Parallax theme background photo layer ──
+   Replaces the old flat circuit-grid backdrop entirely - v3.0 themes
+   are meant to feel like a real place (a soft, blurry photo) rather
+   than an abstract pattern, so a photo layer and a busy grid would only
+   fight each other. Oversized (130% viewport) so
+   updateParallaxPosition() in app.js has room to pan the visible window
+   around as the person navigates between pages/scrolls - see
+   NAV_PAGE_ORDER there. Sits at low opacity behind everything, heavily
+   blurred so it never competes with foreground text/cards for
+   attention. Hidden via .hidden whenever the active theme has no
+   background file on disk yet (graceful fallback - see
+   applyThemeVisuals()/_probeThemeBackground in app.js). */
+.theme-bg-layer {
+  position: fixed; inset: -8vh -8vw; z-index: 0; pointer-events: none;
+  background-size: 130% auto; background-repeat: no-repeat;
+  background-position: 30% 20%;
+  filter: blur(22px) saturate(1.05);
+  opacity: .28;
+  transition: background-position 1.1s cubic-bezier(.22,.61,.36,1), opacity .4s ease;
+}
+[data-theme="light"] .theme-bg-layer,
+[data-theme="mono"] .theme-bg-layer,
+[data-theme="breeze"] .theme-bg-layer,
+[data-theme="forest"] .theme-bg-layer,
+[data-theme="rosegold"] .theme-bg-layer,
+[data-theme="autumn"] .theme-bg-layer,
+[data-theme="citrus"] .theme-bg-layer,
+[data-theme="orchard"] .theme-bg-layer { opacity: .18; }
+/* Video background upgrade - a looping .mp4/.webm in place of the
+   static .png, swapped in automatically by applyThemeVisuals() when the
+   file exists (see /sprites/themes/<id>.mp4). It's a plain child of the
+   already-blurred theme-bg-layer, so it inherits the exact same blur
+   and opacity as the photo without any extra CSS work here. */
+.theme-bg-layer video.theme-bg-video {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: none;
+}
+.theme-bg-layer video.theme-bg-video.active { display: block; }
+/* Effect FX layer - deliberately UN-blurred and UN-dimmed (unlike
+   theme-bg-layer above), since every premium/vault particle effect
+   (falling petals, embers, rain, starfield, etc.) renders as a
+   pseudo-element on THIS layer. Putting them on the blurred photo
+   layer instead made every particle effectively invisible (a 22px
+   blur reduces a 6-10px dot to an imperceptible smear). Sits directly
+   above the photo layer, still behind all real UI chrome. */
+.theme-fx-layer {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+}
+/* Canvas particle layer - sits in the same paint order as
+   theme-fx-layer, right above it in the DOM, so real moving particles
+   (snow, embers, motes, streaks...) drawn here read the same way the
+   CSS pseudo-element effects do: crisp, unblurred, behind the actual
+   UI chrome. See ThemeFX in app.js. */
+.theme-fx-canvas {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; width: 100vw; height: 100vh;
+}
+.theme-fx-canvas.hidden { display: none; }
+
+/* CULTIVAR neon core label - sits in the chip core of Cyberpunk/
+   Copperline's radial motherboard grid effect (see ThemeGridFX in
+   app.js, which creates/removes/positions this element and drives its
+   random flicker timing via JS rather than a repeating CSS keyframe,
+   since a real failing neon tube never flickers on a steady beat). */
+.circuit-core-label {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 0; pointer-events: none;
+  font-family: 'Orbitron', 'IBM Plex Sans', sans-serif; font-weight: 900;
+  letter-spacing: .18em; color: var(--accent);
+  text-shadow: 0 0 6px var(--accent), 0 0 16px var(--accent), 0 0 32px var(--accent2);
+  opacity: .82; transition: opacity .05s linear, text-shadow .05s linear;
+  user-select: none; white-space: nowrap;
+}
+.circuit-core-label.flicker-dim {
+  opacity: .18; text-shadow: none;
+}
+
+/* Small "buy more fish" hint badge (Bioluminal Reef) - see
+   updateThemeFishHint in app.js. Deliberately tiny and tucked under
+   the topbar rather than anywhere prominent, since it's a one-line
+   nudge, not a notification. */
+@keyframes themeFishHintPulse { 0%, 100% { opacity: .75; } 50% { opacity: 1; } }
+.theme-fish-hint {
+  position: fixed; top: 58px; left: 50%; transform: translateX(-50%);
+  z-index: 500; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--bg2); border: 1px solid var(--accent); color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; font-style: italic; cursor: help;
+  box-shadow: var(--shadow-sm), var(--glow);
+  animation: themeFishHintPulse 2.4s ease-in-out infinite;
 }
 .topbar, .main { position: relative; z-index: 1; }
+
+/* ── Audio mute toggle + volume slider (topbar) ── */
+.audio-mute-btn { flex-shrink: 0; font-size: 1rem; padding: 6px 10px; }
+.audio-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.audio-volume-slider {
+  width: 74px; height: 4px; -webkit-appearance: none; appearance: none;
+  background: var(--bg4); border-radius: 999px; outline: none; cursor: pointer;
+  padding: 0; border: none; box-shadow: none; accent-color: var(--accent);
+}
+.audio-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--gradient); border: 2px solid var(--bg2); box-shadow: var(--shadow-sm);
+  cursor: pointer; margin-top: -1px;
+}
+.audio-volume-slider::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--bg2);
+  background: var(--gradient); box-shadow: var(--shadow-sm); cursor: pointer;
+}
+.audio-volume-slider::-moz-range-track { height: 4px; background: var(--bg4); border-radius: 999px; }
+
+/* ═══════════════════════════════════════════
+   THEME EFFECT CLASSES - see THEME_EFFECT_CLASSES / THEME_META in
+   app.js and THEME_CATALOG's "effect" field in server.py. Each is a
+   small, reusable, "practical" (behavioral/animation) touch applied to
+   EXISTING components based on the active theme, rather than a bespoke
+   animation authored per theme - keeps 40+ themes maintainable while
+   still giving every one of them real character beyond just color.
+   ═══════════════════════════════════════════ */
+
+/* glitch-pulse - level-up/XP bar flickers digitally instead of a plain pulse */
+@keyframes themeGlitchPulse {
+  0%, 100% { transform: translate(0,0); filter: none; opacity: 1; }
+  20% { transform: translate(-1px,0); filter: hue-rotate(8deg); }
+  40% { transform: translate(1px,0); opacity: .92; }
+  60% { transform: translate(-1px,1px); filter: hue-rotate(-6deg); }
+  80% { transform: translate(1px,-1px); opacity: .96; }
+}
+.theme-effect-glitch-pulse .tlb-progress-fill,
+.theme-effect-glitch-pulse .xp-progress-fill { animation: themeGlitchPulse 2.6s steps(2,end) infinite; }
+
+/* ripple-fill - progress bars get a soft traveling sheen instead of a flat fill */
+@keyframes themeRippleSheen {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(220%); }
+}
+.theme-effect-ripple-fill .tlb-progress-track,
+.theme-effect-ripple-fill .xp-progress-fill { overflow: hidden; position: relative; }
+.theme-effect-ripple-fill .tlb-progress-track::after,
+.theme-effect-ripple-fill .xp-progress-fill::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
+  animation: themeRippleSheen 2.8s ease-in-out infinite;
+}
+
+/* sway-idle - cards (esp. Botanarium plant cards) gently idle-sway */
+@keyframes themeSwayIdle {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  50% { transform: rotate(.35deg) translateY(-2px); }
+}
+.theme-effect-sway-idle .plant-card,
+.theme-effect-sway-idle .stat-card:hover { animation: themeSwayIdle 4.5s ease-in-out infinite; }
+
+/* glow-breathe - accent glow slowly breathes instead of staying static */
+@keyframes themeGlowBreathe {
+  0%, 100% { box-shadow: var(--shadow-sm); }
+  50% { box-shadow: var(--shadow), var(--glow); }
+}
+.theme-effect-glow-breathe .card,
+.theme-effect-glow-breathe .top-level-bar { animation: themeGlowBreathe 3.6s ease-in-out infinite; }
+
+/* warm-pulse - buttons/highlights pulse with a slow warm heartbeat */
+@keyframes themeWarmPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+.theme-effect-warm-pulse .btn:not(.btn-outline):not(.btn-sm) { animation: themeWarmPulse 3s ease-in-out infinite; }
+
+/* sharp-snap - app-wide transitions shorten/sharpen, no glow, minimal */
+.theme-effect-sharp-snap { --trans: .08s linear; --trans-fast: .05s linear; --glow: none; }
+.theme-effect-sharp-snap .card:hover { transform: none; }
+
+/* particle-drift - soft drifting motes over the background photo layer */
+@keyframes themeParticleDrift {
+  0% { transform: translate3d(0,0,0); }
+  50% { transform: translate3d(6px,-10px,0); }
+  100% { transform: translate3d(0,0,0); }
+}
+.theme-effect-particle-drift .theme-bg-layer { animation: themeParticleDrift 14s ease-in-out infinite; }
+
+/* compact-density - data-heavy pages tighten up, Nord-style minimal-fuss density */
+.theme-effect-compact-density .stats-grid { gap: 8px; }
+.theme-effect-compact-density .stat-card { padding: 12px; }
+.theme-effect-compact-density .card { padding: 13px; }
+.theme-effect-compact-density th, .theme-effect-compact-density td { padding: 6px 8px; }
+
+/* ═══════════════════════════════════════════
+   PREMIUM + VAULT BESPOKE EFFECTS - unlike the 8 shared classes above,
+   every premium/vault theme gets its OWN one-of-a-kind treatment here
+   (see each theme's "effect" field in server.py's THEME_CATALOG /
+   VAULT_THEME_CATALOG, which now points at the theme's own id). These
+   are the rarest themes in the game (deep level gates, steep Nerds
+   prices, or Quest-Book-only), so they're deliberately more elaborate
+   than anything in the standard tier.
+   ═══════════════════════════════════════════ */
+
+/* Wisteria Dream: lavender mist breathing on cards. Petal fall now
+   comes from the canvas particle engine (see THEME_PARTICLE_CONFIGS
+   in app.js), not CSS. */
+@keyframes wisteriaMistBreathe { 0%, 100% { filter: saturate(1) brightness(1); } 50% { filter: saturate(1.15) brightness(1.05); } }
+.theme-effect-wisteria_dream .card { animation: wisteriaMistBreathe 5s ease-in-out infinite; }
+
+/* Starfall: a small twinkle on the level chip. The starfield itself is
+   the canvas particle engine. */
+@keyframes starfallTwinkle { 0%, 100% { opacity: .15; } 50% { opacity: 1; } }
+.theme-effect-starfall .tlb-chip-level { animation: starfallTwinkle 2.2s ease-in-out infinite; }
+
+/* Gilded Bloom: a rotating gold ring on each stat tile (mask-image
+   punches the center out of a conic gradient, leaving just the ring),
+   a pulsing gold title glow, and a slow sheen sweep across every card. */
+.theme-effect-gilded_bloom .stat-card { position: relative; z-index: 0; }
+.theme-effect-gilded_bloom .stat-card::before {
+  content: ''; position: absolute; inset: -3px; z-index: -1; border-radius: inherit;
+  background: conic-gradient(from 0deg, var(--gold), transparent 12%, transparent 88%, var(--gold));
+  -webkit-mask-image: radial-gradient(circle, transparent 56%, black 60%);
+  mask-image: radial-gradient(circle, transparent 56%, black 60%);
+  animation: gildedSheenSpin 5s linear infinite;
+  filter: drop-shadow(0 0 4px rgba(240,196,74,.45));
+}
+@keyframes gildedSheenSpin { to { transform: rotate(360deg); } }
+@keyframes gildedBloomScale { 0%, 100% { transform: scale(1); box-shadow: none; } 50% { transform: scale(1.02); box-shadow: 0 0 14px rgba(240,196,74,.25); } }
+.theme-effect-gilded_bloom .stat-card:hover { animation: gildedBloomScale 1.8s ease-in-out infinite; }
+@keyframes gildedTitleGlow {
+  0%, 100% { text-shadow: 0 0 4px rgba(240,196,74,.2); }
+  50% { text-shadow: 0 0 9px rgba(240,196,74,.55); }
+}
+.theme-effect-gilded_bloom .card-title { animation: gildedTitleGlow 3.6s ease-in-out infinite; }
+.theme-effect-gilded_bloom .card { position: relative; overflow: hidden; }
+.theme-effect-gilded_bloom .card::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 12%;
+  background: linear-gradient(90deg, transparent, rgba(252,224,154,.16), transparent);
+  animation: gildedCardSheen 8s ease-in-out infinite; pointer-events: none;
+}
+@keyframes gildedCardSheen {
+  0% { left: -18%; opacity: 0; }
+  12% { opacity: 1; }
+  45% { left: 118%; opacity: 1; }
+  58% { opacity: 0; }
+  100% { left: 118%; opacity: 0; }
+}
+
+/* Void Bloom: a pulsing cosmic glow at the center of the viewport, an
+   edge vignette on the whole app, and a slow hue drift on the photo
+   layer. Drifting motes come from the canvas particle engine. */
+@keyframes voidVignettePulse {
+  0%, 100% { box-shadow: inset 0 0 160px 30px rgba(168,60,255,.22); }
+  50% { box-shadow: inset 0 0 260px 60px rgba(255,78,199,.34); }
+}
+.theme-effect-void_bloom .main { animation: voidVignettePulse 5.5s ease-in-out infinite; }
+@keyframes voidBloomGlowPulse {
+  0%, 100% { opacity: .4; transform: translate(-50%,-50%) scale(1); }
+  50% { opacity: .75; transform: translate(-50%,-50%) scale(1.2); }
+}
+.theme-effect-void_bloom .theme-fx-layer::before {
+  content: ''; position: fixed; top: 50%; left: 50%; width: 60vw; height: 60vw;
+  border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(168,60,255,.4), rgba(255,78,199,.22) 45%, transparent 72%);
+  filter: blur(50px);
+  animation: voidBloomGlowPulse 4.5s ease-in-out infinite;
+  transform: translate(-50%, -50%);
+}
+@keyframes voidHueDrift { 0%, 100% { filter: hue-rotate(0deg); } 50% { filter: hue-rotate(20deg); } }
+.theme-effect-void_bloom .theme-bg-layer { animation: voidHueDrift 12s ease-in-out infinite; }
+
+/* Phoenix Ember: rising embers are entirely the canvas particle engine
+   now, no CSS particle rules left for this theme. */
+
+/* Eclipse Court: a rotating corona ring around the level bar, a
+   breathing gold-corona vignette on the app, and a slow sheen sweep on
+   cards. Rotated with plain transform, not an animated conic-gradient
+   angle, since that needs @property support this app doesn't rely on. */
+.theme-effect-vault_eclipse_court .top-level-bar {
+  position: relative;
+}
+.theme-effect-vault_eclipse_court .top-level-bar::before {
+  content: ''; position: absolute; inset: -4px; border-radius: var(--r-lg); z-index: -1;
+  background: conic-gradient(from 0deg, var(--accent3), transparent 10%, transparent 90%, var(--accent3));
+  -webkit-mask-image: radial-gradient(ellipse, transparent 68%, black 74%);
+  mask-image: radial-gradient(ellipse, transparent 68%, black 74%);
+  animation: eclipseRingSpin 4s linear infinite; opacity: .85;
+  filter: drop-shadow(0 0 6px rgba(240,223,168,.45));
+}
+@keyframes eclipseRingSpin { to { transform: rotate(360deg); } }
+@keyframes eclipseCoronaPulse {
+  0%, 100% { box-shadow: inset 0 0 60px 8px rgba(240,223,168,.07); }
+  50% { box-shadow: inset 0 0 110px 18px rgba(240,223,168,.15); }
+}
+.theme-effect-vault_eclipse_court .main { animation: eclipseCoronaPulse 6s ease-in-out infinite; }
+.theme-effect-vault_eclipse_court .card { position: relative; overflow: hidden; }
+.theme-effect-vault_eclipse_court .card::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 11%;
+  background: linear-gradient(90deg, transparent, rgba(240,223,168,.16), transparent);
+  animation: eclipseCardSweep 8s ease-in-out infinite; pointer-events: none;
+}
+@keyframes eclipseCardSweep {
+  0% { left: -16%; opacity: 0; }
+  14% { opacity: 1; }
+  50% { left: 118%; opacity: 1; }
+  62% { opacity: 0; }
+  100% { left: 118%; opacity: 0; }
+}
+
+/* Marrow Garden: a crimson heartbeat on the topbar, an inset vein pulse
+   on the app, and a matching border throb on every card, all synced to
+   the same beat. Drifting motes come from the canvas particle engine. */
+@keyframes marrowHeartbeat {
+  0%, 100% { filter: brightness(1); }
+  8% { filter: brightness(1.06); }
+  16% { filter: brightness(1); }
+  24% { filter: brightness(1.14); }
+  32% { filter: brightness(1); }
+}
+.theme-effect-vault_marrow_garden .topbar { animation: marrowHeartbeat 3.4s ease-in-out infinite; }
+@keyframes marrowVeinPulse {
+  0%, 100% { box-shadow: inset 0 0 70px 8px rgba(184,52,47,.13); }
+  16% { box-shadow: inset 0 0 120px 20px rgba(184,52,47,.28); }
+  32% { box-shadow: inset 0 0 70px 8px rgba(184,52,47,.13); }
+}
+.theme-effect-vault_marrow_garden .main { animation: marrowVeinPulse 3.4s ease-in-out infinite; }
+@keyframes marrowCardThrob {
+  0%, 100% { border-color: var(--border); box-shadow: none; }
+  16% { border-color: rgba(184,52,47,.7); box-shadow: 0 0 16px rgba(184,52,47,.4); }
+  32% { border-color: var(--border); box-shadow: none; }
+}
+.theme-effect-vault_marrow_garden .card { animation: marrowCardThrob 3.4s ease-in-out infinite; }
+
+/* Glass Monsoon: rain streaks are the canvas particle engine now. */
+
+/* Gold Leaf Requiem: falling leaves are the canvas particle engine
+   now. */
+
+/* Cathedral Static: an irregular flicker with a real lightning flash
+   on card borders, plus a brief sky-flash wash across the viewport.
+   Lightning streaks themselves come from the canvas particle engine. */
+@keyframes cathedralFlicker {
+  0%, 92%, 100% { filter: brightness(1); }
+  93% { filter: brightness(1.4); }
+  94% { filter: brightness(.9); }
+  95% { filter: brightness(1.55); }
+  96% { filter: brightness(1); }
+}
+@keyframes cathedralBorderFlash {
+  0%, 92%, 100% { box-shadow: none; border-color: var(--border); }
+  93% { box-shadow: 0 0 26px rgba(94,195,255,.55); border-color: var(--accent); }
+  95% { box-shadow: 0 0 34px rgba(191,230,255,.75); border-color: var(--accent3); }
+  96% { box-shadow: none; border-color: var(--border); }
+}
+.theme-effect-vault_cathedral_static .card {
+  animation: cathedralFlicker 6s steps(1,end) infinite, cathedralBorderFlash 6s steps(1,end) infinite;
+}
+@keyframes cathedralSkyFlash {
+  0%, 92%, 100% { opacity: 0; }
+  93% { opacity: 1; }
+  95% { opacity: .7; }
+  96% { opacity: 0; }
+}
+.theme-effect-vault_cathedral_static .theme-fx-layer::before {
+  content: ''; position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, rgba(94,195,255,0) 0%, rgba(94,195,255,.1) 50%, rgba(94,195,255,0) 100%);
+  animation: cathedralSkyFlash 6s steps(1,end) infinite;
+}
+
+/* Paper Lantern Sea: the drifting lanterns are the canvas particle
+   engine now. */
+
+/* Iron Orchid: a metallic sheen sweeps across cards like light on
+   brushed steel. Fades its own opacity out well before reaching either
+   edge, so overflow:hidden clipping the band never causes a visible
+   pop. Drifting motes come from the canvas particle engine. */
+@keyframes ironSheenSweep {
+  0% { transform: translateX(-160%) skewX(-20deg); opacity: 0; }
+  14% { opacity: .75; }
+  50% { opacity: .75; }
+  86% { opacity: 0; }
+  100% { transform: translateX(260%) skewX(-20deg); opacity: 0; }
+}
+.theme-effect-vault_iron_orchid .card { position: relative; overflow: hidden; }
+.theme-effect-vault_iron_orchid .card::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 26%;
+  background: linear-gradient(90deg, transparent, rgba(255,154,224,.16), transparent);
+  animation: ironSheenSweep 6.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Permafrost Atrium: a breathing icy vignette on the app and a frost
+   glint sweep on cards. Falling snow is the canvas particle engine. */
+@keyframes frostVignetteBreathe {
+  0%, 100% { box-shadow: inset 0 0 70px 8px rgba(111,214,255,.11); }
+  50% { box-shadow: inset 0 0 130px 22px rgba(111,214,255,.24); }
+}
+.theme-effect-vault_permafrost_atrium .main { animation: frostVignetteBreathe 5s ease-in-out infinite; }
+.theme-effect-vault_permafrost_atrium .card { position: relative; overflow: hidden; }
+.theme-effect-vault_permafrost_atrium .card::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 20%;
+  background: linear-gradient(90deg, transparent, rgba(200,242,255,.32), transparent);
+  animation: frostCardGlint 5s ease-in-out infinite; pointer-events: none;
+}
+@keyframes frostCardGlint {
+  0% { left: -30%; opacity: 0; }
+  10% { opacity: 1; }
+  40% { left: 120%; opacity: 1; }
+  50% { opacity: 0; }
+  100% { left: 120%; opacity: 0; }
+}
+
+/* Bioluminal Reef: teal pulse rings radiate outward from stat tiles on
+   a staggered delay. Drifting motes come from the canvas particle
+   engine. */
+@keyframes reefPulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(46,255,209,.45); }
+  100% { box-shadow: 0 0 0 22px rgba(46,255,209,0); }
+}
+.theme-effect-vault_bioluminal_reef .stat-card { animation: reefPulseRing 3s ease-out infinite; }
+.theme-effect-vault_bioluminal_reef .stat-card:nth-child(2n) { animation-delay: 1s; }
+.theme-effect-vault_bioluminal_reef .stat-card:nth-child(3n) { animation-delay: 1.8s; }
+
+/* Last Ember Kingdom: a breathing hearth vignette and a glowing ember
+   line under every card, distinct from Phoenix Ember's straight-up
+   rise since these embers swirl sideways in the canvas particle
+   engine instead. */
+@keyframes emberKingdomHearthBreathe {
+  0%, 100% { box-shadow: inset 0 0 90px 14px rgba(204,58,31,.15); }
+  50% { box-shadow: inset 0 0 160px 30px rgba(255,177,78,.27); }
+}
+.theme-effect-vault_last_ember_kingdom .main { animation: emberKingdomHearthBreathe 4.2s ease-in-out infinite; }
+.theme-effect-vault_last_ember_kingdom .card { position: relative; overflow: hidden; }
+.theme-effect-vault_last_ember_kingdom .card::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent2), var(--accent), transparent);
+  animation: emberKingdomEmberLine 3.2s ease-in-out infinite; pointer-events: none;
+}
+@keyframes emberKingdomEmberLine { 0%, 100% { opacity: .35; } 50% { opacity: .9; } }
+@keyframes emberKingdomFlicker { 0%, 100% { opacity: .85; } 50% { opacity: 1; } }
+.theme-effect-vault_last_ember_kingdom .topbar::after { animation: emberKingdomFlicker 1.4s ease-in-out infinite; }
+
+/* A genuine, SUBTLE fire flicker along the bottom edge - separate from
+   the hearth vignette/ember-line/particle embers above, meant to be
+   felt rather than noticed. Irregular, non-uniform easing (not a plain
+   sine) so it reads as an actual flame guttering rather than a
+   metronomic pulse. */
+@keyframes emberKingdomFlameFlicker {
+  0%, 100% { opacity: .2; transform: scaleY(1) scaleX(1); }
+  18% { opacity: .3; transform: scaleY(1.1) scaleX(.97); }
+  40% { opacity: .16; transform: scaleY(.9) scaleX(1.02); }
+  63% { opacity: .27; transform: scaleY(1.06) scaleX(.98); }
+  81% { opacity: .19; transform: scaleY(.96) scaleX(1.01); }
+}
+.theme-effect-vault_last_ember_kingdom .theme-bg-layer::after {
+  content: ''; position: fixed; left: 0; right: 0; bottom: 0; height: 22vh;
+  background: linear-gradient(0deg, rgba(255,177,78,.5) 0%, rgba(204,58,31,.26) 35%, transparent 78%);
+  filter: blur(18px);
+  transform-origin: bottom;
+  animation: emberKingdomFlameFlicker 2.7s ease-in-out infinite;
+  pointer-events: none;
+}
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -302,49 +957,95 @@ body::before {
 }
 .logo:hover { opacity: .8; }
 .logo-sub { font-family: 'Share Tech Mono', monospace; font-size: .68rem; opacity: .6; -webkit-text-fill-color: var(--textdim); letter-spacing: .05em; }
-.nav-btns { display: flex; gap: 3px; margin-left: auto; flex-wrap: wrap; }
+.nav-btns { display: flex; gap: 3px; margin-left: auto; flex-wrap: nowrap; position: relative; }
+/* Level card: FOUR separate, independently-sized chips (level / tier
+   rank / title / streak) in a row that wraps if the topbar gets tight,
+   instead of the old single stacked cluster - the old layout absolutely
+   positioned/overlapped the tier gem, streak sub-row and title text
+   against each other and broke down at real widths and longer titles/
+   streak numbers. Each chip below sizes to its own content; nothing
+   here is absolutely positioned over anything else. A slim, separate
+   progress track sits underneath the chip row. */
 .top-level-bar {
-  display: flex; align-items: center; gap: 10px;
-  min-width: 240px; max-width: 420px; width: 32vw; flex: 1 1 320px;
-  padding: 6px 12px; border-radius: 999px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  min-width: 320px; max-width: 640px; width: 38vw; flex: 1 1 360px;
+  padding: 10px 16px; border-radius: var(--r-lg);
   border: 1px solid var(--border); background: var(--bg3);
-  box-shadow: var(--shadow-sm); cursor: pointer;
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--tier-color, var(--accent)) 12%, transparent);
+  cursor: pointer;
   transition: transform var(--trans-fast), box-shadow var(--trans-fast), border-color var(--trans-fast);
 }
-.top-level-bar:hover { transform: translateY(-1px); border-color: var(--accent); box-shadow: var(--shadow), var(--glow); }
-.top-level-bar-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 0 0 auto; }
-.top-level-bar-level { display: inline-flex; align-items: center; gap: 6px; font-family: 'Orbitron', 'IBM Plex Sans', sans-serif; font-size: .85rem; font-weight: 900; line-height: 1; }
-.top-level-bar-level-chip {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 3px 8px; border-radius: 999px; color: #fff;
-  background: var(--gradient); box-shadow: var(--shadow-sm), var(--glow);
-  animation: topLevelChipPulse 2.4s ease-in-out infinite;
+.top-level-bar:hover { transform: translateY(-1px); border-color: var(--tier-color, var(--accent)); box-shadow: var(--shadow), var(--glow); }
+
+.top-level-bar-chip-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.tlb-chip {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  padding: 4px 11px; border-radius: 999px; font-size: .78rem; font-weight: 700;
+  white-space: nowrap; line-height: 1.2;
 }
-.top-level-bar-level-burst {
-  font-size: .72rem; color: var(--amber); opacity: .85;
-  animation: topLevelBurst 1.8s ease-in-out infinite;
+.tlb-chip-level {
+  color: #fff; font-family: 'Orbitron', 'IBM Plex Sans', sans-serif; font-size: .88rem; font-weight: 900;
+  letter-spacing: .02em; background: var(--gradient);
+  box-shadow: var(--shadow-sm), 0 0 0 1.5px color-mix(in srgb, var(--tier-color, var(--gold)) 55%, transparent);
 }
-.top-level-bar-title { font-size: var(--font-xxs); color: var(--textdim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.top-level-bar-track {
-  flex: 1 1 auto; height: 10px; border-radius: 999px; overflow: hidden;
-  background: var(--bg4); border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+.tlb-chip-spark {
+  font-size: .8em; display: inline-block; color: #fff;
+  animation: levelSparkTwinkle 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 3px rgba(255,255,255,.7));
 }
-.top-level-bar-fill {
-  height: 100%; border-radius: inherit; background: var(--gradient);
-  box-shadow: var(--glow); transition: width .45s ease;
+@keyframes levelSparkTwinkle {
+  0%, 100% { opacity: .55; transform: scale(.85) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.15) rotate(25deg); }
 }
-.top-level-bar-stats {
-  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
-  font-size: var(--font-xxs); color: var(--textdim); white-space: nowrap; overflow: hidden;
+.tlb-chip-tier {
+  color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5);
+  background: linear-gradient(150deg,
+    color-mix(in srgb, var(--tier-color, var(--gold)) 88%, white 12%) 0%,
+    var(--tier-color, var(--gold)) 55%,
+    color-mix(in srgb, var(--tier-color, var(--gold)) 75%, black 25%) 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tier-color, var(--gold)) 55%, transparent);
+  cursor: help; letter-spacing: .03em; font-size: .72rem;
 }
-.top-level-bar-unlocks { color: var(--textdim); opacity: .9; }
-.top-level-bar-next {
-  display: inline-flex; align-items: center; min-width: 0; max-width: 100%;
-  padding: 2px 7px; border-radius: 999px;
-  background: var(--accent-soft); color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  overflow: hidden; text-overflow: ellipsis;
+.tlb-chip-title {
+  color: var(--text); font-style: italic; font-weight: 600;
+  background: var(--bg2); border: 1px solid var(--border);
+  min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  flex-shrink: 1;
 }
+.tlb-chip-streak {
+  color: var(--textdim); background: color-mix(in srgb, var(--amber) 10%, transparent);
+  transition: background var(--trans-fast), color var(--trans-fast);
+}
+.tlb-chip-streak.has-streak { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
+.tlb-chip-streak.has-streak .ui-icon { animation: streakFlameFlicker 2.1s ease-in-out infinite; }
+@keyframes streakFlameFlicker {
+  0%, 100% { transform: scale(1) rotate(0deg); filter: drop-shadow(0 0 2px color-mix(in srgb, var(--amber) 60%, transparent)); }
+  50% { transform: scale(1.1) rotate(-4deg); filter: drop-shadow(0 0 5px color-mix(in srgb, var(--amber) 80%, transparent)); }
+}
+
+/* Slim progress track below the chip row - a real separate element
+   now (not the whole card's background), filled with a smooth,
+   continuously and slowly sliding gradient rather than a bright
+   one-shot "sheen" streak, which read as a cheap flash-of-light effect
+   rather than genuine progress. */
+.tlb-progress-track {
+  width: 100%; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--bg4);
+}
+.tlb-progress-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg,
+    var(--tier-color, var(--accent)), var(--accent2, var(--accent)),
+    var(--accent3, var(--tier-color, var(--accent))), var(--tier-color, var(--accent)));
+  background-size: 300% 100%;
+  animation: tlbGradientSlide 7s linear infinite;
+  transition: width .6s cubic-bezier(.22,.61,.36,1);
+}
+@keyframes tlbGradientSlide {
+  0% { background-position: 0% 0; }
+  100% { background-position: 300% 0; }
+}
+
 .top-level-bar.level-up-pulse {
   animation: topLevelPulse .9s ease-in-out 0s 2;
 }
@@ -355,14 +1056,6 @@ body::before {
 @keyframes topLevelPulse {
   0%, 100% { transform: translateY(0) scale(1); box-shadow: var(--shadow-sm); }
   50% { transform: translateY(-1px) scale(1.015); box-shadow: var(--shadow), var(--glow); }
-}
-@keyframes topLevelChipPulse {
-  0%, 100% { transform: translateY(0); filter: saturate(1); }
-  50% { transform: translateY(-1px); filter: saturate(1.18); }
-}
-@keyframes topLevelBurst {
-  0%, 100% { transform: scale(1) rotate(0deg); opacity: .65; }
-  50% { transform: scale(1.12) rotate(12deg); opacity: 1; }
 }
 .nav-btn {
   font-family: 'Share Tech Mono', monospace;
@@ -375,6 +1068,30 @@ body::before {
 }
 .nav-btn:hover { background: var(--accent-soft); color: var(--text); border-color: var(--border); }
 .nav-btn.active { background: var(--gradient); color: #fff; border-color: transparent; box-shadow: var(--shadow-sm), var(--glow); }
+.nav-btn-overflowed { display: none !important; }
+.nav-more-btn { flex-shrink: 0; }
+.nav-more-popover {
+  position: fixed; z-index: 3100; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-lg); padding: 4px; min-width: 170px;
+  animation: navMorePopIn .14s ease;
+}
+@keyframes navMorePopIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.nav-more-item {
+  padding: 7px 10px; border-radius: var(--r-sm); font-size: var(--font-s);
+  font-family: 'Share Tech Mono', monospace; cursor: pointer; white-space: nowrap;
+}
+.nav-more-item:hover { background: var(--accent-soft); }
+.nav-more-item.active { background: var(--gradient); color: #fff; font-weight: 700; }
+/* Traveling active-tab dot - a small glowing marker that slides beneath
+   whichever nav-btn is active (or under the "More" button, if the
+   active page is currently tucked away in the overflow menu). Purely
+   cosmetic; see updateNavActiveDot() in app.js. */
+.nav-active-dot {
+  position: absolute; bottom: -7px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--gradient); box-shadow: var(--glow);
+  opacity: 0; pointer-events: none;
+  transition: left .32s cubic-bezier(.4,0,.2,1), opacity .2s ease;
+}
 
 /* Layout */
 .main { display: flex; flex: 1; overflow: hidden; }
@@ -474,9 +1191,13 @@ tr:hover td { background: var(--accent-soft); }
   background: var(--bg2); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 24px; max-width: 500px; width: 90%;
   max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-lg);
-  animation: modalIn .18s ease;
+  animation: modalIn .32s cubic-bezier(.34,1.56,.64,1);
 }
-@keyframes modalIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes modalIn {
+  0% { opacity: 0; transform: translateY(16px) scale(.9); filter: blur(6px); }
+  65% { opacity: 1; filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
 .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .modal-title { font-size: 1.15rem; font-weight: 700; }
 .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--textdim); line-height: 1; border-radius: 50%; width: 30px; height: 30px; transition: background var(--trans-fast); }
@@ -503,14 +1224,60 @@ tr:hover td { background: var(--accent-soft); }
 /* Chart container */
 .chart-container { position: relative; height: 300px; margin: 16px 0; }
 
-/* Timer display */
-.timer-display {
-  font-size: 2.6rem; font-weight: 800; text-align: center;
-  background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-  font-variant-numeric: tabular-nums;
-  padding: 20px;
+/* ═══════════════════════════════════════════
+   TIMER WIDGET - a circular progress ring is the hero: the clock face
+   sits centered inside an SVG ring that fills as the session
+   progresses (fraction-of-planned-time for a free timer, fraction-of-
+   current-phase for Pomodoro), glowing while running, dimming to gray
+   while paused, and turning amber for break phases. A free timer with
+   no planned minutes set gets a gently pulsing "indeterminate" ring
+   instead of a stalled empty one. See paintTimerNumbers()/
+   setTimerRingProgress() in app.js.
+   ═══════════════════════════════════════════ */
+.timer-stage {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 26px 16px 20px; margin: 4px 0 16px; border-radius: var(--r-lg);
+  background: radial-gradient(ellipse at center, var(--accent-soft) 0%, transparent 72%), var(--bg3);
+  border: 1px solid var(--border); overflow: hidden;
 }
-.timer-controls { display: flex; justify-content: center; gap: 12px; margin-top: 12px; }
+.timer-ring-wrap { position: relative; width: 216px; height: 216px; margin: 0 auto; flex-shrink: 0; }
+.timer-ring-svg { width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.timer-ring-track { fill: none; stroke: var(--bg4); stroke-width: 10; }
+.timer-ring-progress {
+  fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round;
+  stroke-dasharray: 552.92; stroke-dashoffset: 552.92;
+  transition: stroke-dashoffset .4s linear, stroke .35s ease;
+  filter: drop-shadow(0 0 6px var(--accent-soft-2));
+}
+.timer-ring-wrap.timer-running .timer-ring-progress { animation: timerRingPulse 2.6s ease-in-out infinite; }
+.timer-ring-wrap.timer-paused .timer-ring-progress { stroke: var(--textdim); filter: none; animation: none; }
+.timer-ring-wrap.timer-break .timer-ring-progress { stroke: var(--amber); }
+@keyframes timerRingPulse {
+  0%, 100% { filter: drop-shadow(0 0 6px var(--accent-soft-2)); }
+  50% { filter: drop-shadow(0 0 15px var(--accent-soft-2)); }
+}
+.timer-ring-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 5px; text-align: center; padding: 0 14px;
+}
+.timer-ring-mode-label {
+  font-size: var(--font-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--textdim); transition: color var(--trans);
+}
+.timer-ring-wrap.timer-running .timer-ring-mode-label { color: var(--accent); }
+.timer-ring-wrap.timer-break .timer-ring-mode-label { color: var(--amber); }
+.timer-ring-wrap.timer-paused .timer-ring-mode-label { color: var(--textdim); }
+
+/* Timer display - now living inside the ring, so it's sized to fit its
+   216px circle rather than sprawling full-width like a plain page
+   heading. */
+.timer-display {
+  font-size: 2.15rem; font-weight: 800; text-align: center;
+  background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.timer-controls { display: flex; justify-content: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.timer-controls .btn { padding: 10px 20px; font-size: .92rem; border-radius: 999px; font-weight: 700; }
 
 /* ═══════════════════════════════════════════
    CALENDAR / TIMETABLE
@@ -574,7 +1341,7 @@ tr:hover td { background: var(--accent-soft); }
     color-mix(in srgb, var(--amber) 8%, transparent) 12px
   );
 }
-/* Teacher-absent lesson slots — the slot still shows (it existed on
+/* Teacher-absent lesson slots - the slot still shows (it existed on
    the schedule) but is visually barred/dimmed to signal it didn't
    actually happen, the same "diagonal stripe" language as a break
    block but in a neutral/dim tone instead of amber so it doesn't read
@@ -591,8 +1358,11 @@ tr:hover td { background: var(--accent-soft); }
     color-mix(in srgb, var(--textdim) 8%, transparent) 12px
   );
 }
+/* Absent lesson - still on the timetable, but faded out. */
+.cal-event.cal-absent { opacity: .35; filter: saturate(.3); border-left-style: dashed; }
+
 /* Study/break blocks that belong to the same timer session are drawn
-   as separate rectangles but are functionally one unit — hovering any
+   as separate rectangles but are functionally one unit - hovering any
    one of them (see the mouseenter/mouseleave wiring in renderCalendar)
    highlights every sibling block sharing the same groupKey, so the
    whole session visibly lights up together. */
@@ -627,7 +1397,7 @@ tr:hover td { background: var(--accent-soft); }
 .profile-selector select { width: auto; min-width: 150px; }
 
 /* ═══════════════════════════════════════════
-   GAMIFICATION — XP badge, progress bars, level-up celebration
+   GAMIFICATION - XP badge, progress bars, level-up celebration
    ═══════════════════════════════════════════ */
 .mini-timer-badge {
   display: flex; align-items: center; gap: 7px;
@@ -665,24 +1435,53 @@ tr:hover td { background: var(--accent-soft); }
 
 /* ── Rotating coin (Nerds icon) ──
    The 8 coin_0N.png files are SEPARATE images, not one spritesheet
-   strip — so this can't be a CSS background-position/steps() trick
+   strip - so this can't be a CSS background-position/steps() trick
    (that only works on a single combined strip image). Instead,
    startCoinAnimation() in app.js swaps a real <img>'s src through all
    8 frames on an interval. coinIcon() (static) just uses coin_01.png
    directly anywhere a cost needs to be visible at rest, no animation. */
 .coin-icon { image-rendering: pixelated; vertical-align: middle; flex-shrink: 0; }
+
+/* ── Custom icon support (see uiIcon() in app.js) ──
+   Generic inline icon slot for anything that used to be an emoji glyph
+   - mute buttons, streak, plant collections, finance income/expense.
+   Drop a matching PNG at /sprites/icons/<name>.png and it just works;
+   missing files fail silently (see uiIcon's onerror handling). */
+.ui-icon { display: inline-block; vertical-align: middle; object-fit: contain; flex-shrink: 0; }
+.ui-icon.icon-muted { opacity: .35; filter: grayscale(1); }
 .coin-icon-animated, .nerds-badge-icon-animated {
   image-rendering: pixelated; flex-shrink: 0; display: inline-block; object-fit: contain;
 }
 .nerds-badge-icon-animated { width: 18px; height: 18px; }
 
 .xp-card { background: linear-gradient(135deg, var(--accent-soft), var(--accent-soft-2)); }
+/* Dashboard "hero" cards - the XP/Progression card and Quick Timer are
+   the two things the dashboard actually wants a person to look at and
+   act on, so they get a visibly stronger treatment (thicker gradient
+   top edge, deeper glow, bigger title) than the plain informational
+   cards (Today, Recent Activity) below them. */
+.dashboard-hero {
+  position: relative; border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.dashboard-hero::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  border-radius: var(--r) var(--r) 0 0; background: var(--gradient); box-shadow: var(--glow);
+}
+.dashboard-hero .card-title { font-size: 1.05rem; }
 .xp-progress-track { width: 100%; height: 10px; border-radius: 6px; background: var(--bg4); overflow: hidden; }
 .xp-progress-fill { height: 100%; background: var(--gradient); border-radius: 6px; transition: width .5s ease; }
 
 /* ── Botanarium ── */
 .pixel-sprite { image-rendering: pixelated; display: block; object-fit: contain; }
-.plant-card { display: flex; flex-direction: column; border-width: 2px; }
+.plant-card { display: flex; flex-direction: column; border-width: 2px; position: relative; overflow: hidden; }
+@keyframes plantCardShineSweep { 0% { transform: translateX(-160%) skewX(-18deg); } 100% { transform: translateX(260%) skewX(-18deg); } }
+.plant-card::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 34%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--plant-color, var(--accent)) 55%, white 15%), transparent);
+  opacity: 0; pointer-events: none;
+}
+.plant-card:hover::after { opacity: .55; animation: plantCardShineSweep .9s ease-in-out forwards; }
 .plant-card.plant-withered .pixel-sprite { filter: grayscale(1) brightness(.92) contrast(.95); }
 .plant-card.plant-selected-growth { box-shadow: 0 0 0 2px var(--green), var(--shadow); }
 .plant-select-badge {
@@ -716,7 +1515,7 @@ tr:hover td { background: var(--accent-soft); }
   color: var(--text); text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg);
 }
 
-/* ── Clementine's Book of Wonders — IEEE-style two-column entries ── */
+/* ── Clementine's Book of Wonders - IEEE-style two-column entries ── */
 .book-modal-content { max-width: 800px; width: 92%; }
 .book-entry-header { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 16px; }
 .book-entry-image { width: 160px; height: 160px; object-fit: cover; border-radius: var(--r-sm); border: 1px solid var(--border); flex-shrink: 0; }
@@ -743,12 +1542,18 @@ tr:hover td { background: var(--accent-soft); }
 .xp-toast {
   display: flex; align-items: center; gap: 12px; min-width: 260px;
   padding: 12px 14px; border-radius: var(--r-lg);
-  background: var(--bg2); border: 1px solid var(--border);
+  background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
   box-shadow: var(--shadow-lg), var(--glow); transform: translateX(120%);
   opacity: 0; transition: transform .28s ease, opacity .28s ease;
 }
 .xp-toast.show { transform: translateX(0); opacity: 1; }
-.xp-toast-icon { font-size: 1.4rem; }
+.xp-toast.xp-toast-danger { border-left-color: var(--red); }
+@keyframes xpToastIconPop {
+  0% { transform: scale(.3) rotate(-12deg); opacity: 0; }
+  55% { transform: scale(1.25) rotate(6deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.xp-toast-icon { font-size: 1.4rem; display: inline-block; animation: xpToastIconPop .5s cubic-bezier(.34,1.56,.64,1); filter: drop-shadow(0 0 6px var(--accent-soft-2)); }
 .xp-toast-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .xp-toast-title { font-weight: 800; color: var(--text); }
 .xp-toast-subtitle { font-size: var(--font-xxs); color: var(--textdim); }
@@ -788,13 +1593,14 @@ tr:hover td { background: var(--accent-soft); }
 .levelup-theme-level { font-size: var(--font-xxs); color: var(--textdim); margin-top: 2px; }
 
 /* ═══════════════════════════════════════════
-   CUSTOM TOOLTIP — a real DOM element positioned via JS on hover,
+   CUSTOM TOOLTIP - a real DOM element positioned via JS on hover,
    replacing native `title` attributes for badge/mastery cards. Avoids
    any pseudo-element slot collisions with .stat-card::before entirely
    since it's not a pseudo-element at all.
    ═══════════════════════════════════════════ */
 .ct-tooltip {
-  position: fixed; z-index: 3000; max-width: 260px;
+  position: fixed; z-index: 3000; max-width: 260px; max-height: 260px; overflow-y: auto;
+  white-space: pre-line;
   background: var(--bg3); color: var(--text);
   border: 1px solid var(--border); border-left: 3px solid var(--ct-accent, var(--accent));
   border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--font-xs);
@@ -813,15 +1619,33 @@ tr:hover td { background: var(--accent-soft); }
   font-size: var(--font-s); animation: fadeIn .2s ease;
 }
 
-/* Theme preview lock overlay — while previewing a locked theme, this
+/* Theme preview lock overlay - while previewing a locked theme, this
    sits over the entire app (below the banner's own z-index) and
    swallows every click/scroll/hover so the preview stays a single,
    frozen screenshot-like view. Only the banner's "Exit Preview" button
    (which lives outside/above this overlay) remains clickable. */
+/* Theme preview lock overlay - purely a visual placeholder now (kept
+   for potential future dimming/vignette use). It does NOT block clicks
+   (pointer-events:none) - see the body.theme-previewing rule below for
+   the actual interaction lock, which is deliberately scoped to #content
+   only so the topbar/nav stays fully clickable during a preview. */
 .preview-lock-overlay {
   position: fixed; inset: 0; z-index: 2500;
-  cursor: not-allowed;
+  pointer-events: none;
   background: transparent;
+}
+/* Theme preview interaction lock - a preview is meant to be "look, but
+   don't touch": every clickable element INSIDE the content area becomes
+   inert (buttons, links, cards, form fields, everything), but #content
+   itself keeps its own pointer-events so mouse-wheel/touch scrolling
+   still works, and the topbar/nav bar (which lives outside #content)
+   stays fully usable - switching tabs to see how the previewed theme
+   looks on other pages is the whole point of allowing navigation during
+   a preview. Exiting the preview (via the banner's "Exit Preview"
+   button, or picking a real unlocked theme) removes this class. */
+body.theme-previewing #content * {
+  pointer-events: none !important;
+  cursor: default !important;
 }
 
 /* Empty states */
@@ -881,7 +1705,19 @@ tr:hover td { background: var(--accent-soft); }
 }
 .fe-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
 .fe-card.fe-dragover { border-color: var(--accent); box-shadow: var(--glow); background: var(--accent-soft); }
-.fe-card-icon { font-size: 2rem; }
+.fe-card-icon {
+  display: inline-block; font-family: 'Share Tech Mono', monospace;
+  font-size: var(--font-xxs); font-weight: 800; letter-spacing: .04em;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 5px; padding: 3px 7px;
+}
+/* Custom PNG icons (folders, markdown/txt/pdf/py/js/css/html - see
+   folderCardIcon()/fileCardIcon() in app.js) sit in the same spot as
+   the text badge above but centered and image-sized rather than
+   padded/bordered like a badge, since a real icon graphic doesn't need
+   the same visual "chip" treatment plain text does. */
+.fe-card-icon-img { display: block; margin: 0 auto; object-fit: contain; }
 .fe-card-name {
   font-size: var(--font-s); font-weight: 600; margin-top: 6px;
   white-space: normal; word-break: break-word; overflow-wrap: break-word;
@@ -920,6 +1756,8 @@ tr:hover td { background: var(--accent-soft); }
   resize: none;
 }
 .fe-viewer-pdf, .fe-viewer-video, .fe-viewer-text { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fe-viewer-epub { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fe-epub-reader { flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; overflow: hidden; }
 
 .fe-tab-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; flex-shrink: 0; }
 .fe-tab {
@@ -946,10 +1784,10 @@ tr:hover td { background: var(--accent-soft); }
 
 .fe-video-el { width: 100%; flex: 1; min-height: 0; background: #000; border-radius: var(--r-sm); }
 
-/* ── Text / Markdown / Code editor — LIVE syntax highlighting ──
+/* ── Text / Markdown / Code editor - LIVE syntax highlighting ──
    The textarea itself can't render colored text, so this stacks a
    highlight.js-rendered <pre><code> directly BEHIND a textarea whose
-   own text is made transparent (only its caret stays visible) — the
+   own text is made transparent (only its caret stays visible) - the
    textarea keeps driving typing/selection/scrolling exactly as normal,
    while the colored version shows through beneath it. Both layers
    share the exact same font/padding/line-height/whitespace rules so
@@ -973,7 +1811,7 @@ tr:hover td { background: var(--accent-soft); }
 }
 .fe-code-highlight-pre code { background: transparent; font: inherit; white-space: inherit; }
 /* Sits above the syntax-color layer but below the (also transparent)
-   textarea — draws nothing but a small box around a matched bracket
+   textarea - draws nothing but a small box around a matched bracket
    pair; every other character here is fully transparent so the colored
    glyph from the layer beneath keeps showing through untouched. */
 .fe-bracket-overlay-pre {
@@ -1024,6 +1862,138 @@ body.has-audio-bar.has-audio-bar-minimized .content { padding-bottom: 46px; }
 .audio-queue-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--font-xs); }
 .audio-queue-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px; }
 
+/* ═══════════════════════════════════════════
+   PERSISTENT PDF VIEWER HOST
+   Lives outside the shared modal system entirely (see index.html) so
+   it survives every other modal opening/closing untouched, and can
+   genuinely be minimized (contents kept alive) rather than destroyed.
+   ═══════════════════════════════════════════ */
+.pdf-viewer-host {
+  position: fixed; z-index: 2200;
+  top: 50%; left: 50%; right: auto; bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(1200px, 94vw); height: min(84vh, 860px);
+  min-width: 420px; min-height: 320px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; overflow: hidden;
+  resize: both;
+}
+.pdf-viewer-host.hidden { display: none; }
+.pdf-viewer-host.pdf-viewer-fullscreen {
+  top: 3vh; left: 2vw; right: 2vw; bottom: 3vh; transform: none;
+  width: auto; height: auto; resize: none;
+}
+.pdf-viewer-host.pdf-viewer-minimized {
+  top: auto; left: 18px; right: auto; bottom: 18px; transform: none;
+  width: 280px; height: auto; min-height: 0; resize: none; border-radius: 999px;
+}
+.pdf-viewer-header {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg3);
+}
+.pdf-viewer-host.pdf-viewer-minimized .pdf-viewer-header {
+  border-bottom: none; border-radius: 999px; padding: 8px 8px 8px 16px;
+}
+.pdf-viewer-title { font-weight: 700; font-size: var(--font-s); min-width: 0; }
+.pdf-viewer-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  padding: 8px 12px 12px; gap: 4px;
+}
+.pdf-viewer-host.pdf-viewer-minimized .pdf-viewer-body { display: none; }
+
+/* Page transition sweep - a quick diagonal light sweep across the
+   whole screen on navigate(), reused off one element instead of
+   creating a new one per navigation. */
+.page-transition-sweep {
+  position: fixed; inset: 0; z-index: 3500; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, var(--accent-soft-2) 48%, var(--accent-soft) 52%, transparent 70%);
+  opacity: 0;
+}
+.page-transition-sweep.play { animation: pageSweepPlay .55s ease-out; }
+@keyframes pageSweepPlay {
+  0% { transform: translateX(-120%); opacity: 0; }
+  15% { opacity: .9; }
+  60% { opacity: .5; }
+  100% { transform: translateX(120%); opacity: 0; }
+}
+.page-transition-canvas {
+  position: fixed; inset: 0; z-index: 3600; pointer-events: none;
+  width: 100vw; height: 100vh; display: none;
+}
+.page-transition-canvas.active { display: block; }
+
+/* ═══════════════════════════════════════════
+   HALL OF FAME
+   ═══════════════════════════════════════════ */
+.hof-header { text-align: center; margin-bottom: 26px; }
+.hof-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px; margin-bottom: 16px;
+}
+.hof-card {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 6px; padding: 28px 22px 24px;
+  background: var(--bg2);
+  border: 1.5px solid color-mix(in srgb, var(--gold) 45%, var(--border));
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--gold) 12%, transparent);
+  transition: transform var(--trans), box-shadow var(--trans), border-color var(--trans);
+}
+.hof-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--gold);
+  box-shadow: var(--shadow-lg), 0 0 26px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+.hof-card-glow {
+  position: absolute; top: -40%; left: 50%; width: 140%; aspect-ratio: 1;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 22%, transparent), transparent 70%);
+  pointer-events: none; z-index: 0;
+}
+.hof-card-photo, .hof-card-monogram {
+  position: relative; z-index: 1;
+  width: 88px; height: 88px; border-radius: 50%;
+  margin-bottom: 8px;
+  border: 2px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  box-shadow: 0 0 0 4px var(--bg2), 0 0 16px color-mix(in srgb, var(--gold) 40%, transparent);
+}
+.hof-card-photo { object-fit: cover; }
+.hof-card-monogram {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--gradient); color: #fff;
+  font-family: 'Orbitron', 'IBM Plex Sans', sans-serif;
+  font-size: 2rem; font-weight: 800;
+}
+.hof-card-name {
+  position: relative; z-index: 1;
+  font-family: 'Orbitron', 'IBM Plex Sans', sans-serif;
+  font-size: 1.15rem; font-weight: 800; color: var(--text);
+}
+.hof-card-nickname {
+  position: relative; z-index: 1;
+  font-family: 'Share Tech Mono', monospace; font-size: var(--font-s);
+  color: var(--gold); font-style: italic;
+}
+.hof-card-role {
+  position: relative; z-index: 1;
+  display: inline-block; margin-top: 6px; padding: 3px 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+  color: var(--gold); font-size: var(--font-xxs); font-weight: 800;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.hof-card-blurb {
+  position: relative; z-index: 1;
+  font-size: var(--font-s); color: var(--textdim); line-height: 1.6; margin-top: 8px;
+}
+.hof-card-link {
+  position: relative; z-index: 1; margin-top: 12px;
+  background: linear-gradient(135deg, #0a66c2, #0a66c2);
+}
+.hof-card-link:hover { filter: brightness(1.15); }
+
 /* Utility */
 .row { display: flex; gap: 10px; align-items: center; }
 .col { display: flex; flex-direction: column; gap: 10px; }
@@ -1040,3 +2010,64 @@ body.has-audio-bar.has-audio-bar-minimized .content { padding-bottom: 46px; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scroll-y { overflow-y: auto; }
 .hidden { display: none !important; }
+
+/* PDF engine */
+.pdf-toolbar { gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.pdf-toolbar .btn.active { background: var(--accent-soft-2); border-color: var(--accent); }
+.pdfjs-wrap { flex: 2 1 420px; min-width: 280px; min-height: 300px; height: 100%; display: flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--bg4); }
+.pdfjs-scroller { flex: 1; min-width: 0; overflow: auto; position: relative; padding: 10px 0; outline: none; }
+.pdfjs-scroller.pdf-night .pdfjs-page canvas { filter: invert(1) hue-rotate(180deg); }
+.pdfjs-page { margin: 0 auto 10px; background: #fff; position: relative; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.pdfjs-page canvas { display: block; }
+.pdfjs-sidebar { width: 170px; flex-shrink: 0; overflow-y: auto; background: var(--bg2); border-right: 1px solid var(--border); }
+.pdfjs-sidebar-resizer { width: 5px; flex-shrink: 0; cursor: col-resize; background: var(--border); transition: background var(--trans-fast); }
+.pdfjs-sidebar-resizer:hover { background: var(--accent); }
+.pdfjs-thumbs { padding: 8px 0; }
+.pdfjs-thumb { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 0 auto 6px; padding: 4px 0; cursor: pointer; border: 2px solid transparent; border-radius: 6px; width: 136px; box-sizing: border-box; }
+.pdfjs-thumb.active { border-color: var(--accent); background: var(--accent-soft); }
+.pdfjs-thumb canvas { background: #fff; display: block; }
+.pdfjs-thumb-label { font-size: 11px; color: var(--textdim); order: 2; }
+.pdfjs-outline { padding: 6px 0; font-size: var(--font-xs); }
+.pdfjs-ol-row { display: flex; gap: 4px; padding-top: 3px; padding-bottom: 3px; padding-right: 6px; }
+.pdfjs-ol-row:hover { background: var(--accent-soft); }
+.pdfjs-ol-arrow { width: 12px; cursor: pointer; color: var(--textdim); flex-shrink: 0; }
+.pdfjs-ol-label { cursor: pointer; overflow-wrap: anywhere; }
+
+/* Text layer (selection + search highlights) */
+.pdfjs-page .textLayer { position: absolute; left: 0; top: 0; overflow: hidden; line-height: 1; opacity: 1; user-select: text; -webkit-user-select: text; z-index: 2; }
+.pdfjs-page .textLayer span, .pdfjs-page .textLayer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text; -webkit-user-select: text; }
+.pdfjs-page .textLayer ::selection { background: rgba(0, 110, 255, .35); color: transparent; }
+.pdfjs-page .textLayer .endOfContent { display: block; position: absolute; left: 0; top: 100%; right: 0; bottom: 0; z-index: -1; cursor: default; user-select: none; }
+.pdfjs-page .textLayer.selecting .endOfContent { top: 0; }
+.pdfjs-page .textLayer mark.pdf-hit { background: rgba(255, 215, 0, .5); color: transparent; border-radius: 2px; padding: 0; }
+.pdfjs-page .textLayer mark.pdf-hit-current { background: rgba(255, 120, 0, .65); outline: 2px solid rgba(255, 120, 0, .95); }
+#pdfPrintHost { display: none; }
+@media print {
+  body.printing-pdf { height: auto !important; overflow: visible !important; display: block !important; background: #fff !important; }
+  body.printing-pdf > *:not(#pdfPrintHost) { display: none !important; }
+  body.printing-pdf #pdfPrintHost { display: block !important; }
+  #pdfPrintHost img { display: block; width: 100%; page-break-after: always; }
+}
+
+.theme-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.theme-card { position: relative; min-height: 190px; border-radius: var(--r-lg); overflow: hidden; cursor: pointer; border: 1px solid var(--border); display: flex; align-items: flex-end; background: var(--bg3); transition: transform var(--trans), box-shadow var(--trans); }
+.theme-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+.theme-card { content-visibility: auto; contain-intrinsic-size: 280px 190px; }
+.theme-card.premium { border-color: var(--gold); }
+.theme-card.active { outline: 2px solid var(--accent); box-shadow: var(--shadow-lg), var(--glow); }
+.theme-card.locked { opacity: .85; }
+.theme-card-media { position: absolute; inset: 0; }
+.theme-card-media img, .theme-card-media video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.theme-card-glass { position: relative; width: 100%; margin: 10px; padding: 12px 14px; border-radius: var(--r); background: linear-gradient(180deg, rgba(14,16,24,.52), rgba(14,16,24,.72)); border: 1px solid rgba(255,255,255,.22); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 8px 24px rgba(0,0,0,.25); color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 8px; }
+.theme-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.theme-card-name { font-weight: 800; font-size: 1.05rem; }
+.theme-card-status { font-size: var(--font-xxs); text-transform: uppercase; letter-spacing: .5px; opacity: .9; white-space: nowrap; }
+.theme-card-perk { display: flex; align-items: center; gap: 8px; font-size: var(--font-xs); font-weight: 700; color: var(--gold); }
+.theme-card-info { width: 17px; height: 17px; border-radius: 50%; border: 1px solid var(--gold); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-style: italic; cursor: help; }
+.theme-card-controls { display: flex; flex-direction: column; gap: 8px; cursor: default; }
+.theme-seg { display: flex; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; overflow: hidden; }
+.theme-seg button { flex: 1; padding: 5px 10px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: var(--font-xs); }
+.theme-seg button.on { background: rgba(255,255,255,.3); font-weight: 700; }
+.theme-seg button:disabled { opacity: .4; cursor: not-allowed; }
+.theme-audio-row { display: flex; align-items: center; gap: 8px; }
+.theme-audio-row .audio-volume-slider { flex: 1; width: auto; }

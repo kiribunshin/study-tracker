@@ -4,31 +4,95 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cultivar</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>html,body{background:#0a0e14;}</style>
+<script>
+/* Show JS errors on screen instead of a silent white window. */
+(function () {
+  window.__cultivarShowError = function (msg) {
+    try {
+      var b = document.getElementById('bootError');
+      if (!b) {
+        b = document.createElement('div'); b.id = 'bootError';
+        b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#2a0f14;color:#ffd5db;border:1px solid #ff3860;border-radius:8px;padding:10px 14px;font:13px/1.45 monospace;white-space:pre-wrap;max-height:40vh;overflow:auto';
+        (document.body || document.documentElement).appendChild(b);
+      }
+      b.textContent = (b.textContent ? b.textContent + '\n\n' : '') + msg;
+    } catch (e) {}
+  };
+  window.addEventListener('error', function (e) {
+    if (e && e.message && /ResizeObserver/.test(e.message)) return;
+    window.__cultivarShowError('JS error: ' + (e.message || 'unknown') + (e.filename ? '\n  at ' + e.filename + ':' + e.lineno : ''));
+  });
+})();
+</script>
+<!-- Fonts load without blocking the first paint (a slow/blocked network used to leave a blank page). -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="industrial.css">
 </head>
 <body>
+<div id="bootSplash" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9000;background:#0a0e14;color:#00e5ff;display:flex;flex-direction:column;align-items:center;justify-content:center;font:700 22px monospace;letter-spacing:4px">CULTIVAR<div id="bootSplashMsg" style="font:12px monospace;letter-spacing:1px;color:#7188a0;margin-top:14px"></div></div>
+<script>setTimeout(function(){var m=document.getElementById('bootSplashMsg');if(m)m.textContent='Still starting... if this stays stuck, check cultivar_error.log next to the app.';},15000);</script>
+<noscript>Cultivar needs JavaScript enabled.</noscript>
+<!-- Parallax theme background photo layer - sits behind everything;
+     see applyThemeVisuals()/updateParallaxPosition() in app.js. Hidden
+     via CSS class whenever the active theme has no background file on
+     disk yet (graceful fallback, no broken-image icon). -->
+<div id="themeBgLayer" class="theme-bg-layer hidden"></div>
+<!-- Theme effect FX layer - sits alongside the photo layer but is
+     NEVER blurred/dimmed (unlike themeBgLayer, which is deliberately
+     blurred so the photo behind stays subtle). Every premium/vault
+     theme's particle effect (falling petals, embers, starfield, rain,
+     etc. - see styles.css's .theme-effect-* rules) renders its
+     pseudo-elements on THIS layer instead, so the particles stay
+     crisp and clearly visible instead of vanishing into a 22px blur. -->
+<div id="themeFxLayer" class="theme-fx-layer"></div>
+<!-- Canvas-based particle engine layer (see ThemeFX in app.js) - sits
+     above themeFxLayer's CSS pseudo-element effects, used by the vault/
+     premium themes that need genuine moving particles (drifting embers,
+     falling snow, orbiting corona motes, swaying lanterns, lightning...)
+     rather than a single repeating CSS ::before/::after pair. Hidden
+     whenever the active theme has no canvas effect registered. -->
+<canvas id="themeFxCanvas" class="theme-fx-canvas hidden"></canvas>
+<!-- Sprite-based ambient effects layer (see ThemeSpriteFX in app.js) -
+     a SEPARATE canvas from themeFxCanvas above, since a few themes run
+     both at once (e.g. Bioluminal Reef's glowing motes AND its
+     swimming fish). Used for anything a procedural shape can't
+     convincingly fake - real leaves, smoke, falling fruit, snow,
+     fish, floating flowers - drawing actual image files instead of
+     canvas primitives. Missing files are simply skipped per-sprite. -->
+<canvas id="themeSpriteFxCanvas" class="theme-fx-canvas hidden"></canvas>
+
 <!-- Topbar -->
 <div class="topbar">
   <div class="logo" onclick="navigate('dashboard')">Cultivar<span class="logo-sub" id="appVersionLabel"></span></div>
   <div id="topLevelBar" class="top-level-bar hidden" onclick="navigate('dashboard')" title="Your progression"></div>
-  <div id="nerdsBadge" class="nerds-badge hidden" onclick="navigate('dashboard')" title="Nerds — earned by studying, leveling up, and mastering subjects/skills"></div>
+  <div id="nerdsBadge" class="nerds-badge hidden" onclick="navigate('dashboard')" title="Nerds - earned by studying, leveling up, and mastering subjects/skills"></div>
   <div id="miniTimerBadge" class="mini-timer-badge hidden" onclick="navigate('dashboard')" title="Go to your running timer"></div>
+  <div class="audio-controls">
+    <button id="audioMuteBtn" class="btn btn-sm btn-outline audio-mute-btn" onclick="toggleAudioMute()" title="Background music on - click to mute"></button>
+    <input id="audioVolumeSlider" class="audio-volume-slider" type="range" min="0" max="1" step="0.01" oninput="setAudioVolume(this.value)" title="Background music volume">
+  </div>
   <div class="nav-btns">
     <button class="nav-btn active" data-page="dashboard" onclick="navigate('dashboard')">Dashboard</button>
     <button class="nav-btn" data-page="timetable" onclick="navigate('timetable')">Timetable</button>
-    <button class="nav-btn" data-page="self_study" onclick="navigate('self_study')">Self-Study</button>
-    <button class="nav-btn" data-page="attendance" onclick="navigate('attendance')">Attendance</button>
-    <button class="nav-btn" data-page="exams" onclick="navigate('exams')">Exams</button>
-    <button class="nav-btn" data-page="events" onclick="navigate('events')">Events</button>
-    <button class="nav-btn" data-page="botanarium" onclick="navigate('botanarium')">Botanarium</button>
     <button class="nav-btn" data-page="files" onclick="navigate('files')">Files</button>
+    <button class="nav-btn" data-page="botanarium" onclick="navigate('botanarium')">Botanarium</button>
+    <button class="nav-btn" data-page="industrial" onclick="navigate('industrial')">Industrial</button>
+    <button class="nav-btn" data-page="stock_market" onclick="navigate('stock_market')">Stock Market</button>
     <button class="nav-btn" data-page="inventory" onclick="navigate('inventory')">Inventory & Shop</button>
     <button class="nav-btn" data-page="stats" onclick="navigate('stats')">Stats</button>
     <button class="nav-btn" data-page="progression" onclick="navigate('progression')">Progression</button>
-    <button class="nav-btn" data-page="finance" onclick="navigate('finance')">Finance</button>
+    <button class="nav-btn" data-page="self_study" onclick="navigate('self_study')">Focus</button>
+    <button class="nav-btn" data-page="attendance" onclick="navigate('attendance')">Attendance</button>
+    <button class="nav-btn" data-page="exams" onclick="navigate('exams')">Exams</button>
+    <button class="nav-btn" data-page="events" onclick="navigate('events')">Events</button>
     <button class="nav-btn" data-page="settings" onclick="navigate('settings')">Settings</button>
+    <button class="nav-btn" data-page="hall_of_fame" data-always-more="1" onclick="navigate('hall_of_fame')">Hall of Fame</button>
+    <button class="nav-btn" data-page="finance" data-always-more="1" onclick="navigate('finance')">Finance</button>
+    <button id="navMoreBtn" class="nav-btn nav-more-btn hidden" onclick="toggleNavMoreMenu(event)">More ▾</button>
+    <div id="navActiveDot" class="nav-active-dot"></div>
   </div>
   <div class="profile-selector">
     <select id="profileSelect" onchange="switchProfile(this.value)"></select>
@@ -43,11 +107,13 @@
   </div>
 </div>
 
-<!-- Theme Preview Lock Overlay — blocks all interaction with the app
-     underneath while a locked theme is being previewed. Sits above
-     .main/.topbar but below the preview banner itself (the banner is a
-     sibling appended after this, later in the DOM / higher stacking
-     context). -->
+<!-- Theme Preview Lock Overlay - while previewing a locked theme, this
+     sits over the entire app (below the preview banner) as a purely
+     visual cue. It does NOT block clicks itself (see .preview-lock-
+     overlay's pointer-events:none) - actual interaction is blocked via
+     body.theme-previewing's CSS rule scoped to #content only, so the
+     topbar/nav bar stays fully usable for switching pages during a
+     preview (see startThemePreview()/exitThemePreview() in app.js). -->
 <div id="previewLockOverlay" class="preview-lock-overlay hidden"></div>
 
 <!-- Modal -->
@@ -55,17 +121,38 @@
   <div class="modal" id="modalContent" onclick="event.stopPropagation()"></div>
 </div>
 
-<!-- Persistent Audio Player — lives outside #content so navigate()'s
+<!-- Persistent Audio Player - lives outside #content so navigate()'s
      re-renders never touch it; a track keeps playing across every page
      until explicitly stopped. See app.js's Audio Player section. -->
 <div id="audioPlayerBar" class="audio-player-bar hidden"></div>
 
+<!-- Persistent PDF Viewer Host - like the audio bar above, lives
+     entirely OUTSIDE the shared #modalOverlay/#modalContent so opening
+     or closing any other modal in the app (attendance, focus,
+     etc.) can never tear it down. This is what makes multiple PDF tabs
+     and a real minimize (as opposed to a destructive close) possible - see openPdfViewer/renderPdfViewerHost in app.js. -->
+<div id="pdfViewerHost" class="pdf-viewer-host hidden"></div>
+
 <!-- Markdown rendering + code syntax highlighting for the File Explorer's
      rich text editor (see app.js's openTextEditor). Loaded once here so
      every viewer instance just checks window.marked / window.hljs. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<!-- EPUB rendering for the File Explorer's book viewer (see app.js's
+     openEpubViewer). epub.js handles the zip/OPF/spine parsing and
+     paginated CSS-reflow rendering itself - a from-scratch EPUB reader
+     would be its own multi-week project. -->
 <script src="app.js"></script>
+<script src="industrial.js"></script>
+<script src="stockmarket.js"></script>
+<script>
+/* Heavy optional libraries load in the background and never block startup. */
+(function () {
+  function load(src) { return new Promise(function (res) { var s = document.createElement('script'); s.src = src; s.onload = function () { res(true); }; s.onerror = function () { res(false); }; document.head.appendChild(s); }); }
+  var C = 'https://cdnjs.cloudflare.com/ajax/libs/';
+  window.__libsReady = (async function () {
+    await Promise.all([load(C + 'marked/12.0.2/marked.min.js'), load(C + 'highlight.js/11.9.0/highlight.min.js'), load(C + 'pdf.js/3.11.174/pdf.min.js'), load(C + 'pdf-lib/1.17.1/pdf-lib.min.js')]);
+    if (await load(C + 'jszip/3.10.1/jszip.min.js')) await load(C + 'epubjs/0.3.93/epub.min.js');
+  })();
+})();
+</script>
 </body>
 </html>

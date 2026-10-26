@@ -5,7 +5,7 @@ title Cultivar
 
 echo.
 echo ===========================================================
-echo    Cultivar v2.3.3
+echo    Cultivar v3.0.0
 echo    Live to love. Love to learn. Learn to live.
 echo    The Desktop Update: No need for a browser anymore!
 echo ===========================================================
@@ -57,6 +57,8 @@ if errorlevel 1 (
 :: checking "import pillow" (the old check) always fails regardless of
 :: whether Pillow is installed, silently re-running this install every
 :: single launch.
+python -c "import yaml" >nul 2>&1
+if errorlevel 1 python -m pip install pyyaml -q
 python -c "import PIL" >nul 2>&1
 if errorlevel 1 python -m pip install pillow -q
 
@@ -69,7 +71,12 @@ if errorlevel 1 (
 )
 
 echo [..] Opening Cultivar...
-start "" "%PYW%" "%~dp0desktop.py"
+python "%~dp0desktop.py" 2> "%~dp0cultivar_error.log"
+if errorlevel 1 (
+    echo [X] Cultivar crashed. See cultivar_error.log
+    type "%~dp0cultivar_error.log"
+    pause
+)
 
 echo Done! This window will close automatically...
 timeout /t 2 >nul

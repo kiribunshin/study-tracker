@@ -1,0 +1,449 @@
+/* Cultivar — Industrial Production & Stock Market
+   Styles for the industrial grid workspace, tech tree, wiki, and the
+   in-universe stock-market computer. Uses only theme tokens from
+   styles.css (--bg/--accent/--text/...) so every theme works unchanged. */
+
+/* ═══════════════════════════════════════════════════════════════════
+   INDUSTRIAL PAGE — shared chrome
+   ═══════════════════════════════════════════════════════════════════ */
+.ind-wrap { display: flex; flex-direction: column; gap: 12px; min-height: calc(100vh - 120px); }
+
+.ind-topbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 10px 14px; box-shadow: var(--shadow-sm);
+}
+.ind-stat {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 4px 12px; border-right: 1px solid var(--border); min-width: 110px;
+}
+.ind-stat:last-child { border-right: none; }
+.ind-stat b { font-size: 17px; font-family: 'Share Tech Mono', monospace; color: var(--accent); }
+.ind-stat span { font-size: 12px; color: var(--textdim); text-transform: uppercase; letter-spacing: .4px; }
+
+.ind-tabs { display: flex; gap: 6px; margin-left: auto; }
+.ind-tab {
+  border: 1px solid var(--border); background: transparent; color: var(--textdim);
+  padding: 7px 16px; border-radius: var(--r-sm); cursor: pointer;
+  font-size: 14px; transition: var(--trans-fast);
+}
+.ind-tab:hover { color: var(--text); border-color: var(--accent); }
+.ind-tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+.btn-xs {
+  padding: 3px 9px; font-size: 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--bg3); color: var(--text);
+  cursor: pointer; transition: var(--trans-fast);
+}
+.btn-xs:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-xs:disabled { opacity: .45; cursor: not-allowed; }
+.btn-xs.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+.btn-xs.good { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   WORKSPACE — palette / owned cards / warehouses
+   Card-list model: no grid, no pipes/wires, no rotation. Every owned
+   miner/forester/generator/processor is a plain card (see .ind-card2),
+   the same visual language as the Botanarium's plant cards. Placing one
+   from the palette is a single click — there's no position to choose —
+   and every card exposes only the fields the specific thing it
+   represents actually uses (see _buildMinerCard/_buildGeneratorCard/
+   _buildProcessorCard in industrial.js).
+   ═══════════════════════════════════════════════════════════════════ */
+.ind-workspace2 { display: grid; grid-template-columns: 260px 1fr; gap: 12px; min-height: 560px; align-items: start; }
+@media (max-width: 900px) { .ind-workspace2 { grid-template-columns: 1fr; } }
+
+.ind-palette2 {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 10px; overflow-y: auto; max-height: 82vh; position: sticky; top: 0;
+}
+.pal-group-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--textdim);
+  margin: 12px 4px 6px; display: flex; justify-content: space-between; cursor: pointer; user-select: none;
+}
+.pal-group-title:first-child { margin-top: 2px; }
+.pal-item2 {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--r-sm); padding: 7px 9px; margin-bottom: 5px;
+  cursor: pointer; font-size: 13px; transition: var(--trans-fast);
+}
+.pal-item2:hover:not(:disabled) { border-color: var(--accent); box-shadow: var(--glow); }
+.pal-item2.locked, .pal-item2:disabled { opacity: .38; cursor: not-allowed; }
+.pal-cost2 { margin-left: auto; font-size: 11px; color: var(--gold); font-family: 'Share Tech Mono', monospace; }
+.pal-swatch { width: 22px; height: 22px; border-radius: 5px; flex-shrink: 0; border: 1px solid rgba(255,255,255,.15); }
+
+.ind-main2 { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.ind-cards-section, .ind-warehouses-section { display: flex; flex-direction: column; gap: 10px; }
+.ind-cards-title { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--textdim); }
+.ind-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+.ind-card2 {
+  background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--r); padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  box-shadow: var(--shadow-sm); transition: var(--trans-fast);
+}
+.ind-card2:hover { box-shadow: var(--shadow); }
+.ind-card2.inactive { opacity: .55; border-left-color: var(--textdim); }
+.ind-card2-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.ind-card2-name { display: flex; flex-direction: column; gap: 2px; font-weight: 700; font-size: 13.5px; }
+.ind-card2-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.ind-card2-body { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ind-card2-body label { font-size: var(--font-xxs); color: var(--textdim); text-transform: uppercase; letter-spacing: .4px; margin: 4px 0 2px; font-weight: 600; }
+.ind-card2-body select, .ind-card2-body input[type=number] {
+  width: 100%; background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 5px 8px; font-size: 12.5px;
+}
+.ind-recipes { display: flex; flex-direction: column; gap: 4px; }
+.ind-recipe-line {
+  font-size: 11.5px; background: var(--bg3); border-radius: var(--r-sm); padding: 5px 8px; line-height: 1.4;
+}
+.ind-recipe-line.build { border-left: 2px solid var(--gold); }
+.ind-blocked {
+  font-size: 11.5px; color: var(--amber); background: rgba(255,204,0,.08);
+  border: 1px solid var(--amber); border-radius: var(--r-sm); padding: 5px 8px;
+}
+.ind-mode-toggle { display: flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.ind-mode-toggle button { flex: 1; border: none; background: transparent; color: var(--textdim); padding: 5px; cursor: pointer; font-size: 12px; }
+.ind-mode-toggle button.on { background: var(--accent-soft); color: var(--accent); }
+.ind-wh-multi {
+  display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 5px; background: var(--bg3);
+}
+.ind-wh-multi-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.ind-prog-row { padding-top: 6px; border-top: 1px dashed var(--border); font-size: 12px; color: var(--textdim); }
+
+.ind-card2-add {
+  align-items: center; justify-content: center; text-align: center; cursor: pointer;
+  border-style: dashed; color: var(--accent); gap: 4px; min-height: 90px;
+}
+.ind-card2-add:hover { box-shadow: var(--glow); }
+.ind-wh-card { border-left-color: var(--gold); gap: 6px; }
+.ind-wh-name-input {
+  background: transparent; border: none; border-bottom: 1px dashed var(--border); color: var(--text);
+  font-weight: 700; font-size: 14px; padding: 2px 0; width: 100%;
+}
+.ind-wh-name-input:focus { outline: none; border-bottom-color: var(--accent); }
+.ind-wh-chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 70px; overflow-y: auto; }
+.buf-chip-more { cursor: help; opacity: .85; }
+
+/* Live per-unit build progress (see _card_public's active_job_secs
+   and industrial.js's processor card rendering) */
+.ind-item-progress { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.ind-item-progress-track { width: 100%; height: 6px; border-radius: 999px; background: var(--bg4); overflow: hidden; }
+.ind-item-progress-fill { height: 100%; background: var(--gradient); border-radius: 999px; transition: width .95s linear; }
+.ind-item-progress-label { font-size: var(--font-xxs); color: var(--textdim); }
+
+.insp-row { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+.insp-row b { font-family: 'Share Tech Mono', monospace; color: var(--text); text-align: right; }
+.insp-empty { color: var(--textdim); text-align: center; padding: 40px 10px; font-size: 14px; }
+.insp-sub { font-size: 12px; color: var(--textdim); margin-bottom: 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   TECH TREE
+   ═══════════════════════════════════════════════════════════════════ */
+.tree-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tree-layout { display: flex; gap: 16px; align-items: flex-start; margin-top: 12px; }
+.tree-cols-wrap { flex: 1; min-width: 0; max-height: 74vh; overflow-y: auto; padding-right: 4px; }
+.tree-detail-dock {
+  position: sticky; top: 0; flex: 0 0 360px; width: 360px; max-height: 82vh; overflow-y: auto;
+}
+.tree-detail-dock .tree-detail { margin-top: 0; }
+.tree-detail-empty { display: flex; align-items: center; justify-content: center; min-height: 200px; }
+@media (max-width: 1100px) {
+  .tree-layout { flex-direction: column; }
+  .tree-detail-dock { position: static; width: 100%; flex: 1 1 auto; max-height: none; }
+}
+.tree-cols { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 14px; align-items: flex-start; }
+.tree-col { min-width: 230px; flex: 0 0 230px; }
+.tree-col-title {
+  text-align: center; font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--accent); padding: 8px; border-bottom: 2px solid var(--accent-soft-2); margin-bottom: 10px;
+  position: sticky; top: 0; background: var(--bg); z-index: 2;
+}
+.tree-node {
+  background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: var(--r-sm); padding: 8px 10px; margin-bottom: 7px; cursor: pointer;
+  transition: var(--trans-fast); position: relative;
+}
+.tree-node:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.tree-node.done { border-left-color: var(--green); background: rgba(57,255,143,.05); }
+.tree-node.avail { border-left-color: var(--amber); }
+.tree-node.locked { opacity: .55; }
+.tree-node.selected { outline: 2px solid var(--accent); }
+.tree-node .tn-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.tree-node .tn-meta { font-size: 11px; color: var(--textdim); display: flex; gap: 8px; margin-top: 2px; }
+.tn-hours { font-family: 'Share Tech Mono', monospace; color: var(--gold); }
+.tree-detail {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 16px; margin-top: 12px;
+}
+.pre-chip {
+  display: inline-block; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 12px; padding: 2px 10px; margin: 2px; font-size: 12px; cursor: pointer;
+}
+.pre-chip:hover { border-color: var(--accent); color: var(--accent); }
+.req-ok { color: var(--green); } .req-no { color: var(--red); }
+.effect-chip { display:inline-block; background: var(--accent-soft); color: var(--accent);
+  border-radius: 10px; padding: 2px 9px; font-size: 12px; margin-right: 4px; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   WIKI
+   ═══════════════════════════════════════════════════════════════════ */
+.wiki-search {
+  width: 100%; max-width: 420px; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text); padding: 8px 12px; font-size: 14px;
+}
+.wiki-cats { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.wiki-cat-chip {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--textdim);
+  border-radius: 14px; padding: 3px 12px; font-size: 12.5px; cursor: pointer;
+}
+.wiki-cat-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.wiki-entry {
+  display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: start;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 10px 12px; margin-bottom: 7px;
+}
+.wiki-entry h4 { font-size: 14.5px; margin: 0 0 2px; }
+.wiki-entry .w-meta { font-size: 12px; color: var(--textdim); }
+.wiki-price { font-family: 'Share Tech Mono', monospace; color: var(--gold); font-size: 13px; white-space: nowrap; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   STOCK MARKET — the in-universe computer (§6: must FEEL like a device)
+   Fully theme-reactive now (every color pulled from the active theme's
+   CSS custom properties, same as the rest of the app) and sized to
+   fill the page — this IS the Stock Market page now, not a small
+   panel floating inside it.
+   ═══════════════════════════════════════════════════════════════════ */
+.sm-device {
+  width: 100%; height: calc(100vh - 150px); min-height: 560px;
+  background: var(--bg2); border-radius: 22px; padding: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255,255,255,.04);
+  display: flex; flex-direction: column;
+}
+.sm-screen {
+  position: relative; flex: 1; min-height: 0; border-radius: 12px; overflow: hidden;
+  background: radial-gradient(1200px 500px at 30% 20%, var(--bg3) 0%, var(--bg) 60%);
+  font-family: 'IBM Plex Sans', sans-serif; color: var(--text);
+}
+.sm-boot {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; background: var(--bg); z-index: 400;
+}
+.sm-boot-logo { font-family: 'Orbitron', sans-serif; font-size: 34px; font-weight: 900; letter-spacing: 6px;
+  color: var(--accent); text-shadow: 0 0 24px var(--accent); animation: smBootPulse 1.1s ease infinite alternate; }
+@keyframes smBootPulse { from { opacity: .55; } to { opacity: 1; } }
+.sm-boot-sub { font-size: 13px; color: var(--textdim); letter-spacing: 2px; }
+
+.sm-desktop { position: absolute; inset: 0; }
+.sm-icons { position: absolute; top: 18px; left: 18px; display: flex; flex-direction: column; gap: 16px; }
+.sm-icon { width: 86px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  cursor: pointer; user-select: none; padding: 8px 4px; border-radius: 10px; }
+.sm-icon:hover { background: var(--accent-soft); }
+.sm-icon-glyph {
+  width: 52px; height: 52px; border-radius: 13px; display: flex; align-items: center; justify-content: center;
+  font-size: 25px; background: linear-gradient(145deg, var(--bg4), var(--bg3));
+  border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.25);
+}
+.sm-icon-label { font-size: 12px; color: var(--textdim); text-align: center; }
+
+.sm-taskbar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 40px; z-index: 300;
+  background: color-mix(in srgb, var(--bg2) 88%, transparent); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 14px; gap: 12px;
+}
+.sm-tb-brand { font-family: 'Share Tech Mono', monospace; font-size: 13px; color: var(--accent); letter-spacing: 1px; }
+.sm-tb-clock { margin-left: auto; font-family: 'Share Tech Mono', monospace; font-size: 13px; color: var(--textdim); }
+.sm-tb-nerds { font-family: 'Share Tech Mono', monospace; font-size: 13px; color: var(--gold); }
+
+.sm-win {
+  position: absolute; min-width: 420px; min-height: 260px; max-width: 96%; max-height: 92%;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
+  z-index: 100;
+}
+.sm-win.focused { border-color: var(--accent); box-shadow: var(--shadow-lg), 0 0 0 1px var(--accent-soft-2), var(--glow); }
+.sm-win-titlebar {
+  height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  background: var(--bg3); border-bottom: 1px solid var(--border); cursor: move; user-select: none; flex-shrink: 0;
+}
+.sm-win-title { font-size: 13.5px; color: var(--text); font-weight: 600; }
+.sm-win-close { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.sm-win-close:hover { background: color-mix(in srgb, var(--red) 30%, transparent); }
+.sm-win-body { flex: 1; overflow: auto; padding: 12px; }
+
+/* Market app internals */
+.mkt-layout { display: grid; grid-template-columns: 1fr 380px; gap: 12px; min-height: 100%; }
+.mkt-table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: auto; max-height: 66vh; }
+table.mkt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mkt-table th {
+  position: sticky; top: 0; background: var(--bg3); color: var(--textdim); text-align: left;
+  padding: 8px 10px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.mkt-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mkt-table tr.clickable { cursor: pointer; }
+.mkt-table tr.clickable:hover td { background: var(--accent-soft); }
+.mkt-table tr.sel td { background: var(--accent-soft-2); }
+.px-up { color: var(--green); } .px-down { color: var(--red); }
+.mono { font-family: 'Share Tech Mono', monospace; }
+
+.mkt-detail { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.mkt-detail h3 { margin: 0; font-size: 16px; color: var(--text); }
+.chart-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+.trade-box { display: flex; flex-direction: column; gap: 8px; }
+.trade-row { display: flex; gap: 8px; align-items: center; }
+.trade-row input[type=number] {
+  width: 90px; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 6px 9px; font-size: 14px; font-family: 'Share Tech Mono', monospace;
+}
+.trade-btn { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid; cursor: pointer;
+  font-size: 13.5px; font-weight: 700; background: transparent; }
+.trade-btn.buy { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.trade-btn.buy:hover { background: color-mix(in srgb, var(--green) 12%, transparent); }
+.trade-btn.sell { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.trade-btn.sell:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
+.calc-line { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--textdim); }
+.calc-line b { color: var(--text); font-family: 'Share Tech Mono', monospace; }
+.event-pill { display: inline-flex; gap: 6px; align-items: center; background: var(--bg3); border: 1px solid var(--border);
+  padding: 3px 9px; border-radius: 12px; font-size: 11.5px; margin: 2px 3px 2px 0; color: var(--textdim); }
+
+/* ── Trading Floor: full side-by-side comparison view ──
+   Replaces the old cramped "compare-tray" of tiny sparkline chips.
+   Each pinned commodity gets its OWN full column — price, chart,
+   active events, and a real buy/sell calculator — so several
+   commodities can genuinely be compared against each other at a
+   glance, the way a real trading terminal lays multiple tickers out
+   side by side. */
+.trading-floor { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-top: 10px; }
+.tf-empty { padding: 30px 10px; text-align: center; color: var(--textdim); font-size: 13px; border: 1px dashed var(--border); border-radius: 10px; }
+.tf-col {
+  flex: 0 0 300px; width: 300px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.tf-col-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.tf-col-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.tf-col-remove { cursor: pointer; color: var(--red); font-size: 13px; padding: 2px 6px; border-radius: 5px; flex-shrink: 0; }
+.tf-col-remove:hover { background: color-mix(in srgb, var(--red) 14%, transparent); }
+.tf-col-price { font-family: 'Share Tech Mono', monospace; font-size: 19px; }
+.tf-col canvas { width: 100%; height: 70px; display: block; }
+.tf-col-events { display: flex; flex-wrap: wrap; gap: 3px; }
+
+.compare-tray { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.compare-chip {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 10px 4px 12px; font-size: 12px; color: var(--text);
+}
+.compare-chip .cc-x { cursor: pointer; color: var(--red); font-weight: 700; }
+
+/* News app */
+.news-list { display: flex; flex-direction: column; gap: 8px; }
+.news-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg); }
+.news-item.past { opacity: .5; }
+.news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.news-title { font-size: 14.5px; font-weight: 600; color: var(--text); }
+.news-blurb { font-size: 12.5px; color: var(--textdim); margin-top: 3px; line-height: 1.45; }
+.status-chip { font-size: 10px; letter-spacing: .8px; text-transform: uppercase; padding: 2px 8px; border-radius: 9px; font-weight: 700; }
+.status-active { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.status-upcoming { background: color-mix(in srgb, var(--amber) 12%, transparent); color: var(--amber); }
+.status-past { background: color-mix(in srgb, var(--textdim) 12%, transparent); color: var(--textdim); }
+.tag-chip { font-size: 10.5px; background: var(--bg3); border: 1px solid var(--border); color: var(--textdim); padding: 2px 8px; border-radius: 9px; }
+.news-filter { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+
+/* Info app */
+.info-page { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+.info-page > summary {
+  padding: 10px 14px; cursor: pointer; font-size: 14.5px; font-weight: 600; color: var(--text);
+  background: var(--bg3); list-style: none;
+}
+.info-page > summary::before { content: '▸ '; color: var(--accent); }
+.info-page[open] > summary::before { content: '▾ '; }
+.info-body { padding: 10px 16px 14px; font-size: 13.5px; line-height: 1.65; color: var(--textdim); }
+.info-body p { margin: 0 0 8px; }
+
+/* Toasts inside the device */
+.sm-toast {
+  position: absolute; bottom: 52px; left: 50%; transform: translateX(-50%);
+  background: var(--bg3); color: var(--text); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 9px 18px; font-size: 13px; z-index: 500; box-shadow: var(--shadow-lg);
+  animation: smToastIn .18s ease;
+}
+.sm-toast.error { border-color: var(--red); color: var(--red); }
+@keyframes smToastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; } }
+
+/* ── Boot POST sequence ── */
+.sm-boot-post {
+  align-items: stretch; justify-content: flex-start;
+  padding: 26px 32px; font-family: 'Share Tech Mono', monospace;
+}
+.sm-boot-log { color: var(--green); font-size: 13px; line-height: 1.6; }
+.sm-boot-bar { width: 280px; height: 12px; border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px; margin-top: 16px; background: var(--bg); }
+.sm-boot-bar-fill { height: 100%; width: 0%; background: var(--green); border-radius: 4px;
+  transition: width .55s ease; box-shadow: 0 0 10px color-mix(in srgb, var(--green) 55%, transparent); }
+.sm-boot-done { opacity: 0; transition: opacity .24s ease; }
+
+/* ── Window controls (min / max / close) + resize grip ── */
+.sm-win-ctl { margin-left: auto; display: flex; gap: 5px; align-items: center; }
+.sm-win-ctl button {
+  width: 24px; height: 22px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--textdim); cursor: pointer; font-size: 12px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.sm-win-ctl button:hover { background: var(--bg4); color: var(--text); }
+.sm-win-max:hover { border-color: var(--accent); }
+.sm-win.maximized { left: 0 !important; top: 0 !important; width: 100% !important;
+  height: calc(100% - 40px) !important; border-radius: 0; }
+.sm-resize { position: absolute; right: 1px; bottom: 1px; width: 15px; height: 15px;
+  cursor: nwse-resize; z-index: 5;
+  background: linear-gradient(135deg, transparent 0 50%, var(--border) 50% 56%, transparent 56% 66%, var(--border) 66% 72%, transparent 72%); }
+
+/* ── Taskbar upgrades: launcher + open-window buttons ── */
+.sm-launch-btn { width: 34px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--accent); font-size: 16px; cursor: pointer; flex-shrink: 0; }
+.sm-launch-btn:hover { box-shadow: var(--glow); border-color: var(--accent); }
+.sm-tb-wins { display: flex; gap: 6px; margin-left: 8px; flex: 1; overflow: hidden; }
+.sm-tb-app {
+  display: flex; align-items: center; gap: 6px; max-width: 170px; padding: 5px 12px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--textdim);
+  cursor: pointer; font-size: 12.5px; white-space: nowrap; overflow: hidden;
+}
+.sm-tb-app.active { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+.sm-tb-app.min { opacity: .55; font-style: italic; }
+
+/* ── OS menus (launcher popup + desktop context menu) ── */
+.sm-menu { position: absolute; z-index: 450; min-width: 200px; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px;
+  box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 2px; }
+.sm-menu-item { text-align: left; border: none; background: transparent; color: var(--text);
+  padding: 8px 12px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.sm-menu-item:hover { background: var(--accent-soft); }
+.sm-menu-item.danger:hover { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.sm-menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+/* ── Power-off screen ── */
+.sm-off { position: absolute; inset: 0; background: #000; z-index: 600; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.sm-off-msg { font-family: 'Share Tech Mono', monospace; color: var(--red); font-size: 19px; }
+.sm-off-sub { color: #44586b; font-size: 13px; letter-spacing: 1px;
+  animation: smBootPulse 1.6s ease infinite alternate; }
+
+@media (max-width: 900px) {
+  .mkt-layout { grid-template-columns: 1fr; }
+  .sm-win { min-width: 92%; }
+}
+
+/* Warehouse card item lines + visible toasts */
+.ind-wh-chips { display: flex; flex-direction: column; gap: 3px; max-height: none; overflow: visible; }
+.ind-wh-line { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; border-bottom: 1px dashed var(--border); }
+.ind-wh-line b { font-family: 'Share Tech Mono', monospace; color: var(--gold); }
+.ind-more-link { color: var(--accent); text-decoration: underline dotted; cursor: help; font-size: 12.5px; font-weight: 600; margin-top: 2px; }
+.ind-more-link:hover { color: var(--gold); }
+.ind-toast {
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 4000;
+  background: var(--bg3); color: var(--text); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 10px 20px; font-size: 14px; box-shadow: var(--shadow-lg); max-width: 80vw; text-align: center;
+}
+.ind-toast.error { border-color: var(--red); color: var(--red); }

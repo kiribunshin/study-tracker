@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cultivar Desktop — runs the same Flask server as server.py, but
+Cultivar Desktop - runs the same Flask server as server.py, but
 inside a native window (via pywebview) instead of a browser tab, and
 purely LOCAL: the server only ever listens on 127.0.0.1, never on the
 network. There's no phone access, no LAN sharing, no auth.
@@ -9,10 +9,16 @@ This app is meant to be used on one PC, by one person, full stop.
 How it works:
   - The Flask app (server.py) starts on a background daemon thread,
     bound to 127.0.0.1 only.
-  - pywebview opens a native OS window pointed at that local server —
+  - pywebview opens a native OS window pointed at that local server,
     on Windows this uses the system's WebView2 (Edge) runtime, which
     ships with Windows 10/11 by default, so no bundled Chromium needed.
-  - If Cultivar is already open (you double-clicked start.bat
+    On Linux, pywebview instead needs an actual GUI toolkit installed
+    underneath it (Qt/QtWebEngine or GTK/WebKit2GTK) - see start.sh,
+    which checks for one and installs Qt automatically if neither is
+    present. Everything else in this file is already cross-platform;
+    every Windows-only step below (taskbar icon, console hiding) is
+    a no-op on Linux.
+  - If Cultivar is already open (you double-clicked start.bat/start.sh
     twice, say), this just focuses/reopens a window against the
     EXISTING server instead of starting a second one.
   - Closing the window shuts everything down cleanly (the Flask thread
@@ -31,7 +37,7 @@ from pathlib import Path
 
 # When PyInstaller bundles this into a onefile .exe, bundled data files
 # (index.html, app.js, sprites/, ...) are extracted at runtime into a
-# temp folder pointed to by sys._MEIPASS — server.py's Path(__file__)-
+# temp folder pointed to by sys._MEIPASS - server.py's Path(__file__)-
 # based lookups need to resolve against THAT folder, not the .exe's own
 # location, or every static file / sprite would 404 once packaged.
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -48,7 +54,7 @@ def _set_app_user_model_id():
     This is the actual, well-known root cause of a Python GUI app
     showing the generic "python with a page" icon in the taskbar/
     Alt-Tab switcher even after the window's own icon (see
-    _force_taskbar_icon below) has been explicitly set — Explorer keys
+    _force_taskbar_icon below) has been explicitly set - Explorer keys
     the taskbar button's identity off the App User Model ID, and without
     one, every pythonw.exe-launched script defaults to sharing pythonw's
     own. Must run before any window is created. Never fatal; no-op on
@@ -68,7 +74,7 @@ def _hide_console_window():
     double-clicked a .py file with python.exe as the default handler),
     hide that console window. Running via pythonw.exe (which start.bat
     uses) never attaches one in the first place, so this is purely a
-    safety net for other ways of launching this script — never fatal,
+    safety net for other ways of launching this script - never fatal,
     never affects non-Windows platforms."""
     if not sys.platform.startswith("win"):
         return
@@ -119,7 +125,7 @@ def _wait_until_up(port, timeout=15):
 def _detect_existing_server(port=8080):
     """Quick, one-shot check (not the patient retry loop _wait_until_up
     uses while a server is booting) for whether SOMETHING is already
-    answering on this port — e.g. Cultivar is already open in
+    answering on this port - e.g. Cultivar is already open in
     another window. Returns True if found."""
     import urllib.request
     try:
@@ -131,8 +137,7 @@ def _detect_existing_server(port=8080):
 
 def _force_taskbar_icon(icon_path, title="Cultivar", tries=60, delay=0.25):
     """pywebview's `icon=` kwarg (passed to webview.start()) sets the
-    window's SMALL icon under Windows' WebView2/edgechromium backend —
-    that's why the title bar already shows the correct icon. The
+    window's SMALL icon under Windows' WebView2/edgechromium backend - that's why the title bar already shows the correct icon. The
     TASKBAR reads the window's BIG icon instead, which pywebview doesn't
     reliably set, so Windows falls back to whatever icon is embedded in
     pythonw.exe itself (the "python with a page" icon). This explicitly
@@ -141,7 +146,7 @@ def _force_taskbar_icon(icon_path, title="Cultivar", tries=60, delay=0.25):
     look at), fixing the taskbar without needing to touch pywebview.
 
     Runs in a background thread since webview.create_window() returns
-    before the real native window exists yet — it just polls briefly for
+    before the real native window exists yet - it just polls briefly for
     the window to show up by title, then applies the icon once and exits.
     Entirely non-fatal: any failure here just leaves the default icon in
     place, never crashes the app."""
@@ -177,7 +182,7 @@ def _force_taskbar_icon(icon_path, title="Cultivar", tries=60, delay=0.25):
                 user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
                 # The window CLASS icon is what the taskbar button and
                 # Alt-Tab switcher actually read on most Windows
-                # versions — WM_SETICON alone doesn't always take.
+                # versions - WM_SETICON alone doesn't always take.
                 set_class_long = getattr(user32, "SetClassLongPtrW", None) or getattr(user32, "SetClassLongW", None)
                 if set_class_long:
                     try:
@@ -193,11 +198,11 @@ def _force_taskbar_icon(icon_path, title="Cultivar", tries=60, delay=0.25):
 
 
 def _launch_window(port):
-    """Opens the native pywebview window pointed at http://127.0.0.1:port
-    — used identically whether THIS process just started the server or
-    we're simply attaching a window to one that's already running. No
-    Flask thread, no port picking, no server startup here — purely the
-    window + icon."""
+    """Opens the native pywebview window pointed at the local server. The
+    page reports back (/api/boot_ok with a one-time token) once it has really
+    rendered; if that never happens (blank/white window - missing WebView2 on
+    Windows, broken GPU/Qt/GTK surface on Linux) the app opens in the default
+    browser instead, so it is always usable."""
     try:
         import webview
     except ImportError:
@@ -205,22 +210,46 @@ def _launch_window(port):
         while True:
             time.sleep(1)
 
-    webview.create_window(
-        "Cultivar",
-        f"http://127.0.0.1:{port}",
+    import json, uuid, webbrowser, urllib.request
+
+    boot_token = uuid.uuid4().hex
+    url = f"http://127.0.0.1:{port}/?boot={boot_token}"
+    fallback = {"used": False}
+
+    def _open_browser(reason):
+        if fallback["used"]:
+            return
+        fallback["used"] = True
+        print(f"Native window unavailable ({reason}) - opening in your browser: {url}")
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+    def _keep_alive():
+        while True:  # keep the server alive for the browser tab
+            time.sleep(1)
+
+    if os.environ.get("CULTIVAR_FORCE_BROWSER") == "1":
+        _open_browser("forced by CULTIVAR_FORCE_BROWSER")
+        _keep_alive()
+
+    if sys.platform.startswith("linux"):
+        # Blank/black webview surfaces on Linux are almost always GPU
+        # compositing problems in QtWebEngine/WebKitGTK.
+        os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --no-sandbox --disable-gpu-compositing")
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault("QT_QUICK_BACKEND", "software")
+        os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
+        os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+
+    window = webview.create_window(
+        "Cultivar", url,
         width=1280, height=860, min_size=(900, 600),
-        confirm_close=False,
+        confirm_close=False, on_top=False, focus=True,
     )
 
-    # Custom app icon (replaces pywebview/OS default). Stored at
-    # sprites/gui/appicon.png in the repo; on Windows a proper .ico
-    # (sprites/gui/appicon.ico) is preferred for the taskbar/title bar
-    # if present, since some Windows webview backends render a PNG
-    # inconsistently there — we auto-generate one from the PNG on first
-    # run (via Pillow) if only the PNG exists and Pillow is available,
-    # and just fall back to the PNG directly otherwise. Never fatal if
-    # any of this is missing — the app still runs fine with the default
-    # icon.
+    # Custom app icon (never fatal if anything here is missing).
     icon_path = None
     png_path = BASE_DIR / "sprites" / "gui" / "appicon.png"
     ico_path = BASE_DIR / "sprites" / "gui" / "appicon.ico"
@@ -231,36 +260,53 @@ def _launch_window(port):
                 img = Image.open(png_path)
                 img.save(ico_path, sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
             except Exception:
-                pass  # Pillow unavailable or conversion failed — fall through to PNG/default below
+                pass
         if sys.platform.startswith("win") and ico_path.exists():
             icon_path = str(ico_path)
         elif png_path.exists():
             icon_path = str(png_path)
     except Exception:
         icon_path = None
-
     if icon_path:
         _force_taskbar_icon(icon_path)
 
-    # pywebview defaults `private_mode` to True (an incognito-style
-    # session), which silently wipes localStorage — including the saved
-    # theme (see app.js's st_theme key) — every time the window closes.
-    # private_mode=False makes the WebView2 profile persist normally
-    # across launches, the same way a regular browser tab would.
-    # Cascading fallback below in case an older/newer pywebview version
-    # doesn't accept one or both kwargs.
+    def _boot_confirmed():
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/boot_status?token={boot_token}", timeout=2) as r:
+                return bool(json.loads(r.read().decode("utf-8")).get("ok"))
+        except Exception:
+            return False
+
+    def _watchdog():
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            if _boot_confirmed():
+                return
+            time.sleep(1)
+        _open_browser("the window never finished loading")
+
+    threading.Thread(target=_watchdog, daemon=True).start()
+
     start_kwargs = {"private_mode": False}
     if icon_path:
         start_kwargs["icon"] = icon_path
+    if sys.platform.startswith("win"):
+        # Fail loudly if WebView2 is missing instead of silently falling back
+        # to the ancient IE engine, which shows a blank white window.
+        start_kwargs["gui"] = "edgechromium"
     try:
-        webview.start(**start_kwargs)
-    except TypeError:
         try:
-            webview.start(icon=icon_path) if icon_path else webview.start()
+            webview.start(**start_kwargs)
         except TypeError:
-            # Oldest pywebview versions (<4.x) accept neither kwarg —
-            # degrade gracefully to defaults rather than crashing.
-            webview.start()
+            start_kwargs.pop("gui", None)
+            try:
+                webview.start(**start_kwargs)
+            except TypeError:
+                webview.start()
+    except Exception as e:
+        _open_browser(str(e))
+    if fallback["used"]:
+        _keep_alive()
 
 
 def main():
@@ -273,7 +319,7 @@ def main():
     # Just open another native window pointed at the one that's already
     # up.
     if _detect_existing_server(8080):
-        print("Cultivar is already running — opening another window onto it.")
+        print("Cultivar is already running - opening another window onto it.")
         _launch_window(8080)
         return
 
@@ -283,7 +329,7 @@ def main():
     st_server.PORT = port
 
     def run_flask():
-        # 127.0.0.1 ONLY — this app never listens on the network.
+        # 127.0.0.1 ONLY - this app never listens on the network.
         st_server.app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False, threaded=True)
 
     t = threading.Thread(target=run_flask, daemon=True)

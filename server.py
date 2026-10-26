@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cultivar — Portable, purely local study tracking desktop app."""
+"""Cultivar - Portable, purely local study tracking desktop app."""
 import os, sys, json, time, hashlib, shutil, math, uuid, random, socket, threading
 import urllib.request, urllib.error, tempfile, zipfile as _zipfile_mod, subprocess
 from flask import Flask, jsonify, request, send_file, abort
@@ -7,41 +7,52 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 from werkzeug.utils import secure_filename
+import unicodedata
+
+# Force UTF-8 console output (Windows consoles default to cp1252, which
+# garbles/crashes on accented characters). pythonw has no stdout at all.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════
 # ── VERSION ── Bump this whenever you ship a meaningful change. It's
-# the single source of truth for the backend's version — shown in the
+# the single source of truth for the backend's version - shown in the
 # startup console line below and exposed at GET /api/version for the
 # frontend (see APP_VERSION in app.js) to read and display, so the two
 # never drift apart or need editing in two places by hand.
 # ═══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.3.3"
+APP_VERSION = "3.0.0"
 
 app = Flask(__name__)
+# Always emit real UTF-8 JSON (accents, kanji...) with an explicit charset.
+try:
+    app.json.ensure_ascii = False
+    app.json.mimetype = "application/json; charset=utf-8"
+except Exception:
+    app.config["JSON_AS_ASCII"] = False
 
-# ── File Explorer (per-subject/skill rich file navigator) ──
-# Folders are REAL directories on disk (mirrors the filesystem 1:1 —
-# no virtual/DB-only folder tree) so a person can also just poke around
-# in saves/<profile>/_files/ directly with a normal file manager and see
-# exactly what the app sees. Two consequences of that:
-#   1. Renaming a subject/skill or reassigning its category physically
-#      moves its folder on disk (see _reconcile_item_folder). This is
-#      safe: every route addresses files by the subject/skill's stable
-#      id + a path relative to ITS OWN folder, never by an absolute
-#      path baked in anywhere else, so nothing external can "link" to a
-#      path that then goes stale.
-#   2. Per-file rich metadata (notes, video timestamps, last PDF page)
-#      can't be shoved into the filename, so it lives in a small hidden
-#      sidecar `.filemeta.json` written into each folder, keyed by
-#      filename. Deleting/moving a file is expected to drag its meta
-#      entry along with it.
+# File Explorer (per-subject/skill rich file navigator). Folders are
+# real directories on disk, mirroring the filesystem 1:1, so a person
+# can also browse saves/<profile>/_files/ directly with a normal file
+# manager. Two consequences: renaming a subject/skill or reassigning
+# its category physically moves its folder (see _reconcile_item_folder,
+# safe since every route addresses files by stable id + a relative
+# path, never an absolute path baked in elsewhere); and per-file
+# metadata (notes, video timestamps, last PDF page) lives in a hidden
+# `.filemeta.json` sidecar per folder, keyed by filename, moved/deleted
+# along with the file.
 FILEMETA_NAME = ".filemeta.json"
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
 PDF_EXTENSIONS = {".pdf"}
+EPUB_EXTENSIONS = {".epub"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 # Anything editable as plain text in the in-browser editor (see the Files
-# page's text/markdown/code viewer) — deliberately broad so common code
+# page's text/markdown/code viewer) - deliberately broad so common code
 # and config files can be quickly tweaked without leaving the app. Kept
 # as a max-size-gated allowlist (see WRITABLE_TEXT_MAX_BYTES) rather than
 # "anything not otherwise recognized," since a binary file opened as text
@@ -56,20 +67,17 @@ TEXT_EXTENSIONS = {
 WRITABLE_TEXT_MAX_BYTES = 64 * 1024 * 1024  # 64MB: this is a quick-edit box, not an IDE
 
 # ── Bundle-aware path resolution ──
-# Two different "base directories" matter here, and they're the same
-# thing in normal (non-packaged) use but DIVERGE once this is bundled
-# into a single-file executable (see desktop.py):
-#   APP_DIR  — where this script's OWN read-only files live (index.html,
-#              app.js, styles.css, sprites/). Under PyInstaller's
-#              --onefile mode these get extracted into an EPHEMERAL temp
-#              folder (sys._MEIPASS) that's recreated fresh every launch.
-#   DATA_DIR — where the person's actual saved data ("saves/") must
-#              live. This has to be STABLE across restarts, or every
-#              profile would appear to silently vanish each time the
-#              packaged app is reopened. Anchored to the .exe's own
-#              folder instead, which persists normally on disk.
-# In plain `python server.py` (unpackaged) use, both are simply this
-# script's own directory, exactly as before.
+# Two base directories, the same thing in normal use but diverging
+# once bundled into a single-file executable (see desktop.py):
+#   APP_DIR - this script's own read-only files (index.html, app.js,
+#             styles.css, sprites/). Under PyInstaller's --onefile mode
+#             these extract into an ephemeral temp folder
+#             (sys._MEIPASS) recreated fresh every launch.
+#   DATA_DIR - the person's saved data ("saves/"), which must stay
+#              stable across restarts. Anchored to the .exe's own
+#              folder instead, which persists on disk.
+# In plain `python server.py` use, both are just this script's own
+# directory.
 def _resolve_app_dir():
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
@@ -86,32 +94,28 @@ DATA_DIR = _resolve_data_dir()
 # ── Configuration ──
 SAVES_DIR = DATA_DIR / "saves"
 SAVES_DIR.mkdir(exist_ok=True)
-SPRITES_DIR = APP_DIR / "sprites"   # /sprites/<category>/<file>.png — see sprite_file() route below
+SPRITES_DIR = APP_DIR / "sprites"   # /sprites/<category>/<file>.png - see sprite_file() route below
 FILES_DIR_NAME = "_files"  # subdirectory per save for subject/skill files
 
-# Purely local — the Flask server only ever listens on 127.0.0.1 (see
+# Purely local - the Flask server only ever listens on 127.0.0.1 (see
 # desktop.py), so this is just an internal port number, never exposed
 # to a network. No LAN access, no password/auth, no HTTPS: all of that
 # existed for a phone/multi-device design this app no longer has.
 PORT = int(os.environ.get("CULTIVAR_PORT", "8080"))
 
 # ═══════════════════════════════════════════════════════════════════
-# ── GitHub Update Checker ──
+# GitHub Update Checker
 # Compares the latest commit on the repo's default branch against the
-# commit this install last synced to, and — on request — downloads and
-# applies that update in place. This only works meaningfully when
-# Cultivar is running from a real source checkout (`python
-# desktop.py` / `python server.py`, e.g. via start.bat) rather than a
-# PyInstaller-frozen .exe, since a frozen exe can't sensibly overwrite
-# its own bundled/extracted files. In frozen mode, checking still works
-# (so the person can be told "an update exists"), but applying it is
-# refused with a message pointing them at a fresh download instead.
+# commit this install last synced to, and on request downloads and
+# applies it in place. Only works from a real source checkout (`python
+# desktop.py` / `python server.py`, e.g. via start.bat), not a
+# PyInstaller-frozen .exe, since a frozen exe can't overwrite its own
+# bundled files. In frozen mode, checking still works but applying is
+# refused with a message pointing at a fresh download.
 #
-# What gets overwritten on apply: only the app's own source/asset files
-# (index.html, app.js, styles.css, server.py, desktop.py, start.bat, and
-# everything under sprites/) — never saves/, never anything holding
-# actual study data. The freshly downloaded copy of each of those files
-# completely replaces the local one; nothing is merged.
+# Apply only overwrites the app's own source/asset files (index.html,
+# app.js, styles.css, server.py, desktop.py, start.bat, sprites/),
+# never saves/. Each file is fully replaced, nothing is merged.
 # ═══════════════════════════════════════════════════════════════════
 GITHUB_REPO = "kiribunshin/study-tracker"
 GITHUB_BRANCH = "main"
@@ -125,7 +129,7 @@ def _is_frozen_exe():
 def _load_update_state():
     if UPDATE_STATE_PATH.exists():
         try:
-            with open(UPDATE_STATE_PATH) as f:
+            with open(UPDATE_STATE_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -133,7 +137,7 @@ def _load_update_state():
 
 def _save_update_state(state):
     try:
-        with open(UPDATE_STATE_PATH, "w") as f:
+        with open(UPDATE_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     except Exception:
         pass
@@ -147,8 +151,7 @@ def _github_api_get(url):
         return json.loads(resp.read().decode("utf-8"))
 
 def check_for_update():
-    """Returns a dict describing update availability. Never raises —
-    network failures are reported back as a normal (non-error) 'could
+    """Returns a dict describing update availability. Never raises - network failures are reported back as a normal (non-error) 'could
     not check' result so a flaky connection never looks like a crash."""
     state = _load_update_state()
     try:
@@ -166,7 +169,7 @@ def check_for_update():
     _save_update_state(state)
 
     if not current_sha:
-        # First time this install has ever checked — treat the current
+        # First time this install has ever checked - treat the current
         # running code as the baseline instead of claiming an update is
         # available purely because nothing was recorded yet.
         state["last_synced_sha"] = latest_sha
@@ -183,11 +186,11 @@ def check_for_update():
 
 def apply_update():
     """Downloads the latest commit's zipball and overwrites this
-    install's own app files with it (see UPDATE_SAFE_TOP_LEVEL — saves/
+    install's own app files with it (see UPDATE_SAFE_TOP_LEVEL - saves/
     is never touched). Returns dict with ok/error. Caller is responsible
     for triggering a restart afterward."""
     if _is_frozen_exe():
-        return {"ok": False, "error": "This is a packaged .exe build — auto-update can't overwrite a running executable. Please download the latest release manually."}
+        return {"ok": False, "error": "This is a packaged .exe build - auto-update can't overwrite a running executable. Please download the latest release manually."}
 
     url = f"https://codeload.github.com/{GITHUB_REPO}/zip/refs/heads/{GITHUB_BRANCH}"
     try:
@@ -238,6 +241,21 @@ def apply_update():
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+@app.errorhandler(Exception)
+def _json_errors(e):
+    """Every API failure comes back as JSON with a readable reason, so the UI
+    can show WHY something failed instead of a generic 'Request failed'."""
+    from werkzeug.exceptions import HTTPException
+    if request.path.startswith("/api/"):
+        if isinstance(e, HTTPException):
+            return jsonify({"error": f"{e.code} {e.name}: {e.description}"}), e.code
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {type(e).__name__}: {e}"}), 500
+    if isinstance(e, HTTPException):
+        return e
+    raise e
+
 @app.route("/api/update/check")
 def update_check():
     return jsonify(check_for_update())
@@ -249,8 +267,7 @@ def update_apply():
 
 @app.route("/api/update/restart", methods=["POST"])
 def update_restart():
-    """Restarts this process in place (same interpreter, same argv) —
-    used right after an update is applied, or any time the person just
+    """Restarts this process in place (same interpreter, same argv) - used right after an update is applied, or any time the person just
     wants a clean restart. Responds first, then swaps the process out
     from under itself a moment later so the response actually reaches
     the browser before the server disappears."""
@@ -268,18 +285,20 @@ DEFAULT_DATA = {
     "events": [],
     "timers": [],
     "logins": [],
-    "plants": [],          # owned Botanarium plants — see PLANT_DEFS / compute_plant_state()
-    "inventory": [],       # {item_type, qty} stacks — seeds, future sellables, etc.
+    "plants": [],          # owned Botanarium plants - see PLANT_DEFS / compute_plant_state()
+    "inventory": [],       # {item_type, qty} stacks - seeds, future sellables, etc.
     "passive_claims": [],  # {id, plant_id, plant_type, date, created, amount, elapsed_hours, weekly_multiplier}
-    "nerds_spent": [],     # {id, date, created, item_type, qty, unit_cost, total_cost} — every Nerds purchase
-    "nerds_earned": [],    # {id, date, created, source, record_id?, level?, mastery_key?, label, amount, detail} — every Nerds gain, logged in real time (see reconcile_nerds_ledger / _log_self_study_gain)
-    "selected_plant_id": None  # which owned plant currently GROWS from study sessions — see /plants/<id>/select
+    "nerds_spent": [],     # {id, date, created, item_type, qty, unit_cost, total_cost} - every Nerds purchase
+    "nerds_earned": [],    # {id, date, created, source, record_id?, level?, mastery_key?, label, amount, detail} - every Nerds gain, logged in real time (see reconcile_nerds_ledger / _log_self_study_gain)
+    "selected_plant_id": None,  # which owned plant currently GROWS from study sessions - see /plants/<id>/select
+    "activity_log": [],    # {id, date, kind: 'music'|'video'|'page', page?, minutes} - time-spent tracking, bucketed per day+kind(+page) rather than one row per heartbeat; see /api/<name>/activity/ping
+    "industrial": {},      # Industrial Production + Stock Market metagame state (grid cards, research log, warehouse, market trades) - owned by industrial_core.py/industrial_routes.py
 }
 
 # ═══════════════════════════════════════════════════════════════════
 # ── CONTROL PANEL ──
 # Every gameplay/economy-tunable constant lives here. Change a value,
-# restart the server, done — no need to hunt through logic anywhere
+# restart the server, done - no need to hunt through logic anywhere
 # else in the file. Anything added in the future that could reasonably
 # be called a "setting" (a rate, a threshold, a cost, a multiplier)
 # belongs here, not inline in the function that uses it.
@@ -289,6 +308,12 @@ DEFAULT_DATA = {
 # Themes, Titles, Smart Recommendations thresholds, Misc/System.
 # ═══════════════════════════════════════════════════════════════════
 
+# ── Economy balance knobs ──
+# ECON_COST_MULT scales everything Nerds are SPENT on; STUDY_NERDS_MULT scales
+# Nerds EARNED from studying, level-ups and mastery.
+ECON_COST_MULT = 12.0
+STUDY_NERDS_MULT = 6.0
+
 # ── XP & Leveling curve ──
 # xp_for_level(L) = int(XP_CURVE_BASE * (L ** XP_CURVE_EXPONENT)) + XP_CURVE_FLAT
 # Uncapped, always costs a bit more per level. Current tuning: Lv5 ~7h,
@@ -297,7 +322,7 @@ XP_CURVE_BASE = 35
 XP_CURVE_EXPONENT = 1.22
 XP_CURVE_FLAT = 40
 
-# ── Self-Study XP (the primary/best-paying source — keep it that way) ──
+# ── Focus XP (the primary/best-paying source - keep it that way) ──
 # XP = minutes * (1 + difficulty / SELF_STUDY_DIFFICULTY_DIVISOR) * status_mult
 # At difficulty 5/10 Done, this is 1.25 XP/min (75 XP/hour); at 10/10 Done,
 # 1.5 XP/min (90 XP/hour). Raise SELF_STUDY_DIFFICULTY_DIVISOR to flatten
@@ -314,19 +339,19 @@ EXAM_XP_BASE = 20            # awarded for any completed ("done") exam
 EXAM_XP_SCORE_BONUS_MAX = 30 # additional, scaled by score/20 (a 20/20 exam gets the full bonus)
 
 # Attendance statuses. "teacher_absent" (the lesson was cancelled/the
-# teacher didn't show) is deliberately NOT "absent" — it earns no XP
+# teacher didn't show) is deliberately NOT "absent" - it earns no XP
 # (no lesson happened) but also doesn't count against the student in
 # attendance-rate stats/badges/recommendations, since it wasn't their
 # doing. See REC_ATTENDANCE_RATE_WARNING_PCT usage in get_recommendations
-# and the "attendance" badge in compute_badge_progress — both only look
+# and the "attendance" badge in compute_badge_progress - both only look
 # at the student's own present/partial/absent, teacher_absent is excluded
 # from those denominators entirely.
 ATTENDANCE_STATUSES = ["present", "partial", "absent", "teacher_absent"]
 
 # Lesson/attendance type codes stay "C"/"TD"/"TP" in stored data (so
 # existing records never need migrating), but display everywhere as
-# Lesson / Practical Work / Lab.
-LESSON_TYPE_LABELS = {"C": "Lesson", "TD": "Practical Work", "TP": "Lab"}
+# Lesson / Guided Work / Lab.
+LESSON_TYPE_LABELS = {"C": "Lesson", "TD": "Guided Work", "TP": "Lab"}
 
 # ── Login / Streak XP ──
 LOGIN_XP_DAILY = 10
@@ -340,30 +365,38 @@ TIERS = ["Bachelor's I", "Bachelor's II", "Bachelor's III", "Master's I", "Maste
 TIER_XP = [30, 80, 180, 350, 650, 1200, 2200, 4000, 7000, 12000]           # XP awarded per badge tier reached
 MASTERY_TIER_XP = [20, 50, 120, 250, 500, 900, 1600, 3000, 5200, 9000]     # XP awarded per mastery tier reached
 # Done-minutes needed (per subject/skill/category) to REACH each mastery
-# tier — shared by compute_mastery() and the Finance Ledger's mastery-
+# tier - shared by compute_mastery() and the Finance Ledger's mastery-
 # crossing simulation (compute_mastery_ledger_entries) so both agree on
 # exactly which day a tier was reached.
 MASTERY_MINUTE_THRESHOLDS = [60, 300, 900, 2400, 6000, 12000, 24000, 45000, 80000, 140000]
 
-# ── Badge definitions — copy-paste a block below to add a new badge.
+# ── Badge definitions - copy-paste a block below to add a new badge.
 # thresholds_* must have exactly 10 ascending values (one per TIERS
 # entry above). Pick ONE of thresholds_min / thresholds_count /
 # thresholds_days depending on what the badge tracks. ──
 BADGE_DEFS = [
-    {"id": "hours", "label": "Study Hours", "icon": "\U0001F4DA", "thresholds_min": [60, 300, 900, 2400, 6000, 15000, 36000, 72000, 132000, 240000]},
-    {"id": "streak", "label": "Study Streak", "icon": "\U0001F525", "thresholds_days": [2, 3, 5, 7, 14, 30, 60, 100, 180, 365]},
-    {"id": "early_bird", "label": "Early Bird", "icon": "\U0001F305", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "night_owl", "label": "Night Owl", "icon": "\U0001F989", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "attendance", "label": "Perfect Attendance", "icon": "\u2705", "thresholds_count": [5, 15, 30, 60, 120, 250, 500, 1000, 1800, 3200]},
-    {"id": "exam_ace", "label": "Exam Ace", "icon": "\U0001F3C6", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 60, 100, 160]},
-    {"id": "comeback", "label": "Comeback Kid", "icon": "\U0001F4AA", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 50, 75, 110]},
-    {"id": "well_rounded", "label": "Well-Rounded", "icon": "\u2696\uFE0F", "thresholds_count": [1, 2, 4, 8, 15, 25, 40, 60, 90, 130]},
-    {"id": "variety", "label": "Subject Variety", "icon": "\U0001F3AF", "thresholds_count": [2, 4, 6, 9, 13, 18, 25, 35, 48, 65]},
-    {"id": "weekend", "label": "Weekend Warrior", "icon": "\U0001F3D6\uFE0F", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
-    {"id": "marathon", "label": "Marathoner", "icon": "\U0001F3C3", "thresholds_count": [1, 3, 6, 12, 20, 35, 60, 100, 150, 220]},
-    {"id": "login_streak", "label": "Loyal Login", "icon": "\U0001F4C5", "thresholds_days": [3, 7, 14, 30, 60, 100, 180, 365, 600, 900]},
+    {"id": "hours", "label": "Study Hours", "icon": "", "thresholds_min": [60, 300, 900, 2400, 6000, 15000, 36000, 72000, 132000, 240000]},
+    {"id": "streak", "label": "Study Streak", "icon": "", "thresholds_days": [2, 3, 5, 7, 14, 30, 60, 100, 180, 365]},
+    {"id": "early_bird", "label": "Early Bird", "icon": "", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "night_owl", "label": "Night Owl", "icon": "", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "attendance", "label": "Perfect Attendance", "icon": "", "thresholds_count": [5, 15, 30, 60, 120, 250, 500, 1000, 1800, 3200]},
+    {"id": "exam_ace", "label": "Exam Ace", "icon": "", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 60, 100, 160]},
+    {"id": "comeback", "label": "Comeback Kid", "icon": "", "thresholds_count": [1, 2, 4, 7, 12, 20, 35, 50, 75, 110]},
+    {"id": "well_rounded", "label": "Well-Rounded", "icon": "", "thresholds_count": [1, 2, 4, 8, 15, 25, 40, 60, 90, 130]},
+    {"id": "variety", "label": "Subject Variety", "icon": "", "thresholds_count": [2, 4, 6, 9, 13, 18, 25, 35, 48, 65]},
+    {"id": "weekend", "label": "Weekend Warrior", "icon": "", "thresholds_count": [1, 3, 7, 15, 30, 60, 120, 250, 450, 800]},
+    {"id": "marathon", "label": "Marathoner", "icon": "", "thresholds_count": [1, 3, 6, 12, 20, 35, 60, 100, 150, 220]},
+    {"id": "login_streak", "label": "Loyal Login", "icon": "", "thresholds_days": [3, 7, 14, 30, 60, 100, 180, 365, 600, 900]},
+    # ── Activity-time badges - see activity_log/compute_activity_totals.
+    # Deliberately smaller minute thresholds than "hours" (focus):
+    # music/video are a genuinely optional, lighter-touch activity, and
+    # app_time counts every minute the app is simply OPEN on any page
+    # (not actively studying), which naturally accumulates much faster.
+    {"id": "music_time", "label": "Melomaniac", "icon": "", "thresholds_min": [15, 60, 180, 420, 900, 1800, 3600, 7200, 14400, 28800]},
+    {"id": "video_time", "label": "Cinephile", "icon": "", "thresholds_min": [15, 60, 180, 420, 900, 1800, 3600, 7200, 14400, 28800]},
+    {"id": "app_time", "label": "Dedicated", "icon": "", "thresholds_min": [60, 300, 900, 2400, 6000, 15000, 36000, 72000, 132000, 240000]},
 ]
-# Badge *behavior* thresholds — the raw definitions of what counts
+# Badge *behavior* thresholds - the raw definitions of what counts
 # toward each badge above (as opposed to the tier thresholds, which
 # are how MUCH of it earns which tier).
 BADGE_EARLY_BIRD_HOUR_CUTOFF = 8     # sessions starting before this hour count as "early"
@@ -374,11 +407,11 @@ BADGE_WEEKEND_WEEKDAY_CUTOFF = 5     # Python weekday() >= this is Sat/Sun
 BADGE_COMEBACK_GAP_DAYS = 5          # gap between study days that counts as a "comeback"
 BADGE_EXAM_ACE_MIN_SCORE = 16        # out of 20
 
-# ── Weekly Quests — copy-paste a block below to add a new quest. Each
+# ── Weekly Quests - copy-paste a block below to add a new quest. Each
 # quest's `id` must match a key computed in compute_quest_progress(). ──
 QUEST_DEFS = [
     {"id": "days3", "label": "Study on 3+ different days this week", "xp": 40},
-    {"id": "hours5", "label": "Log 5+ hours of self-study this week", "xp": 60},
+    {"id": "hours5", "label": "Log 5+ hours of focus this week", "xp": 60},
     {"id": "variety2", "label": "Study 2+ different subjects/skills this week", "xp": 40},
     {"id": "attendance3", "label": "Log attendance for 3+ classes this week", "xp": 30},
 ]
@@ -387,32 +420,192 @@ QUEST_HOURS5_MIN_HOURS = 5
 QUEST_VARIETY2_MIN_ITEMS = 2
 QUEST_ATTENDANCE3_MIN_LOGGED = 3
 
-# ── Cosmetic Themes — copy-paste a block below to add a new theme.
-# `id` must match a `[data-theme="..."]` block in styles.css. Themes
-# normally unlock by `level`; a theme can instead (or additionally)
-# carry a `price` making it purchasable with Nerds in the Market —
-# set `level` to 0 for a purchase-only theme with no level gate at all. ──
+# Cosmetic themes - copy a block below to add a new one. `id` must
+# match a [data-theme="..."] block in styles.css. Unlocks by `level`,
+# by `price` (purchasable in the Market), or both; level 0 means
+# purchase-only. `background` is optional, skipped if missing on disk.
+# `effect` applies a small animation class via body.theme-effect-<id>,
+# see THEME_EFFECT_CLASSES below. Premium themes cost more, unlock
+# later, and get richer bespoke effects. VAULT_THEME_CATALOG below
+# holds the fully hidden top tier, granted only through a future Quest
+# Book, never returned from here.
 THEME_CATALOG = [
-    {"id": "sakura", "label": "Sakura", "level": 1},
-    {"id": "light", "label": "Light", "level": 1},
-    {"id": "dark", "label": "Dark", "level": 1},
-    {"id": "breeze", "label": "Breeze", "level": 5},
-    {"id": "midnight", "label": "Midnight", "level": 10},
-    {"id": "forest", "label": "Forest", "level": 15},
-    {"id": "sunset", "label": "Sunset", "level": 20},
-    {"id": "ocean", "label": "Ocean", "level": 25},
-    {"id": "rosegold", "label": "Rose Gold", "level": 30},
-    {"id": "autumn", "label": "Autumn", "level": 40},
-    {"id": "cyberpunk", "label": "Cyberpunk", "level": 50},
-    {"id": "nord", "label": "Nord", "level": 65},
-    {"id": "mono", "label": "Mono", "level": 80},
-    {"id": "candy", "label": "Candy", "level": 100},
-    {"id": "coffee", "label": "Coffee", "level": 125},
-    {"id": "aurora", "label": "Aurora", "level": 0, "price": 600},
-    {"id": "velvet", "label": "Velvet", "level": 0, "price": 900},
+    {"id": "sakura", "label": "Sakura", "level": 1, "background": "sakurabackground", "effect": "particle-drift"},
+    {"id": "light", "label": "Light", "level": 1, "background": "lightbackground", "effect": "sharp-snap"},
+    {"id": "dark", "label": "Dark", "level": 1, "background": "darkbackground", "effect": "glow-breathe"},
+    {"id": "breeze", "label": "Breeze", "level": 5, "background": "breezebackground", "effect": "sway-idle"},
+    {"id": "midnight", "label": "Midnight", "level": 10, "background": "midnightbackground", "effect": "glow-breathe"},
+    {"id": "forest", "label": "Forest", "level": 15, "background": "forestbackground", "effect": "sway-idle"},
+    {"id": "sunset", "label": "Sunset", "level": 20, "background": "sunsetbackground", "effect": "warm-pulse"},
+    {"id": "ocean", "label": "Ocean", "level": 25, "background": "oceanbackground", "effect": "ripple-fill"},
+    {"id": "rosegold", "label": "Rose Gold", "level": 30, "background": "rosegoldbackground", "effect": "glow-breathe"},
+    {"id": "autumn", "label": "Autumn", "level": 40, "background": "autumnbackground", "effect": "particle-drift"},
+    {"id": "cyberpunk", "label": "Cyberpunk", "level": 50, "background": "cyberpunkbackground", "effect": "glitch-pulse"},
+    {"id": "nord", "label": "Nord", "level": 65, "background": "nordbackground", "effect": "compact-density"},
+    {"id": "mono", "label": "Mono", "level": 80, "background": "monobackground", "effect": "sharp-snap"},
+    {"id": "candy", "label": "Candy", "level": 100, "background": "candybackground", "effect": "warm-pulse"},
+    {"id": "coffee", "label": "Coffee", "level": 125, "background": "coffeebackground", "effect": "warm-pulse"},
+    {"id": "aurora", "label": "Aurora", "level": 0, "price": 4000, "background": "aurorabackground", "effect": "ripple-fill"},
+    {"id": "velvet", "label": "Velvet", "level": 0, "price": 5200, "background": "velvetbackground", "effect": "glow-breathe"},
+
+    # ── New standard shop themes ──
+    {"id": "obsidian", "label": "Obsidian Glass", "level": 0, "price": 3000, "background": "obsidianbackground", "effect": "sharp-snap"},
+    {"id": "citrus", "label": "Citrus Grove", "level": 0, "price": 3000, "background": "citrusbackground", "effect": "particle-drift"},
+    {"id": "copperline", "label": "Copperline", "level": 0, "price": 3500, "background": "copperlinebackground", "effect": "glow-breathe"},
+    {"id": "orchard", "label": "Orchard", "level": 0, "price": 3800, "background": "orchardbackground", "effect": "sway-idle"},
+
+    # ── Premium tier (4-5 truly special) - each carries its OWN unique
+    # effect id (not one of the shared THEME_EFFECT_CLASSES) since these
+    # are meant to feel like nothing else in the app; see the matching
+    # bespoke .theme-effect-<id> block in styles.css for each.
+    {"id": "wisteria_dream", "label": "Wisteria Dream", "level": 150, "background": "wisteriadreambackground", "effect": "wisteria_dream", "premium": True},
+    {"id": "starfall", "label": "Starfall", "level": 180, "background": "starfallbackground", "effect": "starfall", "premium": True},
+    {"id": "gilded_bloom", "label": "Gilded Bloom", "level": 0, "price": 18000, "background": "gildedbloombackground", "effect": "gilded_bloom", "premium": True},
+    {"id": "void_bloom", "label": "Void Bloom", "level": 0, "price": 22000, "background": "voidbloombackground", "effect": "void_bloom", "premium": True},
+    {"id": "phoenix_ember", "label": "Phoenix Ember", "level": 0, "price": 26000, "background": "phoenixemberbackground", "effect": "phoenix_ember", "premium": True},
 ]
 
-# ── Title Tiers — copy-paste a block below to add a new title. Must
+for _t in THEME_CATALOG:
+    if _t.get("price"):
+        _t["price"] = int(_t["price"] * ECON_COST_MULT)
+
+# Vault themes, the top hidden tier. Never included in unlocked_themes
+# and can't be reached through leveling or the Market, only through a
+# future Quest Book granting one directly. The id/label/background/
+# effect listing is still returned as vault_theme_catalog in
+# gamification_status() so it can be previewed (see startThemePreview
+# in app.js), which never grants ownership, same as previewing any
+# other locked theme. Copy a block to add a new one, no other code
+# needs to change. Every vault theme gets its own bespoke effect (see
+# styles.css), these are the rarest themes in the game.
+VAULT_THEME_CATALOG = [
+    {"id": "vault_eclipse_court", "label": "Eclipse Court", "background": "eclipsecourtbackground", "effect": "vault_eclipse_court"},
+    {"id": "vault_marrow_garden", "label": "Marrow Garden", "background": "marrowgardenbackground", "effect": "vault_marrow_garden"},
+    {"id": "vault_glass_monsoon", "label": "Monsoon", "background": "glassmonsoonbackground", "effect": "vault_glass_monsoon"},
+    {"id": "vault_gold_leaf_requiem", "label": "Gold Leaf Requiem", "background": "goldleafrequiembackground", "effect": "vault_gold_leaf_requiem"},
+    {"id": "vault_cathedral_static", "label": "Cathedral Static", "background": "cathedralstaticbackground", "effect": "vault_cathedral_static"},
+    {"id": "vault_paper_lantern_sea", "label": "Paper Lantern Sea", "background": "paperlanternseabackground", "effect": "vault_paper_lantern_sea"},
+    {"id": "vault_iron_orchid", "label": "Iron Orchid", "background": "ironorchidbackground", "effect": "vault_iron_orchid"},
+    {"id": "vault_permafrost_atrium", "label": "Permafrost Atrium", "background": "permafrostatriumbackground", "effect": "vault_permafrost_atrium"},
+    {"id": "vault_bioluminal_reef", "label": "Bioluminal Reef", "background": "bioluminalreefbackground", "effect": "vault_bioluminal_reef"},
+    {"id": "vault_last_ember_kingdom", "label": "Last Ember Kingdom", "background": "lastemberkingdombackground", "effect": "vault_last_ember_kingdom"},
+]
+
+# Reusable "practical" per-theme behaviors - a small, closed set applied
+# to existing UI elements client-side (see THEME_EFFECT_CLASSES / the
+# theme-effect-* CSS rules) rather than a bespoke animation per theme.
+# glitch-pulse: level-up/XP bar gets a brief digital-glitch flicker instead of a plain pulse
+# ripple-fill: progress bars fill with a soft rippling wave instead of a flat sweep
+# sway-idle: cards (esp. Botanarium plant cards) gently sway/idle
+# glow-breathe: accent glows slowly breathe in/out instead of staying static
+# warm-pulse: buttons/highlights pulse with a warm, slow heartbeat
+# sharp-snap: transitions shorten and sharpen app-wide; minimal, snappy, no glow
+# particle-drift: soft drifting particles (petals/leaves/embers) over the background layer
+# compact-density: data-heavy pages (Stats/Finance) tighten spacing/padding
+THEME_EFFECT_CLASSES = [
+    "glitch-pulse", "ripple-fill", "sway-idle", "glow-breathe",
+    "warm-pulse", "sharp-snap", "particle-drift", "compact-density",
+]
+
+# Theme perks, the mechanical (not visual) side of premium/vault
+# themes. Applied like a Botanarium plant's session bonus (see
+# compute_plant_session_multipliers), but each theme has its own
+# trigger rather than a flat bonus. Only the currently active theme's
+# perk applies (cfg["active_theme"]); switching away stops it
+# immediately. Stacks with plant/collection bonuses, never with
+# another theme.
+#
+# type values:
+#   flat - always-on XP%/Nerds%, no condition
+#   dawn - sessions STARTING before hour_cutoff
+#   dusk - sessions STARTING at/after hour_cutoff
+#   weekend - sessions logged on Sat/Sun
+#   difficulty - scales with THIS session's own difficulty/10, per point
+#   long_session - sessions at/above min_minutes
+#   streak - scales with current study-day streak, per day, capped at max_days
+THEME_PERKS = {
+    "wisteria_dream":  {"name": "Dawnbound", "type": "dawn", "hour_cutoff": 8, "xp_pct": 8.0, "nerds_pct": 0.0,
+                         "desc": "Dawnbound: +8% XP on sessions started before 08:00, while active."},
+    "starfall":        {"name": "Starlit", "type": "dusk", "hour_cutoff": 22, "xp_pct": 0.0, "nerds_pct": 8.0,
+                         "desc": "Starlit: +8% Nerds on sessions started at/after 22:00, while active."},
+    "gilded_bloom":    {"name": "Gilded Devotion", "type": "streak", "xp_pct_per_day": 0.3, "nerds_pct_per_day": 0.3, "max_days": 20,
+                         "desc": "Blooms with dedication: +0.3% XP and +0.3% Nerds per current study-streak day (caps at 20 days, +6%/+6% max), while active."},
+    "void_bloom":      {"name": "Hunger of the Void", "type": "difficulty", "xp_pct_per_point": 0.4, "nerds_pct_per_point": 0.0,
+                         "desc": "Feeds on hard subjects: +0.4% XP per point of that session's difficulty (up to +4% at difficulty 10/10), while active."},
+    "phoenix_ember":   {"name": "Rekindled", "type": "long_session", "min_minutes": 90, "xp_pct": 0.0, "nerds_pct": 10.0,
+                         "desc": "Rekindles on long sessions: +10% Nerds on sessions of 90+ minutes, while active."},
+
+    "vault_eclipse_court":        {"name": "Court in Session", "type": "weekend", "xp_pct": 10.0, "nerds_pct": 10.0,
+                                    "desc": "Court convenes on weekends: +10% XP and +10% Nerds on sessions logged Sat/Sun, while active."},
+    "vault_marrow_garden":        {"name": "Deep Roots", "type": "difficulty", "xp_pct_per_point": 0.0, "nerds_pct_per_point": 0.5,
+                                    "desc": "Grows richest from hard soil: +0.5% Nerds per point of session difficulty (up to +5% at 10/10), while active."},
+    "vault_glass_monsoon":        {"name": "Stormfront", "type": "dusk", "hour_cutoff": 20, "xp_pct": 8.0, "nerds_pct": 8.0,
+                                    "desc": "Storms roll in after dusk: +8% XP and +8% Nerds on sessions started at/after 20:00, while active."},
+    "vault_gold_leaf_requiem":    {"name": "Gilded Chain", "type": "streak", "xp_pct_per_day": 0.4, "nerds_pct_per_day": 0.0, "max_days": 20,
+                                    "desc": "Each unbroken day gilds it further: +0.4% XP per current study-streak day (caps at 20 days, +8% max), while active."},
+    "vault_cathedral_static":     {"name": "First Light Toll", "type": "dawn", "hour_cutoff": 8, "xp_pct": 0.0, "nerds_pct": 10.0,
+                                    "desc": "Rings loudest at first light: +10% Nerds on sessions started before 08:00, while active."},
+    "vault_paper_lantern_sea":    {"name": "Night Drift", "type": "long_session", "min_minutes": 90, "xp_pct": 8.0, "nerds_pct": 8.0,
+                                    "desc": "Drifts furthest on long nights: +8% XP and +8% Nerds on sessions of 90+ minutes, while active."},
+    "vault_iron_orchid":          {"name": "Pressure Bloom", "type": "difficulty", "xp_pct_per_point": 0.5, "nerds_pct_per_point": 0.5,
+                                    "desc": "Blooms under pressure: +0.5% XP and +0.5% Nerds per point of session difficulty (up to +5%/+5% at 10/10), while active."},
+    "vault_permafrost_atrium":    {"name": "Permafrost Mind", "type": "flat", "xp_pct": 9.0, "nerds_pct": 0.0,
+                                    "desc": "Unconditional +9% XP on every session while active - the strongest flat XP-only perk in the game."},
+    "vault_bioluminal_reef":      {"name": "Deep Glow", "type": "flat", "xp_pct": 0.0, "nerds_pct": 9.0,
+                                    "desc": "Unconditional +9% Nerds on every session while active - the strongest flat Nerds-only perk in the game."},
+    "vault_last_ember_kingdom":   {"name": "Kingdom's Flame", "type": "streak", "xp_pct_per_day": 0.5, "nerds_pct_per_day": 0.5, "max_days": 20,
+                                    "desc": "The kingdom's embers grow with every unbroken day: +0.5% XP and +0.5% Nerds per current study-streak day (caps at 20 days, +10%/+10% max) - the top vault all-rounder, while active."},
+}
+
+def compute_theme_session_multipliers(cfg, record_like, streak_current=0):
+    """(xp_mult, nerds_mult) from the person's currently ACTIVE theme's
+    perk (see THEME_PERKS), evaluated against ONE session (`record_like`
+    needs minutes/difficulty/date/created, same shape used by
+    compute_plant_session_multipliers) - unique per-theme trigger
+    conditions, exactly like plant bonuses. `streak_current` (the
+    person's current study-day streak - see compute_streak) is passed in
+    by the caller rather than recomputed here, since several call sites
+    apply this across many records in a loop and streak is the same
+    value for all of them in a single pass."""
+    theme_id = (cfg or {}).get("active_theme")
+    perk = THEME_PERKS.get(theme_id)
+    if not perk:
+        return 1.0, 1.0
+    ptype = perk.get("type", "flat")
+    xp_pct = 0.0
+    nerds_pct = 0.0
+    if ptype == "flat":
+        xp_pct, nerds_pct = perk.get("xp_pct", 0), perk.get("nerds_pct", 0)
+    elif ptype == "dawn":
+        created = record_like.get("created", "")
+        hour = int(created[11:13]) if created and len(created) >= 13 else None
+        if hour is not None and hour < perk.get("hour_cutoff", 8):
+            xp_pct, nerds_pct = perk.get("xp_pct", 0), perk.get("nerds_pct", 0)
+    elif ptype == "dusk":
+        created = record_like.get("created", "")
+        hour = int(created[11:13]) if created and len(created) >= 13 else None
+        if hour is not None and hour >= perk.get("hour_cutoff", 20):
+            xp_pct, nerds_pct = perk.get("xp_pct", 0), perk.get("nerds_pct", 0)
+    elif ptype == "weekend":
+        try:
+            if datetime.strptime(record_like.get("date", ""), "%Y-%m-%d").weekday() >= 5:
+                xp_pct, nerds_pct = perk.get("xp_pct", 0), perk.get("nerds_pct", 0)
+        except Exception:
+            pass
+    elif ptype == "difficulty":
+        diff = record_like.get("difficulty", 5)
+        xp_pct = perk.get("xp_pct_per_point", 0) * diff
+        nerds_pct = perk.get("nerds_pct_per_point", 0) * diff
+    elif ptype == "long_session":
+        if record_like.get("minutes", 0) >= perk.get("min_minutes", 90):
+            xp_pct, nerds_pct = perk.get("xp_pct", 0), perk.get("nerds_pct", 0)
+    elif ptype == "streak":
+        days = min(max(0, streak_current), perk.get("max_days", 20))
+        xp_pct = perk.get("xp_pct_per_day", 0) * days
+        nerds_pct = perk.get("nerds_pct_per_day", 0) * days
+    return 1.0 + xp_pct / 100.0, 1.0 + nerds_pct / 100.0
+
+# ── Title Tiers - copy-paste a block below to add a new title. Must
 # stay sorted ascending by level; the highest entry <= current level
 # is used. ──
 TITLE_TIERS = [
@@ -440,64 +633,64 @@ REC_SPACED_REPETITION_MIN_INTERVAL_DAYS = 2
 REC_MAX_RECOMMENDATIONS_SHOWN = 15
 
 # ── Nerds Economy ──
-# Nerds is the spendable currency (garden/zoo/cosmetics — not yet built).
+# Nerds is the spendable currency (garden/zoo/cosmetics - not yet built).
 # Kept deliberately grounded relative to XP: studying is, and must stay,
 # the best Nerds-per-hour activity in the game. Everything below is
 # priced/tuned against the anchor "1 hour of Done, difficulty-5 study ≈
-# 36 Nerds" — future passive-income sources (plants/animals) should be
+# 36 Nerds" - future passive-income sources (plants/animals) should be
 # capped well under that per hour, not compete with it.
 #
-# Self-study Nerds mirror the XP formula's shape exactly (same
+# Focus Nerds mirror the XP formula's shape exactly (same
 # minutes/difficulty/status structure) so the two currencies always move
-# together — a session that earns more XP also earns more Nerds, never
+# together - a session that earns more XP also earns more Nerds, never
 # a mismatch.
-NERDS_PER_MINUTE_BASE = 0.6                 # at difficulty 5/10, Done: 0.6*1.25 = 0.75 Nerds/min = 45 Nerds/hour
-NERDS_DIFFICULTY_DIVISOR = 20.0             # same shape as SELF_STUDY_DIFFICULTY_DIVISOR — harder subjects pay a bit more
+NERDS_PER_MINUTE_BASE = 0.6 * STUDY_NERDS_MULT                 # at difficulty 5/10, Done: 0.6*1.25 = 0.75 Nerds/min = 45 Nerds/hour
+NERDS_DIFFICULTY_DIVISOR = 20.0             # same shape as SELF_STUDY_DIFFICULTY_DIVISOR - harder subjects pay a bit more
 NERDS_STATUS_MULT_DONE = 1.0
 NERDS_STATUS_MULT_PARTIAL = 0.5
 NERDS_STATUS_MULT_SKIPPED = 0.0
 
-# Level-up Nerds — a one-time bonus awarded for EACH level reached
+# Level-up Nerds - a one-time bonus awarded for EACH level reached
 # (levels 2..current), same progressively-more-expensive shape as the
 # XP curve. compute_levelup_nerds(level) is CUMULATIVE across every
-# level-up from 2 up to `level` — e.g. reaching Lv20 nets ~160 Nerds
+# level-up from 2 up to `level` - e.g. reaching Lv20 nets ~160 Nerds
 # for that specific level-up, but ~1,700 Nerds total when you sum every
 # level-up bonus along the way from Lv1. That's intentionally a
 # meaningful chunk, but still well under what studying itself pays to
 # reach that level (~150h of study to reach Lv20 already earns ~6,750
-# Nerds at the base study rate) — level-ups are a bonus layered on top
+# Nerds at the base study rate) - level-ups are a bonus layered on top
 # of studying, never a replacement for it.
-NERDS_LEVELUP_BASE = 6
+NERDS_LEVELUP_BASE = int(6 * STUDY_NERDS_MULT)
 NERDS_LEVELUP_EXPONENT = 1.08
-NERDS_LEVELUP_FLAT = 8
+NERDS_LEVELUP_FLAT = int(8 * STUDY_NERDS_MULT)
 
-# Mastery tier Nerds — awarded once per mastery tier reached, per
+# Mastery tier Nerds - awarded once per mastery tier reached, per
 # subject/skill (mirrors MASTERY_TIER_XP's shape/scale, just converted
 # to the Nerds side of the economy at roughly the same XP:Nerds ratio
 # as studying itself, ~45:36 ≈ 0.8).
-MASTERY_TIER_NERDS = [15, 40, 95, 200, 400, 720, 1280, 2400, 4160, 7200]
+MASTERY_TIER_NERDS = [int(x * STUDY_NERDS_MULT) for x in [15, 40, 95, 200, 400, 720, 1280, 2400, 4160, 7200]]
 
 # ── Botanarium (plants) ──
 # A plant is acquired from a seed (bought in the Market, or found via a
 # plant's own "Seedy"-style trait). It grows from Level 1 to
-# PLANT_MAX_LEVEL purely from hours of studying/working — no separate
-# "watering" action — optionally sped up by Fertilizer (bought with
+# PLANT_MAX_LEVEL purely from hours of studying/working - no separate
+# "watering" action - optionally sped up by Fertilizer (bought with
 # Nerds, stacks). Levels are deliberately reachable in a medium-term
 # timeframe (weeks, not months); Prestige tiers ABOVE max level are the
 # actual long-term sink, growing steeper forever like the XP curve.
 #
-# Sprite stage N (watermelonN.png) maps directly to Level N+1 — e.g.
+# Sprite stage N (watermelonN.png) maps directly to Level N+1 - e.g.
 # watermelon0.png (a freshly-planted seed) IS Level 1; watermelon4.png
 # (full maturity) IS Level 5. sprites[level-1] always gives the right file.
-PLANT_MAX_LEVEL = 5   # legacy ceiling — kept only as the array size for PLANT_LEVEL_COLORS.
+PLANT_MAX_LEVEL = 5   # legacy ceiling - kept only as the array size for PLANT_LEVEL_COLORS.
                        # Actual per-plant max level is plant_max_level(plant_def)
                        # (= len(level_bonus_defs)). Watermelon has 5 levels; every
-                       # plant added since has 4 — both work through the same code.
+                       # plant added since has 4 - both work through the same code.
 
 def plant_max_level(plant_def):
     return len(plant_def["level_bonus_defs"])
 
-# Visual/identity color per growth level (1..PLANT_MAX_LEVEL) — used on
+# Visual/identity color per growth level (1..PLANT_MAX_LEVEL) - used on
 # every plant card, the level chip, and the Book of Wonders so the same
 # color always means the same level at a glance, across every plant.
 PLANT_LEVEL_COLORS = ["#8bc34a", "#5a9e3d", "#2e7d32", "#f9a825", "#e64a19"]
@@ -507,17 +700,17 @@ PLANT_LEVEL_COLORS = ["#8bc34a", "#5a9e3d", "#2e7d32", "#f9a825", "#e64a19"]
 # for a text-only Fruit item (separate from passive Nerds yield) every
 # HARVEST_GROWTH_HOURS_INTERVAL growth-hours it accrues past reaching
 # max level. Harvesting locks that plant's growth-hour accrual (toward
-# its NEXT harvest only — passive Nerds yield keeps working normally)
+# its NEXT harvest only - passive Nerds yield keeps working normally)
 # for HARVEST_LOCKOUT_HOURS, during which its sprite swaps to
 # "<sprites_dir>/<id>h.png" (the depleted/fruit-less look) instead of
 # its normal max-level sprite. A harvest is REFUSED (not queued, not
 # overflowed) if there's no inventory slot free for a brand new fruit
-# type — see the inventory-slot economy below.
+# type - see the inventory-slot economy below.
 HARVEST_GROWTH_HOURS_INTERVAL = 5.0
 HARVEST_LOCKOUT_HOURS = 1.0
 
 # Prestige tiers (past PLANT_MAX_LEVEL) reuse the SAME 10-tier color
-# ladder as badges/mastery — one consistent "achievement color" language
+# ladder as badges/mastery - one consistent "achievement color" language
 # across the whole app, rather than inventing a second palette.
 PLANT_PRESTIGE_COLORS = ["#8a8a8a", "#a3672f", "#b9c2cc", "#e0b23a", "#4fd6c4",
                           "#2ecc71", "#5fc9f8", "#c9a4ff", "#ff6ec7", "#ffd700"]
@@ -526,7 +719,7 @@ PLANT_PRESTIGE_NAMES = ["Prestige I", "Prestige II", "Prestige III", "Prestige I
 # Cumulative growth-hours needed, ABOVE the hours required for max level,
 # to reach prestige tier n: int(PLANT_PRESTIGE_HOURS_BASE * n ** PLANT_PRESTIGE_HOURS_EXPONENT).
 # Tier 1 lands at a real but reachable "next big goal"; each tier after
-# that costs meaningfully more, uncapped — the actual long-term sink.
+# that costs meaningfully more, uncapped - the actual long-term sink.
 PLANT_PRESTIGE_HOURS_BASE = 40
 PLANT_PRESTIGE_HOURS_EXPONENT = 1.5
 
@@ -539,7 +732,7 @@ PRESTIGE_BUFF_POINT_INCREMENTS = {
     "seedy": 0.5,           # +0.5% seed-drop chance per point
     "fast_grower": 1.0,     # +1% passive yield rate per point
     "hydration": 1.0,       # +1% XP&Nerds (summer) per point
-    "frosty": 1.0,          # +1% XP&Nerds (winter) per point — real cold-storage/frost-sweetened crops only
+    "frosty": 1.0,          # +1% XP&Nerds (winter) per point - real cold-storage/frost-sweetened crops only
     "dawn_grower": 1.0,     # +1% XP&Nerds (sessions started before DAWN_GROWER_HOUR_CUTOFF) per point
     "dusk_grower": 1.0,     # +1% XP&Nerds (sessions started at/after DUSK_GROWER_HOUR_CUTOFF) per point
     "spicy": 0.15,          # +0.15% XP&Nerds PER DIFFICULTY POINT (so effectively up to +1.5% at difficulty 10) per prestige point
@@ -552,24 +745,24 @@ PRESTIGE_BUFF_POINT_INCREMENTS = {
     "richseed": 1.0,        # +1% seed sell-price bonus for this plant's seed per point
 }
 
-# Fertilizer — bought with Nerds, a TEMPORARY buff (not a permanent
+# Fertilizer - bought with Nerds, a TEMPORARY buff (not a permanent
 # stack). One application boosts THIS plant's growth-hour accrual rate
 # for FERTILIZER_DURATION_HOURS from the moment it's bought; after that
-# window it reverts to normal speed and can be bought again any time —
+# window it reverts to normal speed and can be bought again any time
 # there's no cap and no escalating cost, since it's not accumulating
 # anything permanent. Applying it again while still active just
 # refreshes the window back to a full FERTILIZER_DURATION_HOURS from
 # now (not additive/stacking on top of itself). Affects LEVELING UP
-# only — not the passive yield rate (that's what Fast Grower is for).
+# only - not the passive yield rate (that's what Fast Grower is for).
 FERTILIZER_GROWTH_BONUS_PCT = 20         # +20% growth-hour rate while active
 FERTILIZER_DURATION_HOURS = 24           # how long one application lasts
-FERTILIZER_COST = 45                     # flat Nerds cost, every time
+FERTILIZER_COST = int(45 * ECON_COST_MULT)                     # flat Nerds cost, every time
 
-# Seeds — the Market's entry item. First seed of a given plant type
+# Seeds - the Market's entry item. First seed of a given plant type
 # plants it (if not already owned); any seed after that can only be
 # spent on that plant's seed-upgrade track (see FAST_GROWER_* below) or
 # sold back. Priced to be a real, but reachable, first goal.
-SEED_SHOP_BUY_PRICE = 750
+SEED_SHOP_BUY_PRICE = int(750 * ECON_COST_MULT)
 SEED_SHOP_SELL_PRICE = 120
 # Fallback fruit sell price used when a plant def somehow omits its own
 # fruit_sell_price (every PLANT_DEFS entry currently sets one explicitly,
@@ -577,17 +770,18 @@ SEED_SHOP_SELL_PRICE = 120
 # as a safety-net default, so it must exist).
 FRUIT_SELL_PRICE = 80
 
-# Fast Grower (the Level 4 bonus) is upgraded with SEEDS, not Nerds —
+# Fast Grower (the Level 4 bonus) is upgraded with SEEDS, not Nerds
 # each tier doubles the seed cost of the last (1,2,4,8,16 = 31 seeds to
-# fully max). It boosts this plant's PASSIVE YIELD RATE (see below) —
+# fully max). It boosts this plant's PASSIVE YIELD RATE (see below)
 # "faster yield" means "produces its passive Nerds faster," stacking
 # multiplicatively with Voluminous.
+SEED_DROP_COOLDOWN_HOURS = 1.0   # at most one bonus-seed drop per plant per hour
 FAST_GROWER_BASE_PCT = 1.0
 FAST_GROWER_SEED_UPGRADE_PCT = 1.0      # + per seed-upgrade tier
 FAST_GROWER_MAX_SEED_TIERS = 5
 FAST_GROWER_SEED_TIER_BASE_COST = 1
 
-# "Summer" for summer-conditional bonuses (Refreshing, Hydration) —
+# "Summer" for summer-conditional bonuses (Refreshing, Hydration)
 # calendar months, Northern-hemisphere default. Adjust freely per your
 # own hemisphere/preference.
 SUMMER_MONTHS = [6, 7, 8]
@@ -602,7 +796,7 @@ DUSK_GROWER_HOUR_CUTOFF = 20             # sessions STARTING at/after this hour 
 # A "collection" is a themed group of plant IDs (e.g. every potato
 # variety). When EVERY plant in a collection is owned AND at/above the
 # collection's required_level, the collection grants a flat, YEAR-ROUND
-# (not season-gated) XP%/Nerds% bonus to every self-study session —
+# (not season-gated) XP%/Nerds% bonus to every focus session
 # stacking additively with any active seasonal plant bonuses. Multiple
 # completed collections stack.
 PLANT_COLLECTIONS = [
@@ -611,21 +805,21 @@ PLANT_COLLECTIONS = [
         "plant_ids": ['russetpotato', 'yukongoldpotato', 'peruvianpurplepotato', 'sweetpotato', 'cassava'],
         "required_level": 4,
         "domain_bonus_ids": ['voluminous', 'bountiful', 'hardy'], "domain_boost_pct": 25,
-        "desc": "All 5 potato-family plants at max level. Amplifies EVERY owned potato-family plant's own Voluminous, Bountiful, and Hardy bonus values by +25% — the whole cellar reinforces each plant's bulk yield and keeping quality.",
+        "desc": "All 5 potato-family plants at max level. Amplifies EVERY owned potato-family plant's own Voluminous, Bountiful, and Hardy bonus values by +25% - the whole cellar reinforces each plant's bulk yield and keeping quality.",
     },
     {
         "id": "root_collection", "label": "Root Cellar",
         "plant_ids": ['daikonradish', 'carrot', 'parsnip', 'radish', 'beet', 'turnip', 'rutabaga'],
         "required_level": 4,
         "domain_bonus_ids": ['frosty', 'hardy', 'warden'], "domain_boost_pct": 25,
-        "desc": "All 7 root vegetables at max level. Amplifies every owned root vegetable's own Frosty, Hardy, and Warden bonus values by +25% — a full winter cellar keeps every root colder and longer.",
+        "desc": "All 7 root vegetables at max level. Amplifies every owned root vegetable's own Frosty, Hardy, and Warden bonus values by +25% - a full winter cellar keeps every root colder and longer.",
     },
     {
         "id": "allium_collection", "label": "Allium Braid",
         "plant_ids": ['garlic', 'sweetonion', 'redonion', 'whiteonion', 'greenonion'],
         "required_level": 4,
         "domain_bonus_ids": ['hardy', 'thrifty', 'richseed'], "domain_boost_pct": 25,
-        "desc": "All 5 alliums at max level. Amplifies every owned allium's own Hardy, Thrifty, and Richseed bonus values by +25% — a full braid of alliums keeps and multiplies together.",
+        "desc": "All 5 alliums at max level. Amplifies every owned allium's own Hardy, Thrifty, and Richseed bonus values by +25% - a full braid of alliums keeps and multiplies together.",
     },
     {
         "id": "pepper_collection", "label": "Pepper Rack",
@@ -639,7 +833,7 @@ PLANT_COLLECTIONS = [
         "plant_ids": ['honeydewmelon', 'cantaloupemelon', 'watermelon'],
         "required_level": 4,
         "domain_bonus_ids": ['hydration', 'fruitful'], "domain_boost_pct": 25,
-        "desc": "Both melons AND Watermelon (at its own max, Level 5) all at max level. Amplifies each melon's own Hydration and Fruitful bonus values by +25% — Watermelon shares the same botanical family (Cucurbitaceae) and the same real-world identity as an exceptionally water-rich fruit.",
+        "desc": "Both melons AND Watermelon (at its own max, Level 5) all at max level. Amplifies each melon's own Hydration and Fruitful bonus values by +25% - Watermelon shares the same botanical family (Cucurbitaceae) and the same real-world identity as an exceptionally water-rich fruit.",
     },
     {
         "id": "squash_collection", "label": "Squash Harvest",
@@ -660,7 +854,7 @@ PLANT_COLLECTIONS = [
         "plant_ids": ['russetpotato', 'yukongoldpotato', 'peruvianpurplepotato', 'sweetpotato', 'cassava', 'daikonradish', 'carrot', 'parsnip', 'radish', 'beet', 'turnip', 'rutabaga', 'garlic', 'sweetonion', 'redonion', 'whiteonion', 'greenonion', 'habanero', 'greenbellpepper', 'redbellpepper', 'orangebellpepper', 'yellowbellpepper', 'hotpepper', 'honeydewmelon', 'cantaloupemelon', 'acornsquash', 'crooknecksquash', 'pumpkin', 'butternutsquash', 'sweetcorn', 'flintcorn', 'watermelon'],
         "required_level": 4,
         "flat_xp_pct": 10.0, "flat_nerds_pct": 10.0,
-        "desc": "Every single plant in the Botanarium at max level (Watermelon counts at its own max, Level 5). The one universal capstone reward, since it spans every domain at once: a flat +10% XP and +10% Nerds on every self-study session, stacking on top of every active family collection.",
+        "desc": "Every single plant in the Botanarium at max level (Watermelon counts at its own max, Level 5). The one universal capstone reward, since it spans every domain at once: a flat +10% XP and +10% Nerds on every focus session, stacking on top of every active family collection.",
     },
 ]
 
@@ -668,26 +862,26 @@ PLANT_COLLECTIONS = [
 # Starts at INVENTORY_SLOT_COUNT free slots. Additional slots are
 # purchased with Nerds, each one progressively more expensive than the
 # last (same "everything derived from an event log, nothing a mutable
-# counter" philosophy as the rest of the economy — purchased slot count
+# counter" philosophy as the rest of the economy - purchased slot count
 # is simply the count of "inventory_slot" entries in nerds_spent).
 # When inventory is full and something NEW would need its own new slot
 # (a fresh item type never held before), that action is REFUSED outright
-# — buying a seed, a passive Seedy-bonus seed-drop, or a Harvest all
+# - buying a seed, a passive Seedy-bonus seed-drop, or a Harvest all
 # check for space first and do not silently overflow or discard.
-INVENTORY_SLOT_BASE_COST = 500
+INVENTORY_SLOT_BASE_COST = int(500 * ECON_COST_MULT)
 INVENTORY_SLOT_COST_GROWTH = 1.35
 INVENTORY_SLOT_MAX_PURCHASES = 59
 
 # ── Passive Yield (every plant/tree, at every level, generates Nerds
-# passively over real time — this is the "Claim" button on each card) ──
-# Base rate is a shared curve indexed by level (not per-species — a
+# passively over real time - this is the "Claim" button on each card) ──
+# Base rate is a shared curve indexed by level (not per-species - a
 # plant's personality comes from its bonuses, not its raw yield rate).
 # Deliberately modest relative to active studying (~45 Nerds/hour): even
 # a maxed Level-5 plant claimed like clockwork every 24h caps out well
 # under what an active study habit earns in the same day.
 PLANT_YIELD_NERDS_PER_HOUR_BY_LEVEL = [0.5, 1.0, 1.75, 2.75, 4.0]
 
-# Nerds don't accumulate forever — claiming after a longer gap only ever
+# Nerds don't accumulate forever - claiming after a longer gap only ever
 # banks up to this many hours' worth; the rest is lost. This is the
 # "log back in or lose it" incentive.
 PASSIVE_YIELD_MAX_STORAGE_HOURS = 24
@@ -699,31 +893,24 @@ PASSIVE_YIELD_MAX_STORAGE_HOURS = 24
 # (WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE per extra hour), capped at
 # WEEKLY_YIELD_MAX_MULTIPLIER so passive income can never spiral. The
 # lower limit intentionally matches the existing "hours5" weekly quest
-# threshold — the same "solid study week" benchmark used everywhere else.
+# threshold - the same "solid study week" benchmark used everywhere else.
 WEEKLY_YIELD_LOWER_LIMIT_HOURS = 5
 WEEKLY_YIELD_MAX_MULTIPLIER = 2.0
 WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE = 0.1   # +10% multiplier per hour studied beyond the lower limit
 
-# Neglect / withering — TWO independent, stacking signals:
+# Neglect/withering, two independent signals:
 #
-# 1) GLOBAL neglect: no self-study logged AT ALL (any subject/skill) in
-#    PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD days. A soft, purely numeric
-#    penalty applied to every owned plant equally — meant to forgive a
-#    single quiet week (the weekly multiplier already does that) but
-#    respond to a genuine multi-week absence.
+# 1) GLOBAL: no focus logged at all in
+#    PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD days. Soft penalty, applies
+#    equally to every plant.
 #
-# 2) PLANT-SPECIFIC neglect: THIS plant hasn't accrued at least
+# 2) PLANT-SPECIFIC: this plant hasn't accrued
 #    PLANT_SPECIFIC_NEGLECT_MIN_HOURS of growth within its own rolling
-#    window. This is the harsh, visible one (wither sprite) — and its
-#    window SCALES WITH how many plants you own, since someone with 30
-#    plants can't realistically give each one weekly attention the way
-#    someone with 1 plant can. The formula is anchored so 1 plant gets
-#    the same ~2-week window as the global check (owning one plant IS
-#    basically the global signal), 3 plants get ~3 weeks each, and 30
-#    plants get ~4 months each — enough rotation room for a real
-#    collection without ever feeling like a daily chore. Reaching the
-#    minimum hours (not just "any" session) is what stops someone from
-#    gaming this with a token 10-minute check-in.
+#    window. Harsher, visible as a wither sprite. The window scales with
+#    how many plants you own (1 plant ~2 weeks, 3 plants ~3 weeks each,
+#    30 plants ~4 months each), so a big collection doesn't require
+#    weekly attention on every single plant. Reaching the minimum hours
+#    (not just any session) stops gaming it with a token check-in.
 PLANT_GLOBAL_NEGLECT_DAYS_THRESHOLD = 14
 PLANT_GLOBAL_NEGLECT_YIELD_FRACTION = 0.25
 
@@ -732,10 +919,10 @@ PLANT_SPECIFIC_NEGLECT_YIELD_FRACTION = 0.05   # stacks multiplicatively with th
 PLANT_SPECIFIC_NEGLECT_BASE_DAYS = 10
 PLANT_SPECIFIC_NEGLECT_PER_PLANT_DAYS = 3.6667  # -> ~14d @ 1 plant, ~21d @ 3, ~120d @ 30
 
-# The Botanarium Bank — a separate, PERMANENT progression track (not
+# The Botanarium Bank - a separate, PERMANENT progression track (not
 # weekly, never resets) that raises how many Nerds can be claimed in
 # any rolling 24h window, across ALL plants combined. Upgrading a tier
-# requires both LIFETIME study hours and a Nerds payment — so the
+# requires both LIFETIME study hours and a Nerds payment - so the
 # ceiling itself is only ever raised through real invested effort, but
 # once raised it stays raised, including through vacations, slow weeks,
 # or a burst of newly-acquired plants that would otherwise all sit
@@ -744,16 +931,19 @@ PLANT_SPECIFIC_NEGLECT_PER_PLANT_DAYS = 3.6667  # -> ~14d @ 1 plant, ~21d @ 3, ~
 # indefinitely, matching the rest of this app's uncapped philosophy.
 BOTANARIUM_BANK_LEVELS = [
     {"level": 1, "hours_required": 0,   "nerds_cost": 0,     "daily_claim_cap": 30},
-    {"level": 2, "hours_required": 10,  "nerds_cost": 1000,  "daily_claim_cap": 65},
-    {"level": 3, "hours_required": 30,  "nerds_cost": 2500,  "daily_claim_cap": 115},
-    {"level": 4, "hours_required": 60,  "nerds_cost": 5000,  "daily_claim_cap": 185},
-    {"level": 5, "hours_required": 100, "nerds_cost": 9000,  "daily_claim_cap": 285},
-    {"level": 6, "hours_required": 150, "nerds_cost": 15000, "daily_claim_cap": 425},
-    {"level": 7, "hours_required": 220, "nerds_cost": 24000, "daily_claim_cap": 620},
-    {"level": 8, "hours_required": 320, "nerds_cost": 38000, "daily_claim_cap": 900},
+    {"level": 2, "hours_required": 10,  "nerds_cost": 1000,  "daily_claim_cap": 170},
+    {"level": 3, "hours_required": 30,  "nerds_cost": 2500,  "daily_claim_cap": 370},
+    {"level": 4, "hours_required": 60,  "nerds_cost": 5000,  "daily_claim_cap": 650},
+    {"level": 5, "hours_required": 100, "nerds_cost": 9000,  "daily_claim_cap": 1050},
+    {"level": 6, "hours_required": 150, "nerds_cost": 15000, "daily_claim_cap": 1610},
+    {"level": 7, "hours_required": 220, "nerds_cost": 24000, "daily_claim_cap": 2390},
+    {"level": 8, "hours_required": 320, "nerds_cost": 38000, "daily_claim_cap": 3510},
 ]
 
-# ── Plant catalog — copy-paste a block below to add a new plant. Each
+for _b in BOTANARIUM_BANK_LEVELS:
+    _b["nerds_cost"] = int(_b["nerds_cost"] * ECON_COST_MULT)
+
+# ── Plant catalog - copy-paste a block below to add a new plant. Each
 # entry's `level_bonus_defs` must have exactly PLANT_MAX_LEVEL entries,
 # one per level, each with a stable `id` used by prestige allocations
 # and (for fast_grower) the seed-upgrade track above. `sprites` must
@@ -766,7 +956,7 @@ PLANT_DEFS = [
         "sprite_dir": "crops",
         "sprites": ["watermelon0.png", "watermelon1.png", "watermelon2.png", "watermelon3.png", "watermelon4.png"],
         # NOTE: withering no longer swaps to a separate sprite file (the
-        # old watermelonh.png approach) — that asset is reserved for a
+        # old watermelonh.png approach) - that asset is reserved for a
         # future harvest system instead. A withered plant now shows its
         # normal current-level sprite with a grayscale CSS filter applied
         # client-side (see .plant-card.plant-withered .pixel-sprite in
@@ -776,15 +966,15 @@ PLANT_DEFS = [
         "fruit_name": "Watermelon Fruit",
         "seed_buy_price": 1000, "seed_sell_price": 170, "fruit_sell_price": 140,
         # Cumulative growth-hours (since acquired, Fertilizer applied)
-        # needed to REACH each level. Level 1 is immediate — the plant
+        # needed to REACH each level. Level 1 is immediate - the plant
         # starts there the moment it's planted. ~100h total to fully
         # mature: a real, felt, medium-to-long-term goal (a few months
-        # of steady studying) — tedious enough to stay meaningful, not
+        # of steady studying) - tedious enough to stay meaningful, not
         # so long it feels pointless to pursue.
         "level_hours_thresholds": [0, 12, 30, 58, 100],
         "level_bonus_defs": [
             {"level": 1, "id": "refreshing", "label": "Refreshing", "base_value": 5.0, "unit": "%",
-             "desc": "Triggers only on self-study sessions of 90+ minutes, and only in June, July, or August. Adds +5% to that single session's earned XP (does not affect Nerds)."},
+             "desc": "Triggers only on focus sessions of 90+ minutes, and only in June, July, or August. Adds +5% to that single session's earned XP (does not affect Nerds)."},
             {"level": 2, "id": "voluminous", "label": "Voluminous", "base_value": 2.0, "unit": "%",
              "desc": "Applies every time you press Claim on this plant. Multiplies the final claimable Nerds amount by +2%."},
             {"level": 3, "id": "seedy", "label": "Seedy", "base_value": 4.0, "unit": "%",
@@ -792,7 +982,7 @@ PLANT_DEFS = [
             {"level": 4, "id": "fast_grower", "label": "Fast Grower", "base_value": 1.0, "unit": "%",
              "desc": "Adds +1% to this plant's base passive Nerds-per-hour rate. Stacks additively with each Fast Grower seed-upgrade tier bought on the plant's card (up to 5 tiers, +1% each)."},
             {"level": 5, "id": "hydration", "label": "Hydration", "base_value": 5.0, "unit": "%",
-             "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5% to BOTH the XP and the Nerds earned from that session."},
+             "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +5% to BOTH the XP and the Nerds earned from that session."},
         ],
     },
 
@@ -804,8 +994,8 @@ PLANT_DEFS = [
         "seed_buy_price": 600, "seed_sell_price": 95, "fruit_sell_price": 65,
         "level_hours_thresholds": [0, 7.8, 20.8, 65.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "voluminous", "label": "Starchy Bulk", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3% — Russets are bred specifically for high starch mass per tuber."},
-            {"level": 2, "id": "bountiful", "label": "Many Tubers Per Hill", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) — a single seed potato produces several tubers underground."},
+            {"level": 1, "id": "voluminous", "label": "Starchy Bulk", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3% - Russets are bred specifically for high starch mass per tuber."},
+            {"level": 2, "id": "bountiful", "label": "Many Tubers Per Hill", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) - a single seed potato produces several tubers underground."},
             {"level": 3, "id": "hardy", "label": "Root Cellar Classic", "base_value": 15.0, "unit": "%", "desc": "Softens (never removes) this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +15% relative to the base."},
             {"level": 4, "id": "fast_grower", "label": "Field Crop", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
         ],
@@ -819,8 +1009,8 @@ PLANT_DEFS = [
         "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
         "level_bonus_defs": [
             {"level": 1, "id": "voluminous", "label": "Buttery Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
-            {"level": 2, "id": "bountiful", "label": "Reliable Cropper", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) — bred specifically for consistent, heavy yields."},
-            {"level": 3, "id": "fast_grower", "label": "Early Maturing", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate — Yukon Gold is a genuinely early-maturing cultivar compared to most potatoes."},
+            {"level": 2, "id": "bountiful", "label": "Reliable Cropper", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) - bred specifically for consistent, heavy yields."},
+            {"level": 3, "id": "fast_grower", "label": "Early Maturing", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate - Yukon Gold is a genuinely early-maturing cultivar compared to most potatoes."},
             {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
         ],
     },
@@ -832,9 +1022,9 @@ PLANT_DEFS = [
         "seed_buy_price": 720, "seed_sell_price": 115, "fruit_sell_price": 80,
         "level_hours_thresholds": [0, 8.4, 22.4, 70.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "seedy", "label": "Andean Genetic Diversity", "base_value": 5.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 5% chance to also add 1 seed of this plant's type to your inventory — reflecting the thousands of native Andean potato landraces still maintained today."},
+            {"level": 1, "id": "seedy", "label": "Andean Genetic Diversity", "base_value": 5.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 5% chance to also add 1 seed of this plant's type to your inventory - reflecting the thousands of native Andean potato landraces still maintained today."},
             {"level": 2, "id": "voluminous", "label": "Anthocyanin-Dense", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
-            {"level": 3, "id": "hardy", "label": "High-Altitude Hardiness", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +20% relative to the base — bred for millennia against frost and poor Andean soils."},
+            {"level": 3, "id": "hardy", "label": "High-Altitude Hardiness", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +20% relative to the base - bred for millennia against frost and poor Andean soils."},
             {"level": 4, "id": "bountiful", "label": "Terraced Cultivar", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
         ],
     },
@@ -846,8 +1036,8 @@ PLANT_DEFS = [
         "seed_buy_price": 650, "seed_sell_price": 105, "fruit_sell_price": 72,
         "level_hours_thresholds": [0, 8.2, 21.8, 68.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Warm-Season Grower", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned — sweet potato is a genuine warm-season crop, planted after the last frost and grown through peak summer heat, unlike a true potato."},
-            {"level": 2, "id": "fruitful", "label": "Twin Tuber", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit — a single sweet potato plant commonly produces multiple tubers of harvestable size."},
+            {"level": 1, "id": "hydration", "label": "Warm-Season Grower", "base_value": 4.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned - sweet potato is a genuine warm-season crop, planted after the last frost and grown through peak summer heat, unlike a true potato."},
+            {"level": 2, "id": "fruitful", "label": "Twin Tuber", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit - a single sweet potato plant commonly produces multiple tubers of harvestable size."},
             {"level": 3, "id": "bountiful", "label": "Generous Vine", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
             {"level": 4, "id": "fast_grower", "label": "Vigorous Vine", "base_value": 2.0, "unit": "%", "desc": "Adds +2% to this plant's base passive Nerds-per-hour rate."},
         ],
@@ -860,8 +1050,8 @@ PLANT_DEFS = [
         "seed_buy_price": 560, "seed_sell_price": 90, "fruit_sell_price": 60,
         "level_hours_thresholds": [0, 10.2, 27.2, 85.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Drought Tolerant", "base_value": 30.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty by far the most of any plant in the Botanarium. Multiplies the neglect yield fraction by +30% relative to the base — cassava genuinely survives drought and poor soil better than nearly any other staple crop."},
-            {"level": 2, "id": "thrifty", "label": "Minimal-Input Crop", "base_value": 20.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 20% — cassava is famously grown with little agricultural input, thriving where other staples fail."},
+            {"level": 1, "id": "hardy", "label": "Drought Tolerant", "base_value": 30.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty by far the most of any plant in the Botanarium. Multiplies the neglect yield fraction by +30% relative to the base - cassava genuinely survives drought and poor soil better than nearly any other staple crop."},
+            {"level": 2, "id": "thrifty", "label": "Minimal-Input Crop", "base_value": 20.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 20% - cassava is famously grown with little agricultural input, thriving where other staples fail."},
             {"level": 3, "id": "bountiful", "label": "Staple Root Crop", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
             {"level": 4, "id": "voluminous", "label": "Calorie-Dense Tuber", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
         ],
@@ -874,10 +1064,10 @@ PLANT_DEFS = [
         "seed_buy_price": 480, "seed_sell_price": 80, "fruit_sell_price": 55,
         "level_hours_thresholds": [0, 5.4, 15.7, 45.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "fast_grower", "label": "Quick Sprouter", "base_value": 3.5, "unit": "%", "desc": "Adds +3.5% to this plant's base passive Nerds-per-hour rate — one of the fastest passive-ramp bonuses in the Botanarium."},
+            {"level": 1, "id": "fast_grower", "label": "Quick Sprouter", "base_value": 3.5, "unit": "%", "desc": "Adds +3.5% to this plant's base passive Nerds-per-hour rate - one of the fastest passive-ramp bonuses in the Botanarium."},
             {"level": 2, "id": "bountiful", "label": "Fast Turnaround", "base_value": 6.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 6% (rounded, floor 1h)."},
-            {"level": 3, "id": "frosty", "label": "Cold-Sweetened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +4% to both the XP and the Nerds earned."},
-            {"level": 4, "id": "dawn_grower", "label": "Morning Harvest", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned — daikon is traditionally pulled in the cool early morning before the soil warms."},
+            {"level": 3, "id": "frosty", "label": "Cold-Sweetened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 4, "id": "dawn_grower", "label": "Morning Harvest", "base_value": 2.0, "unit": "%", "desc": "Triggers on every focus session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned - daikon is traditionally pulled in the cool early morning before the soil warms."},
         ],
     },
     {
@@ -888,7 +1078,7 @@ PLANT_DEFS = [
         "seed_buy_price": 500, "seed_sell_price": 85, "fruit_sell_price": 58,
         "level_hours_thresholds": [0, 6.6, 19.2, 55.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "frosty", "label": "Sweetens After Frost", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +4.5% to both the XP and the Nerds earned — cold genuinely converts a carrot's stored starch into sugar."},
+            {"level": 1, "id": "frosty", "label": "Sweetens After Frost", "base_value": 4.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +4.5% to both the XP and the Nerds earned - cold genuinely converts a carrot's stored starch into sugar."},
             {"level": 2, "id": "fast_grower", "label": "Reliable Grower", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
             {"level": 3, "id": "bountiful", "label": "Root Cluster", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
             {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
@@ -902,8 +1092,8 @@ PLANT_DEFS = [
         "seed_buy_price": 560, "seed_sell_price": 95, "fruit_sell_price": 65,
         "level_hours_thresholds": [0, 7.4, 21.7, 62.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "frosty", "label": "True Winter Root", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +6.5% to both the XP and the Nerds earned — the strongest winter bonus of any plant, reflecting parsnip's tradition of being deliberately left in the ground until AFTER the first hard frost."},
-            {"level": 2, "id": "warden", "label": "Overwintered In Ground", "base_value": 4.0, "unit": "days", "desc": "Adds 4 flat extra days to this plant's specific-neglect window before yield starts dipping — parsnips are traditionally left untouched in the soil for weeks at a time through winter."},
+            {"level": 1, "id": "frosty", "label": "True Winter Root", "base_value": 6.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +6.5% to both the XP and the Nerds earned - the strongest winter bonus of any plant, reflecting parsnip's tradition of being deliberately left in the ground until AFTER the first hard frost."},
+            {"level": 2, "id": "warden", "label": "Overwintered In Ground", "base_value": 4.0, "unit": "days", "desc": "Adds 4 flat extra days to this plant's specific-neglect window before yield starts dipping - parsnips are traditionally left untouched in the soil for weeks at a time through winter."},
             {"level": 3, "id": "hardy", "label": "Cellar-Stored", "base_value": 12.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +12% relative to the base."},
             {"level": 4, "id": "voluminous", "label": "Nutty Sweetness", "base_value": 2.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2%."},
         ],
@@ -916,9 +1106,9 @@ PLANT_DEFS = [
         "seed_buy_price": 420, "seed_sell_price": 70, "fruit_sell_price": 48,
         "level_hours_thresholds": [0, 4.8, 14.0, 40.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "fast_grower", "label": "Fastest Grower", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — the single fastest passive-ramp bonus of any plant in the Botanarium, reflecting the radish's real-world speed to harvest (as little as 3-4 weeks)."},
-            {"level": 2, "id": "bountiful", "label": "Rapid Cycle", "base_value": 8.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 8% (rounded, floor 1h) — the strongest harvest-hour reduction of any plant."},
-            {"level": 3, "id": "seedy", "label": "Prolific Bolt-to-Seed", "base_value": 3.5, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 3.5% chance to also add 1 Radish Seed to your inventory — radishes bolt to seed notoriously fast if left unharvested."},
+            {"level": 1, "id": "fast_grower", "label": "Fastest Grower", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate - the single fastest passive-ramp bonus of any plant in the Botanarium, reflecting the radish's real-world speed to harvest (as little as 3-4 weeks)."},
+            {"level": 2, "id": "bountiful", "label": "Rapid Cycle", "base_value": 8.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 8% (rounded, floor 1h) - the strongest harvest-hour reduction of any plant."},
+            {"level": 3, "id": "seedy", "label": "Prolific Bolt-to-Seed", "base_value": 3.5, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 3.5% chance to also add 1 Radish Seed to your inventory - radishes bolt to seed notoriously fast if left unharvested."},
             {"level": 4, "id": "voluminous", "label": "Crisp Bite", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
         ],
     },
@@ -930,10 +1120,10 @@ PLANT_DEFS = [
         "seed_buy_price": 540, "seed_sell_price": 90, "fruit_sell_price": 62,
         "level_hours_thresholds": [0, 7.0, 20.3, 58.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "voluminous", "label": "Deep Pigment", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% — reflecting the dense betalain pigments beets are prized for."},
+            {"level": 1, "id": "voluminous", "label": "Deep Pigment", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% - reflecting the dense betalain pigments beets are prized for."},
             {"level": 2, "id": "hardy", "label": "Root Cellar Storage", "base_value": 12.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +12% relative to the base."},
-            {"level": 3, "id": "bountiful", "label": "Dual Harvest", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) — both root and greens are traditionally harvested from a single plant."},
-            {"level": 4, "id": "frosty", "label": "Cold-Tolerant Root", "base_value": 3.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +3% to both the XP and the Nerds earned."},
+            {"level": 3, "id": "bountiful", "label": "Dual Harvest", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h) - both root and greens are traditionally harvested from a single plant."},
+            {"level": 4, "id": "frosty", "label": "Cold-Tolerant Root", "base_value": 3.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +3% to both the XP and the Nerds earned."},
         ],
     },
     {
@@ -944,10 +1134,10 @@ PLANT_DEFS = [
         "seed_buy_price": 470, "seed_sell_price": 78, "fruit_sell_price": 54,
         "level_hours_thresholds": [0, 6.0, 17.5, 50.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "frosty", "label": "Frost-Hardy", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "frosty", "label": "Frost-Hardy", "base_value": 5.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +5% to both the XP and the Nerds earned."},
             {"level": 2, "id": "fast_grower", "label": "Quick Root", "base_value": 2.5, "unit": "%", "desc": "Adds +2.5% to this plant's base passive Nerds-per-hour rate."},
             {"level": 3, "id": "bountiful", "label": "Ancient Staple", "base_value": 4.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 4% (rounded, floor 1h)."},
-            {"level": 4, "id": "warden", "label": "Livestock Fodder Reserve", "base_value": 2.5, "unit": "days", "desc": "Adds 2.5 flat extra days to this plant's specific-neglect window — turnips were historically stockpiled as an emergency winter food/fodder reserve."},
+            {"level": 4, "id": "warden", "label": "Livestock Fodder Reserve", "base_value": 2.5, "unit": "days", "desc": "Adds 2.5 flat extra days to this plant's specific-neglect window - turnips were historically stockpiled as an emergency winter food/fodder reserve."},
         ],
     },
     {
@@ -958,9 +1148,9 @@ PLANT_DEFS = [
         "seed_buy_price": 590, "seed_sell_price": 98, "fruit_sell_price": 68,
         "level_hours_thresholds": [0, 7.2, 21.0, 60.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "frosty", "label": "Swede's Chill", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in December, January, or February. Adds +5.5% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "frosty", "label": "Swede's Chill", "base_value": 5.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in December, January, or February. Adds +5.5% to both the XP and the Nerds earned."},
             {"level": 2, "id": "hardy", "label": "Sub-Zero Survivor", "base_value": 18.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +18% relative to the base."},
-            {"level": 3, "id": "stocky", "label": "Exceptional Keeper", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap (on top of the shared 24h default) — rutabaga is one of the longest-storing root vegetables that exists."},
+            {"level": 3, "id": "stocky", "label": "Exceptional Keeper", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap (on top of the shared 24h default) - rutabaga is one of the longest-storing root vegetables that exists."},
             {"level": 4, "id": "bountiful", "label": "Slow-Grown Yield", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
         ],
     },
@@ -972,9 +1162,9 @@ PLANT_DEFS = [
         "seed_buy_price": 820, "seed_sell_price": 140, "fruit_sell_price": 95,
         "level_hours_thresholds": [0, 8.6, 25.2, 72.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Antimicrobial Bulb", "base_value": 28.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +28% relative to the base — garlic's real-world reputation for keeping (and repelling pests) shows up here as the strongest Hardy bonus of any allium."},
-            {"level": 2, "id": "thrifty", "label": "Low-Maintenance Crop", "base_value": 15.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 15% — garlic is traditionally planted and largely left alone until harvest."},
-            {"level": 3, "id": "richseed", "label": "Prized Seed Cloves", "base_value": 8.0, "unit": "%", "desc": "This plant's seeds sell for +8% more in the Market — garlic 'seed' (cloves reserved for replanting) has always commanded a premium over eating garlic."},
+            {"level": 1, "id": "hardy", "label": "Antimicrobial Bulb", "base_value": 28.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +28% relative to the base - garlic's real-world reputation for keeping (and repelling pests) shows up here as the strongest Hardy bonus of any allium."},
+            {"level": 2, "id": "thrifty", "label": "Low-Maintenance Crop", "base_value": 15.0, "unit": "%", "desc": "Reduces this plant's Fertilizer cost by 15% - garlic is traditionally planted and largely left alone until harvest."},
+            {"level": 3, "id": "richseed", "label": "Prized Seed Cloves", "base_value": 8.0, "unit": "%", "desc": "This plant's seeds sell for +8% more in the Market - garlic 'seed' (cloves reserved for replanting) has always commanded a premium over eating garlic."},
             {"level": 4, "id": "seedy", "label": "Bulb Division", "base_value": 4.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4% chance to also add 1 Garlic Seed to your inventory."},
         ],
     },
@@ -989,7 +1179,7 @@ PLANT_DEFS = [
             {"level": 1, "id": "voluminous", "label": "Layered Bulb", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
             {"level": 2, "id": "fast_grower", "label": "Mild Cultivar", "base_value": 2.5, "unit": "%", "desc": "Adds +2.5% to this plant's base passive Nerds-per-hour rate."},
             {"level": 3, "id": "bountiful", "label": "Field-Grown", "base_value": 3.5, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3.5% (rounded, floor 1h)."},
-            {"level": 4, "id": "dusk_grower", "label": "Evening-Cured Bulb", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING at/after 20:00, any time of year. Adds +2% to both the XP and the Nerds earned — sweet onions are traditionally topped and cured in the cooler evening air to avoid sunscald on their thin skin, since (unlike other onions) they don't store well enough to be casual about harvest timing."},
+            {"level": 4, "id": "dusk_grower", "label": "Evening-Cured Bulb", "base_value": 2.0, "unit": "%", "desc": "Triggers on every focus session STARTING at/after 20:00, any time of year. Adds +2% to both the XP and the Nerds earned - sweet onions are traditionally topped and cured in the cooler evening air to avoid sunscald on their thin skin, since (unlike other onions) they don't store well enough to be casual about harvest timing."},
         ],
     },
     {
@@ -1028,9 +1218,9 @@ PLANT_DEFS = [
         "seed_buy_price": 430, "seed_sell_price": 72, "fruit_sell_price": 50,
         "level_hours_thresholds": [0, 4.6, 13.3, 38.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "fast_grower", "label": "Fastest Allium", "base_value": 5.0, "unit": "%", "desc": "Adds +5% to this plant's base passive Nerds-per-hour rate — the fastest-ramping allium bonus, reflecting how quickly green onion regrows after cutting."},
-            {"level": 2, "id": "bountiful", "label": "Cut-and-Come-Again", "base_value": 9.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 9% (rounded, floor 1h) — the strongest reduction among alliums, echoing the real plant's ability to regrow from its base after trimming."},
-            {"level": 3, "id": "dawn_grower", "label": "Fresh-Cut Morning Stalks", "base_value": 2.0, "unit": "%", "desc": "Triggers on every self-study session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "fast_grower", "label": "Fastest Allium", "base_value": 5.0, "unit": "%", "desc": "Adds +5% to this plant's base passive Nerds-per-hour rate - the fastest-ramping allium bonus, reflecting how quickly green onion regrows after cutting."},
+            {"level": 2, "id": "bountiful", "label": "Cut-and-Come-Again", "base_value": 9.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 9% (rounded, floor 1h) - the strongest reduction among alliums, echoing the real plant's ability to regrow from its base after trimming."},
+            {"level": 3, "id": "dawn_grower", "label": "Fresh-Cut Morning Stalks", "base_value": 2.0, "unit": "%", "desc": "Triggers on every focus session STARTING before 08:00, any time of year. Adds +2% to both the XP and the Nerds earned."},
             {"level": 4, "id": "voluminous", "label": "Mild Stalk", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
         ],
     },
@@ -1042,10 +1232,10 @@ PLANT_DEFS = [
         "seed_buy_price": 900, "seed_sell_price": 150, "fruit_sell_price": 105,
         "level_hours_thresholds": [0, 7.9, 21.1, 66.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "spicy", "label": "Scoville Peak", "base_value": 0.5, "unit": "% per difficulty point", "desc": "Adds +0.5% XP AND +0.5% Nerds to a session PER POINT of that session's difficulty rating (so +5% at difficulty 10/10, +2.5% at difficulty 5/10) — habanero is among the hottest commonly cultivated peppers, and this scales with how 'hard' the session was rather than its length or the calendar."},
+            {"level": 1, "id": "spicy", "label": "Scoville Peak", "base_value": 0.5, "unit": "% per difficulty point", "desc": "Adds +0.5% XP AND +0.5% Nerds to a session PER POINT of that session's difficulty rating (so +5% at difficulty 10/10, +2.5% at difficulty 5/10) - habanero is among the hottest commonly cultivated peppers, and this scales with how 'hard' the session was rather than its length or the calendar."},
             {"level": 2, "id": "voluminous", "label": "Concentrated Oils", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4%."},
             {"level": 3, "id": "seedy", "label": "Prolific Seed Pod", "base_value": 4.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4% chance to also add 1 Habanero Seed to your inventory."},
-            {"level": 4, "id": "hydration", "label": "Warm-Season Fruit", "base_value": 3.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +3% to both the XP and the Nerds earned — peppers are a genuine warm-season crop."},
+            {"level": 4, "id": "hydration", "label": "Warm-Season Fruit", "base_value": 3.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +3% to both the XP and the Nerds earned - peppers are a genuine warm-season crop."},
         ],
     },
     {
@@ -1056,9 +1246,9 @@ PLANT_DEFS = [
         "seed_buy_price": 620, "seed_sell_price": 100, "fruit_sell_price": 68,
         "level_hours_thresholds": [0, 6.6, 17.6, 55.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "fast_grower", "label": "Early Harvest", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate — green bells are simply an unripe harvest of the same fruit that becomes red/yellow/orange later, so this plant matures its yield fastest of the bell pepper family."},
+            {"level": 1, "id": "fast_grower", "label": "Early Harvest", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate - green bells are simply an unripe harvest of the same fruit that becomes red/yellow/orange later, so this plant matures its yield fastest of the bell pepper family."},
             {"level": 2, "id": "voluminous", "label": "Crisp Flesh", "base_value": 2.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2%."},
-            {"level": 3, "id": "bountiful", "label": "Unripe Harvest", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) — picked before full ripeness, exactly like the real fruit."},
+            {"level": 3, "id": "bountiful", "label": "Unripe Harvest", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h) - picked before full ripeness, exactly like the real fruit."},
             {"level": 4, "id": "richseed", "label": "Seed Stock Value", "base_value": 4.0, "unit": "%", "desc": "This plant's seeds sell for +4.0% more in the Market."},
         ],
     },
@@ -1070,10 +1260,10 @@ PLANT_DEFS = [
         "seed_buy_price": 720, "seed_sell_price": 120, "fruit_sell_price": 82,
         "level_hours_thresholds": [0, 7.4, 19.8, 62.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "voluminous", "label": "Sweet & Sugar-Rich", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4% — reflecting the roughly doubled sugar content a fully ripened pepper develops versus its green, unripe form."},
-            {"level": 2, "id": "hydration", "label": "Fully Ripened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "voluminous", "label": "Sweet & Sugar-Rich", "base_value": 4.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +4% - reflecting the roughly doubled sugar content a fully ripened pepper develops versus its green, unripe form."},
+            {"level": 2, "id": "hydration", "label": "Fully Ripened", "base_value": 4.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
             {"level": 3, "id": "seedy", "label": "Vitamin-Dense Seed Pod", "base_value": 3.0, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 3% chance to also add 1 Red Bell Pepper Seed to your inventory."},
-            {"level": 4, "id": "bountiful", "label": "Patient Ripening", "base_value": 2.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 2% (rounded, floor 1h) — the smallest reduction of any bell pepper, since a fully red pepper is deliberately left longer on the vine."},
+            {"level": 4, "id": "bountiful", "label": "Patient Ripening", "base_value": 2.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 2% (rounded, floor 1h) - the smallest reduction of any bell pepper, since a fully red pepper is deliberately left longer on the vine."},
         ],
     },
     {
@@ -1084,7 +1274,7 @@ PLANT_DEFS = [
         "seed_buy_price": 700, "seed_sell_price": 116, "fruit_sell_price": 78,
         "level_hours_thresholds": [0, 7.2, 19.2, 60.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Sun-Ripened", "base_value": 4.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4.5% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "hydration", "label": "Sun-Ripened", "base_value": 4.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +4.5% to both the XP and the Nerds earned."},
             {"level": 2, "id": "voluminous", "label": "Balanced Sweetness", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
             {"level": 3, "id": "bountiful", "label": "Mid-Ripening", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
             {"level": 4, "id": "fast_grower", "label": "Vivid Carotenoids", "base_value": 1.5, "unit": "%", "desc": "Adds +1.5% to this plant's base passive Nerds-per-hour rate."},
@@ -1098,7 +1288,7 @@ PLANT_DEFS = [
         "seed_buy_price": 680, "seed_sell_price": 112, "fruit_sell_price": 76,
         "level_hours_thresholds": [0, 7.0, 18.6, 58.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Golden Ripeness", "base_value": 4.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
+            {"level": 1, "id": "hydration", "label": "Golden Ripeness", "base_value": 4.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +4% to both the XP and the Nerds earned."},
             {"level": 2, "id": "fast_grower", "label": "Bright Carotenoids", "base_value": 2.0, "unit": "%", "desc": "Adds +2% to this plant's base passive Nerds-per-hour rate."},
             {"level": 3, "id": "voluminous", "label": "Mild Sweetness", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
             {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
@@ -1112,7 +1302,7 @@ PLANT_DEFS = [
         "seed_buy_price": 820, "seed_sell_price": 138, "fruit_sell_price": 95,
         "level_hours_thresholds": [0, 7.7, 20.5, 64.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "spicy", "label": "Genuine Heat", "base_value": 0.3, "unit": "% per difficulty point", "desc": "Adds +0.3% XP AND +0.3% Nerds to a session PER POINT of that session's difficulty rating (so +3% at difficulty 10/10) — a real cayenne/serrano-type heat, milder than habanero's, so this scales more gently."},
+            {"level": 1, "id": "spicy", "label": "Genuine Heat", "base_value": 0.3, "unit": "% per difficulty point", "desc": "Adds +0.3% XP AND +0.3% Nerds to a session PER POINT of that session's difficulty rating (so +3% at difficulty 10/10) - a real cayenne/serrano-type heat, milder than habanero's, so this scales more gently."},
             {"level": 2, "id": "seedy", "label": "Heat-Concentrated Seeds", "base_value": 4.5, "unit": "%", "desc": "Rolled independently on every Claim of this plant's passive yield: a 4.5% chance to also add 1 Hot Pepper Seed to your inventory."},
             {"level": 3, "id": "voluminous", "label": "Fiery Yield", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
             {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
@@ -1126,10 +1316,10 @@ PLANT_DEFS = [
         "seed_buy_price": 950, "seed_sell_price": 160, "fruit_sell_price": 130,
         "level_hours_thresholds": [0, 9.4, 25.0, 78.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Near-Pure Water Content", "base_value": 6.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +6.5% to both the XP and the Nerds earned — honeydew is roughly 90% water, giving it the strongest hydration bonus of any melon."},
+            {"level": 1, "id": "hydration", "label": "Near-Pure Water Content", "base_value": 6.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +6.5% to both the XP and the Nerds earned - honeydew is roughly 90% water, giving it the strongest hydration bonus of any melon."},
             {"level": 2, "id": "fruitful", "label": "Vining Abundance", "base_value": 3.0, "unit": "%", "desc": "On harvest, an independent 3% chance to yield a bonus SECOND fruit alongside the normal one."},
             {"level": 3, "id": "voluminous", "label": "Pale Sweet Flesh", "base_value": 2.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +2.5%."},
-            {"level": 4, "id": "stocky", "label": "Waxy Skin Seal", "base_value": 4.0, "unit": "hours", "desc": "Adds +4 hours to this plant's own passive-yield storage cap — honeydew's smooth, waxy rind slows moisture loss better than a netted melon's."},
+            {"level": 4, "id": "stocky", "label": "Waxy Skin Seal", "base_value": 4.0, "unit": "hours", "desc": "Adds +4 hours to this plant's own passive-yield storage cap - honeydew's smooth, waxy rind slows moisture loss better than a netted melon's."},
         ],
     },
     {
@@ -1140,9 +1330,9 @@ PLANT_DEFS = [
         "seed_buy_price": 980, "seed_sell_price": 165, "fruit_sell_price": 135,
         "level_hours_thresholds": [0, 9.1, 24.3, 76.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Netted Ripeness", "base_value": 5.5, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5.5% to both the XP and the Nerds earned."},
-            {"level": 2, "id": "fruitful", "label": "Musky Abundance", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit alongside the normal one — the strongest bonus-fruit chance among melons."},
-            {"level": 3, "id": "voluminous", "label": "Orange Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% — reflecting cantaloupe's dense beta-carotene concentration."},
+            {"level": 1, "id": "hydration", "label": "Netted Ripeness", "base_value": 5.5, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +5.5% to both the XP and the Nerds earned."},
+            {"level": 2, "id": "fruitful", "label": "Musky Abundance", "base_value": 3.5, "unit": "%", "desc": "On harvest, an independent 3.5% chance to yield a bonus SECOND fruit alongside the normal one - the strongest bonus-fruit chance among melons."},
+            {"level": 3, "id": "voluminous", "label": "Orange Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5% - reflecting cantaloupe's dense beta-carotene concentration."},
             {"level": 4, "id": "bountiful", "label": "Aromatic Ripening", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
         ],
     },
@@ -1154,7 +1344,7 @@ PLANT_DEFS = [
         "seed_buy_price": 830, "seed_sell_price": 135, "fruit_sell_price": 105,
         "level_hours_thresholds": [0, 9.6, 25.6, 80.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Thick Rind Storage", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +20% relative to the base — acorn squash is a classic long-storing winter squash."},
+            {"level": 1, "id": "hardy", "label": "Thick Rind Storage", "base_value": 20.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +20% relative to the base - acorn squash is a classic long-storing winter squash."},
             {"level": 2, "id": "stocky", "label": "Hard-Shell Reserve", "base_value": 5.0, "unit": "hours", "desc": "Adds +5 hours to this plant's own passive-yield storage cap."},
             {"level": 3, "id": "voluminous", "label": "Nutty Flesh", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
             {"level": 4, "id": "bountiful", "label": "Ribbed Fruit", "base_value": 3.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 3% (rounded, floor 1h)."},
@@ -1168,9 +1358,9 @@ PLANT_DEFS = [
         "seed_buy_price": 700, "seed_sell_price": 115, "fruit_sell_price": 88,
         "level_hours_thresholds": [0, 6.2, 16.6, 52.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "fast_grower", "label": "Prolific Summer Squash", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate — summer squash varieties are famous for outproducing nearly every other home garden crop."},
+            {"level": 1, "id": "fast_grower", "label": "Prolific Summer Squash", "base_value": 4.5, "unit": "%", "desc": "Adds +4.5% to this plant's base passive Nerds-per-hour rate - summer squash varieties are famous for outproducing nearly every other home garden crop."},
             {"level": 2, "id": "bountiful", "label": "Rapid Regrowth", "base_value": 7.5, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 7.5% (rounded, floor 1h)."},
-            {"level": 3, "id": "fruitful", "label": "Overproducing Vine", "base_value": 4.0, "unit": "%", "desc": "On harvest, an independent 4% chance to yield a bonus SECOND fruit — the highest bonus-fruit chance of any plant, matching crookneck's real reputation for burying gardeners in squash."},
+            {"level": 3, "id": "fruitful", "label": "Overproducing Vine", "base_value": 4.0, "unit": "%", "desc": "On harvest, an independent 4% chance to yield a bonus SECOND fruit - the highest bonus-fruit chance of any plant, matching crookneck's real reputation for burying gardeners in squash."},
             {"level": 4, "id": "voluminous", "label": "Curved Neck", "base_value": 1.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +1.5%."},
         ],
     },
@@ -1182,9 +1372,9 @@ PLANT_DEFS = [
         "seed_buy_price": 1100, "seed_sell_price": 180, "fruit_sell_price": 150,
         "level_hours_thresholds": [0, 11.4, 30.4, 95.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Hard Rind", "base_value": 24.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +24% relative to the base — pumpkins are among the best-storing squash varieties, keeping for months."},
+            {"level": 1, "id": "hardy", "label": "Hard Rind", "base_value": 24.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +24% relative to the base - pumpkins are among the best-storing squash varieties, keeping for months."},
             {"level": 2, "id": "bountiful", "label": "Massive Fruit", "base_value": 5.0, "unit": "%", "desc": "Reduces this plant's harvest-hours requirement by 5% (rounded, floor 1h)."},
-            {"level": 3, "id": "stocky", "label": "Autumn Harvest Reserve", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap — the largest Stocky bonus of any plant, matching real pumpkin's exceptional keeping ability."},
+            {"level": 3, "id": "stocky", "label": "Autumn Harvest Reserve", "base_value": 6.0, "unit": "hours", "desc": "Adds +6 hours to this plant's own passive-yield storage cap - the largest Stocky bonus of any plant, matching real pumpkin's exceptional keeping ability."},
             {"level": 4, "id": "fruitful", "label": "Vine-Sprawling", "base_value": 2.0, "unit": "%", "desc": "On harvest, an independent 2% chance to yield a bonus SECOND fruit alongside the normal one."},
         ],
     },
@@ -1196,7 +1386,7 @@ PLANT_DEFS = [
         "seed_buy_price": 900, "seed_sell_price": 148, "fruit_sell_price": 115,
         "level_hours_thresholds": [0, 9.8, 26.2, 82.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Excellent Keeper", "base_value": 22.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +22% relative to the base — butternut squash is famous for storing many months without spoiling."},
+            {"level": 1, "id": "hardy", "label": "Excellent Keeper", "base_value": 22.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty. Multiplies the neglect yield fraction by +22% relative to the base - butternut squash is famous for storing many months without spoiling."},
             {"level": 2, "id": "voluminous", "label": "Dense Sweet Flesh", "base_value": 3.5, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3.5%."},
             {"level": 3, "id": "stocky", "label": "Smooth-Rind Reserve", "base_value": 5.0, "unit": "hours", "desc": "Adds +5 hours to this plant's own passive-yield storage cap."},
             {"level": 4, "id": "warden", "label": "Cellar Reserve", "base_value": 2.0, "unit": "days", "desc": "Adds 2.0 flat extra days to this plant's specific-neglect window before yield starts dipping."},
@@ -1210,9 +1400,9 @@ PLANT_DEFS = [
         "seed_buy_price": 720, "seed_sell_price": 118, "fruit_sell_price": 85,
         "level_hours_thresholds": [0, 8.9, 23.7, 74.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hydration", "label": "Milky Kernels", "base_value": 5.0, "unit": "%", "desc": "Triggers on every self-study session regardless of length, but only in June, July, or August. Adds +5% to both the XP and the Nerds earned — sweet corn is famously a peak-summer crop, best eaten within hours of picking."},
+            {"level": 1, "id": "hydration", "label": "Milky Kernels", "base_value": 5.0, "unit": "%", "desc": "Triggers on every focus session regardless of length, but only in June, July, or August. Adds +5% to both the XP and the Nerds earned - sweet corn is famously a peak-summer crop, best eaten within hours of picking."},
             {"level": 2, "id": "fast_grower", "label": "Rapid Stalk Growth", "base_value": 3.0, "unit": "%", "desc": "Adds +3% to this plant's base passive Nerds-per-hour rate."},
-            {"level": 3, "id": "fruitful", "label": "Twin Ears", "base_value": 2.5, "unit": "%", "desc": "On harvest, an independent 2.5% chance to yield a bonus SECOND fruit alongside the normal one — some corn stalks genuinely produce a second, smaller ear."},
+            {"level": 3, "id": "fruitful", "label": "Twin Ears", "base_value": 2.5, "unit": "%", "desc": "On harvest, an independent 2.5% chance to yield a bonus SECOND fruit alongside the normal one - some corn stalks genuinely produce a second, smaller ear."},
             {"level": 4, "id": "voluminous", "label": "Sugar-Rich", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
         ],
     },
@@ -1224,15 +1414,18 @@ PLANT_DEFS = [
         "seed_buy_price": 760, "seed_sell_price": 125, "fruit_sell_price": 90,
         "level_hours_thresholds": [0, 10.8, 28.8, 90.0],
         "level_bonus_defs": [
-            {"level": 1, "id": "hardy", "label": "Hard Outer Shell", "base_value": 26.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +26% relative to the base — the hardest kernel of any plant here, and the most storage-resistant."},
-            {"level": 2, "id": "richseed", "label": "Historic Seed Grain", "base_value": 6.0, "unit": "%", "desc": "This plant's seeds sell for +6% more in the Market — flint corn (Indian corn) has long been valued and carefully selected as seed stock."},
+            {"level": 1, "id": "hardy", "label": "Hard Outer Shell", "base_value": 26.0, "unit": "%", "desc": "Softens this plant's plant-specific neglect penalty substantially. Multiplies the neglect yield fraction by +26% relative to the base - the hardest kernel of any plant here, and the most storage-resistant."},
+            {"level": 2, "id": "richseed", "label": "Historic Seed Grain", "base_value": 6.0, "unit": "%", "desc": "This plant's seeds sell for +6% more in the Market - flint corn (Indian corn) has long been valued and carefully selected as seed stock."},
             {"level": 3, "id": "voluminous", "label": "Colorful Kernels", "base_value": 3.0, "unit": "%", "desc": "Applies on every Claim of this plant's passive yield. Multiplies the claimable Nerds amount by +3%."},
             {"level": 4, "id": "stocky", "label": "Long Keeper", "base_value": 4.0, "unit": "hours", "desc": "Adds +4.0 hours to this plant's own passive-yield storage cap."},
         ],
     },
 ]
 
-# ── Clementine's Book of Wonders — the in-game plant-pedia. Organized
+for _p in PLANT_DEFS:
+    _p["seed_buy_price"] = int(_p["seed_buy_price"] * ECON_COST_MULT)
+
+# ── Clementine's Book of Wonders - the in-game plant-pedia. Organized
 # by category > subcategory so it can comfortably host many future
 # plants/trees without needing a restructure; copy-paste a subcategory
 # to add a new one, and a BOOK_ENTRIES block to add a new write-up. ──
@@ -1272,7 +1465,7 @@ BOOK_CATEGORIES = [
     ]},
 ]
 
-# ── Book entries — copy-paste this whole block for each new plant. Every
+# ── Book entries - copy-paste this whole block for each new plant. Every
 # field is plain text/lists so the frontend can render any entry with
 # the exact same two-column layout, no special-casing per plant. ──
 BOOK_ENTRIES = [
@@ -1286,7 +1479,7 @@ BOOK_ENTRIES = [
         "summary": (
             "A sprawling, vining annual grown for its large, sweet, water-rich fruit. One of the "
             "most widely cultivated crops on Earth, watermelon is prized for its high water content, "
-            "refreshing taste, and versatility — eaten fresh, juiced, pickled by the rind, or roasted "
+            "refreshing taste, and versatility - eaten fresh, juiced, pickled by the rind, or roasted "
             "for its seeds."
         ),
         "classification": [
@@ -1300,8 +1493,8 @@ BOOK_ENTRIES = [
         ],
         "history": (
             "Watermelon is believed to have originated in northeastern Africa, with wild ancestors "
-            "still found growing across the continent today. Archaeological evidence — including "
-            "seeds recovered from a site in Libya dated to roughly 5,000 years ago — points to a long "
+            "still found growing across the continent today. Archaeological evidence - including "
+            "seeds recovered from a site in Libya dated to roughly 5,000 years ago - points to a long "
             "history of cultivation stretching back to ancient Egypt, where watermelons were depicted "
             "in tomb paintings and are thought to have been placed in burial chambers to nourish the "
             "deceased in the afterlife.\n\n"
@@ -1310,25 +1503,25 @@ BOOK_ENTRIES = [
             "with introducing watermelon to Europe during the medieval period, and European colonizers "
             "and enslaved Africans later brought it to the Americas in the 16th and 17th centuries. "
             "Today China is by a wide margin the largest producer of watermelon in the world, followed "
-            "by countries across Africa, the Middle East, and the Americas — a testament to the fruit's "
+            "by countries across Africa, the Middle East, and the Americas - a testament to the fruit's "
             "long and genuinely global journey from a wild African vine to a worldwide summer staple."
         ),
         "fun_facts": [
-            "Watermelon is about 92% water by weight — close enough to a drink that it's a genuinely "
+            "Watermelon is about 92% water by weight - close enough to a drink that it's a genuinely "
             "effective way to stay hydrated in hot weather.",
             "Botanically, watermelon is a fruit, but it's also classified as a vegetable in some "
             "culinary and agricultural contexts since it belongs to the same family as cucumbers and "
-            "squash — it's a bit of both, depending who's asking.",
-            "The entire fruit is edible, including the rind — pickled watermelon rind is a traditional "
+            "squash - it's a bit of both, depending who's asking.",
+            "The entire fruit is edible, including the rind - pickled watermelon rind is a traditional "
             "preserve in cuisines around the world, and the seeds can be roasted and eaten as a snack.",
-            "Seedless watermelons aren't genetically modified — they're bred by crossing a "
+            "Seedless watermelons aren't genetically modified - they're bred by crossing a "
             "normal (diploid) watermelon with a chromosome-doubled (tetraplum/tetraploid) one, "
             "producing sterile triploid offspring that can't form full-sized seeds.",
-            "Watermelon comes in far more varieties than the common pink-fleshed kind — yellow- and "
+            "Watermelon comes in far more varieties than the common pink-fleshed kind - yellow- and "
             "orange-fleshed cultivars exist, and some heirloom varieties are prized specifically for "
             "unusual colors and flavors.",
             "The world record for heaviest watermelon on record is well over 350 pounds (roughly "
-            "159 kg) — bigger than most adult humans.",
+            "159 kg) - bigger than most adult humans.",
             "In parts of the world, watermelon rind is stir-fried as a vegetable rather than discarded "
             "or pickled, valued for its mild flavor and crisp texture.",
         ],
@@ -1341,7 +1534,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Solanum tuberosum",
         "family": "Solanaceae",
         "image": "/sprites/crops/russetpotatobotanarium.png",
-        "summary": "A starchy, thick-skinned potato variety bred for baking, frying, and mashing — the most widely grown potato cultivar in the United States.",
+        "summary": "A starchy, thick-skinned potato variety bred for baking, frying, and mashing - the most widely grown potato cultivar in the United States.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1355,7 +1548,7 @@ BOOK_ENTRIES = [
         "fun_facts": [
             "Russets are about 80% water and roughly 18% starch by weight, giving them their characteristically fluffy baked texture.",
             "Luther Burbank sold the rights to his original russet seedling for just $150 before it became one of the most commercially significant potato varieties in history.",
-            "The netted, russeted skin is a natural trait, not damage — it develops as a corky layer over the growing season.",
+            "The netted, russeted skin is a natural trait, not damage - it develops as a corky layer over the growing season.",
             "A single Russet plant can produce several tubers underground from one seed potato, which is why potatoes are propagated by planting pieces of tuber, not true seed.",
         ],
     },
@@ -1416,7 +1609,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Ipomoea batatas",
         "family": "Convolvulaceae",
         "image": "/sprites/crops/sweetpotatobotanarium.png",
-        "summary": "A sweet, orange- or purple-fleshed root vegetable in the morning glory family — botanically unrelated to the true potato despite the shared name.",
+        "summary": "A sweet, orange- or purple-fleshed root vegetable in the morning glory family - botanically unrelated to the true potato despite the shared name.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1428,10 +1621,10 @@ BOOK_ENTRIES = [
         ],
         "history": "Sweet potatoes were domesticated in Central or South America at least 5,000 years ago and had already spread across Polynesia before European contact, a puzzle that has long interested botanists studying pre-Columbian trans-Pacific contact. Portuguese and Spanish traders later carried it to Africa, India, and Southeast Asia in the 16th century, where it became a staple valued for thriving in poor soils.",
         "fun_facts": [
-            "Despite the name, sweet potatoes are not related to potatoes at all — potatoes are nightshades, sweet potatoes are morning glories.",
+            "Despite the name, sweet potatoes are not related to potatoes at all - potatoes are nightshades, sweet potatoes are morning glories.",
             "The orange color comes from beta-carotene, the same provitamin-A pigment that colors carrots.",
             "Sweet potatoes reaching Polynesia centuries before European contact is one of the strongest pieces of evidence for pre-Columbian contact between Polynesia and South America.",
-            "In the U.S., sweet potatoes are frequently mislabeled 'yams' in supermarkets — true yams are a botanically distinct, starchier African and Asian crop rarely sold in North America.",
+            "In the U.S., sweet potatoes are frequently mislabeled 'yams' in supermarkets - true yams are a botanically distinct, starchier African and Asian crop rarely sold in North America.",
         ],
     },
     {
@@ -1441,7 +1634,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Manihot esculenta",
         "family": "Euphorbiaceae",
         "image": "/sprites/crops/cassavabotanarium.png",
-        "summary": "A starchy, drought-tolerant tuberous root, one of the most important staple crops in the tropics — the source of tapioca — able to survive in poor soils where few other crops can.",
+        "summary": "A starchy, drought-tolerant tuberous root, one of the most important staple crops in the tropics - the source of tapioca - able to survive in poor soils where few other crops can.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1466,7 +1659,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Raphanus sativus",
         "family": "Brassicaceae",
         "image": "/sprites/crops/daikonradishbotanarium.png",
-        "summary": "A long, mild white radish widely used across East Asian cuisine — fast-growing and among the largest radish varieties, sometimes reaching over a foot in length.",
+        "summary": "A long, mild white radish widely used across East Asian cuisine - fast-growing and among the largest radish varieties, sometimes reaching over a foot in length.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1503,10 +1696,10 @@ BOOK_ENTRIES = [
         ],
         "history": "Carrots were first domesticated in Central Asia (modern-day Afghanistan) around the 10th century, originally in purple and yellow varieties. The now-dominant orange carrot is generally believed to have been selectively bred in the Netherlands around the 17th century, favored for its higher beta-carotene content and mild flavor, and went on to become the globally standard color through Dutch trade networks.",
         "fun_facts": [
-            "Wild carrot ancestors were bitter and woody — thousands of years of selective breeding produced the sweet, crisp texture eaten today.",
+            "Wild carrot ancestors were bitter and woody - thousands of years of selective breeding produced the sweet, crisp texture eaten today.",
             "The popular claim that carrots improve night vision originated from WWII British propaganda exaggerating their benefit to obscure early radar technology.",
             "A carrot's orange color comes from beta-carotene, which the body converts into vitamin A.",
-            "Purple and yellow carrot varieties never disappeared — they're still grown today and are gaining renewed popularity in specialty markets.",
+            "Purple and yellow carrot varieties never disappeared - they're still grown today and are gaining renewed popularity in specialty markets.",
         ],
     },
     {
@@ -1528,9 +1721,9 @@ BOOK_ENTRIES = [
         ],
         "history": "Parsnips were cultivated across Europe since Roman times, and served as one of the primary starchy staples in European diets before the potato's arrival from the Americas displaced it in popularity from the 16th century onward. It remains a traditional winter vegetable across the UK and Northern Europe, closely associated with Christmas and cold-weather cooking.",
         "fun_facts": [
-            "Frost genuinely does sweeten a parsnip — cold temperatures trigger the root to convert starches into sugars as a natural antifreeze mechanism.",
+            "Frost genuinely does sweeten a parsnip - cold temperatures trigger the root to convert starches into sugars as a natural antifreeze mechanism.",
             "Before the potato became widespread, the parsnip was one of Europe's primary carbohydrate staples for centuries.",
-            "Wild parsnip sap can cause skin burns in sunlight (phytophotodermatitis) — a trait shared with some of its wild Apiaceae relatives.",
+            "Wild parsnip sap can cause skin burns in sunlight (phytophotodermatitis) - a trait shared with some of its wild Apiaceae relatives.",
             "Its close botanical relation to the carrot is visible in the similarly shaped taproot and shared family, Apiaceae.",
         ],
     },
@@ -1576,10 +1769,10 @@ BOOK_ENTRIES = [
             ("Genus", "Beta"),
             ("Species", "B. vulgaris"),
         ],
-        "history": "Beets were cultivated in the Mediterranean as early as classical antiquity, initially valued mainly for their edible leafy tops rather than the root. Selective breeding in Germany during the 18th century developed high-sugar beet varieties, which eventually gave rise to the sugar beet — an entirely separate industrial crop from the same species that today supplies a large share of the world's sugar.",
+        "history": "Beets were cultivated in the Mediterranean as early as classical antiquity, initially valued mainly for their edible leafy tops rather than the root. Selective breeding in Germany during the 18th century developed high-sugar beet varieties, which eventually gave rise to the sugar beet - an entirely separate industrial crop from the same species that today supplies a large share of the world's sugar.",
         "fun_facts": [
             "Sugar beets and the beets eaten as a vegetable are the same species, Beta vulgaris, just bred for very different traits.",
-            "Beeturia — pink or red urine after eating beets — occurs in a genetically determined subset of the population.",
+            "Beeturia - pink or red urine after eating beets - occurs in a genetically determined subset of the population.",
             "Beet greens are edible and closely related botanically (and nutritionally) to Swiss chard, bred from the same wild ancestor.",
             "Ancient Romans and Greeks primarily consumed beet leaves, not the root, which only became a valued food itself much later.",
         ],
@@ -1666,7 +1859,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Allium cepa",
         "family": "Amaryllidaceae",
         "image": "/sprites/crops/sweetonionbotanarium.png",
-        "summary": "A mild, low-sulfur onion variety — Vidalia and Walla Walla are well-known examples — bred and grown for eating raw without the sharp bite of standard onions.",
+        "summary": "A mild, low-sulfur onion variety - Vidalia and Walla Walla are well-known examples - bred and grown for eating raw without the sharp bite of standard onions.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1676,9 +1869,9 @@ BOOK_ENTRIES = [
             ("Genus", "Allium"),
             ("Species", "A. cepa"),
         ],
-        "history": "Sweet onion varieties owe their mildness largely to the low-sulfur soil of the specific regions where they're traditionally grown, such as Vidalia, Georgia, or the Walla Walla Valley in Washington State — the same cultivar grown in different soil produces a noticeably sharper onion, which is why these regional names became legally protected designations.",
+        "history": "Sweet onion varieties owe their mildness largely to the low-sulfur soil of the specific regions where they're traditionally grown, such as Vidalia, Georgia, or the Walla Walla Valley in Washington State - the same cultivar grown in different soil produces a noticeably sharper onion, which is why these regional names became legally protected designations.",
         "fun_facts": [
-            "Vidalia onions are protected by Georgia state law and federal marketing order — only onions grown in a specific 20-county region can legally be labeled 'Vidalia'.",
+            "Vidalia onions are protected by Georgia state law and federal marketing order - only onions grown in a specific 20-county region can legally be labeled 'Vidalia'.",
             "Sweetness in these varieties comes less from actual sugar content and more from LOW pyruvate, the sulfur-compound precursor responsible for onion sharpness and eye-watering.",
             "Walla Walla sweet onions trace their seed lineage back to a sweet onion variety brought from Corsica, France, over a century ago.",
             "Because of their high water and low sulfur content, sweet onions don't store as long as standard yellow onions.",
@@ -1741,7 +1934,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Allium fistulosum",
         "family": "Amaryllidaceae",
         "image": "/sprites/crops/greenonionbotanarium.png",
-        "summary": "A slender, mild allium harvested for its hollow green stalks and white base before a bulb fully forms — known as scallions or spring onions depending on region.",
+        "summary": "A slender, mild allium harvested for its hollow green stalks and white base before a bulb fully forms - known as scallions or spring onions depending on region.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1753,7 +1946,7 @@ BOOK_ENTRIES = [
         ],
         "history": "Green onion (Allium fistulosum) is botanically distinct from the common bulb onion, and has been cultivated in China for thousands of years as a fundamental aromatic in East Asian cooking, remaining one of the most widely used vegetables across Chinese, Japanese, and Korean cuisine today.",
         "fun_facts": [
-            "Green onions will regrow from just the root end if placed in water — a widely shared kitchen trick that works because the growing point sits at the base, not the tip.",
+            "Green onions will regrow from just the root end if placed in water - a widely shared kitchen trick that works because the growing point sits at the base, not the tip.",
             "Scallions, green onions, and spring onions are often used interchangeably in casual speech but can refer to slightly different harvest stages or species depending on region.",
             "Unlike bulb onions, Allium fistulosum rarely forms a true underground bulb at all.",
             "It's one of the most fundamental aromatics in Chinese cuisine, referenced in cooking texts going back over a thousand years.",
@@ -1791,7 +1984,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Capsicum annuum",
         "family": "Solanaceae",
         "image": "/sprites/crops/greenbellpepperbotanarium.png",
-        "summary": "A crisp, mild, unripe bell pepper — grassy and slightly bitter compared to its own fully ripened red, yellow, and orange forms.",
+        "summary": "A crisp, mild, unripe bell pepper - grassy and slightly bitter compared to its own fully ripened red, yellow, and orange forms.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1801,9 +1994,9 @@ BOOK_ENTRIES = [
             ("Genus", "Capsicum"),
             ("Species", "C. annuum"),
         ],
-        "history": "Bell peppers are a cultivar group of Capsicum annuum, domesticated in Mexico and Central America thousands of years ago, bred specifically to lack the capsaicin production found in the plant's hotter relatives. The green stage is simply the unripe fruit — every bell pepper starts green and, left on the plant longer, will ripen through yellow or orange into red.",
+        "history": "Bell peppers are a cultivar group of Capsicum annuum, domesticated in Mexico and Central America thousands of years ago, bred specifically to lack the capsaicin production found in the plant's hotter relatives. The green stage is simply the unripe fruit - every bell pepper starts green and, left on the plant longer, will ripen through yellow or orange into red.",
         "fun_facts": [
-            "Green, yellow, orange, and red bell peppers frequently come from the exact same plant — the color reflects ripeness stage, not different varieties.",
+            "Green, yellow, orange, and red bell peppers frequently come from the exact same plant - the color reflects ripeness stage, not different varieties.",
             "Because it's harvested unripe, green bell pepper has notably less vitamin C and sugar than the same fruit left to ripen to red.",
             "Bell peppers are one of the few Capsicum cultivars bred to be entirely free of capsaicin, the compound responsible for chili heat.",
             "The lower price of green bell peppers compared to red ones directly reflects a shorter growing time on the plant.",
@@ -1816,7 +2009,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Capsicum annuum",
         "family": "Solanaceae",
         "image": "/sprites/crops/redbellpepperbotanarium.png",
-        "summary": "The fully ripened form of the bell pepper — sweeter and more nutrient-dense than its green, unripe counterpart, having spent extra weeks on the vine developing sugar.",
+        "summary": "The fully ripened form of the bell pepper - sweeter and more nutrient-dense than its green, unripe counterpart, having spent extra weeks on the vine developing sugar.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -1953,7 +2146,7 @@ BOOK_ENTRIES = [
         ],
         "history": "True cantaloupe (Cucumis melo var. cantalupensis) is traditionally distinguished from the netted 'muskmelon' commonly sold as cantaloupe in North America, though the two names are used interchangeably in everyday speech. The fruit is believed to have originated in Africa or the Middle East before making its way to Europe.",
         "fun_facts": [
-            "The cantaloupe commonly sold in North America is technically a muskmelon (Cucumis melo var. reticulatus) — true European cantaloupe has smoother, ribbed (not netted) skin.",
+            "The cantaloupe commonly sold in North America is technically a muskmelon (Cucumis melo var. reticulatus) - true European cantaloupe has smoother, ribbed (not netted) skin.",
             "Its distinctive aroma comes from volatile ester compounds that intensify as the fruit ripens.",
             "Cantaloupe's orange flesh is rich in beta-carotene, the same pigment responsible for the color of carrots.",
             "Unlike honeydew, cantaloupe continues to ripen somewhat after harvest, developing more sugar and aroma over a few days at room temperature.",
@@ -1976,9 +2169,9 @@ BOOK_ENTRIES = [
             ("Genus", "Cucurbita"),
             ("Species", "C. pepo"),
         ],
-        "history": "Acorn squash is a variety of Cucurbita pepo, a species domesticated in Mesoamerica thousands of years ago alongside beans and maize as part of the 'Three Sisters' companion-planting tradition practiced by many Indigenous peoples of North America. Despite the name 'winter squash,' it's actually harvested in autumn — the term refers to its long storage life through winter, not its growing season.",
+        "history": "Acorn squash is a variety of Cucurbita pepo, a species domesticated in Mesoamerica thousands of years ago alongside beans and maize as part of the 'Three Sisters' companion-planting tradition practiced by many Indigenous peoples of North America. Despite the name 'winter squash,' it's actually harvested in autumn - the term refers to its long storage life through winter, not its growing season.",
         "fun_facts": [
-            "'Winter squash' refers to storage life, not growing season — acorn squash is planted in spring and harvested in fall, then stored through winter thanks to its hard rind.",
+            "'Winter squash' refers to storage life, not growing season - acorn squash is planted in spring and harvested in fall, then stored through winter thanks to its hard rind.",
             "It's part of the same species, Cucurbita pepo, as zucchini and pumpkin, despite looking quite different.",
             "Acorn squash was among the crops grown in the Indigenous 'Three Sisters' system, planted alongside corn (for the vine to climb) and beans (which fix nitrogen in the soil).",
             "Unlike many squash varieties, acorn squash doesn't peel easily even when cooked, which is why it's traditionally served halved and scooped rather than peeled.",
@@ -1991,7 +2184,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Cucurbita pepo",
         "family": "Cucurbitaceae",
         "image": "/sprites/crops/crooknecksquashbotanarium.png",
-        "summary": "A yellow, curved-neck summer squash with tender, edible skin, harvested young and unripe — unlike winter squashes, it doesn't store well and is meant to be eaten fresh.",
+        "summary": "A yellow, curved-neck summer squash with tender, edible skin, harvested young and unripe - unlike winter squashes, it doesn't store well and is meant to be eaten fresh.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -2003,7 +2196,7 @@ BOOK_ENTRIES = [
         ],
         "history": "Crookneck squash is one of the oldest documented squash varieties in North America, with archaeological and historical evidence placing its cultivation by Indigenous peoples well before European contact. It's a 'summer squash', meaning it's harvested immature with a soft, edible rind, in contrast to 'winter squash' varieties like acorn or butternut.",
         "fun_facts": [
-            "Summer squash (like crookneck) and winter squash (like acorn or butternut) can be the exact same species, Cucurbita pepo — the difference is purely how mature the fruit is when picked.",
+            "Summer squash (like crookneck) and winter squash (like acorn or butternut) can be the exact same species, Cucurbita pepo - the difference is purely how mature the fruit is when picked.",
             "Crookneck squash plants are famously prolific, often producing more fruit per plant across a season than gardeners can use.",
             "Its curved neck shape is a genetically distinct trait bred into this squash type.",
             "Because its skin is thin and tender, crookneck squash spoils much faster than hard-shelled winter squash and is best eaten within about a week of harvest.",
@@ -2028,7 +2221,7 @@ BOOK_ENTRIES = [
         ],
         "history": "Pumpkins are among the oldest domesticated plants in the Americas, with archaeological evidence of cultivation in Mexico dating back over 7,000 years, predating even maize. They were part of the Indigenous 'Three Sisters' companion-planting system alongside corn and beans, and were later adopted by European settlers, eventually becoming strongly associated with North American autumn harvest traditions.",
         "fun_facts": [
-            "The largest competitively grown pumpkins can exceed 1,000 kilograms — giant pumpkin varieties are specifically bred for size rather than flavor.",
+            "The largest competitively grown pumpkins can exceed 1,000 kilograms - giant pumpkin varieties are specifically bred for size rather than flavor.",
             "Most canned 'pumpkin puree' sold commercially in the U.S. is actually made from a different, denser-fleshed squash variety, not the large carving pumpkins used for jack-o'-lanterns.",
             "Carving pumpkins for Halloween traces back to an older Irish and Scottish tradition of carving turnips, which shifted to the more abundant pumpkin after emigration to North America.",
             "Every part of the pumpkin is technically edible, including the skin, flesh, seeds, leaves, and flowers.",
@@ -2091,7 +2284,7 @@ BOOK_ENTRIES = [
         "scientific_name": "Zea mays subsp. mays (indurata group)",
         "family": "Poaceae",
         "image": "/sprites/crops/flintcornbotanarium.png",
-        "summary": "A hard-kernelled maize variety — also known as Indian corn — prized for its long storage life and striking multicolored kernels, closer in form to the maize varieties first cultivated by Indigenous peoples of the Americas.",
+        "summary": "A hard-kernelled maize variety - also known as Indian corn - prized for its long storage life and striking multicolored kernels, closer in form to the maize varieties first cultivated by Indigenous peoples of the Americas.",
         "classification": [
             ("Kingdom", "Plantae"),
             ("Clade", "Angiosperms"),
@@ -2154,7 +2347,14 @@ def files_dir(profile):
 _FOLDER_BAD_CHARS = '/\\:*?"<>|\0'
 
 def _sanitize_folder_name(name):
-    name = (name or "").strip()
+    name = unicodedata.normalize("NFC", (name or "")).strip()
+    # Windows forbids a literal ':' in filenames (it's reserved for drive
+    # letters), but book/course titles legitimately use colons ("Book
+    # Title: A Subtitle") - swap in the Unicode FULLWIDTH COLON (looks
+    # essentially identical in every font) instead of just deleting it,
+    # so the title still reads correctly rather than silently losing
+    # punctuation.
+    name = name.replace(":", "\uFF1A")
     for ch in _FOLDER_BAD_CHARS:
         name = name.replace(ch, "")
     name = name.strip(" .")
@@ -2166,17 +2366,18 @@ def _sanitize_folder_name(name):
 _FILE_BAD_CHARS = '/\\:*?"<>|\0'
 
 def _sanitize_file_name(name):
-    """Like _sanitize_folder_name, but for FILE names — keeps spaces,
+    """Like _sanitize_folder_name, but for FILE names - keeps spaces,
     dashes, dots, and unicode characters intact, since files commonly
     need those (extensions, "Book I - 3rd Edition", accented titles,
     etc.). werkzeug's secure_filename, used here previously, aggressively
-    replaces spaces with underscores and strips anything non-ASCII —
-    turning "Genki Textbook I - 3rd Edition 2020.pdf" into
+    replaces spaces with underscores and strips anything non-ASCII - turning "Genki Textbook I - 3rd Edition 2020.pdf" into
     "Genki_Textbook_I_-_3rd_Edition_2020.pdf" (or worse, an empty string
     for a fully non-ASCII name). This still strips path separators and
     other characters that could escape the target folder or confuse a
-    real OS file manager."""
-    name = (name or "").strip()
+    real OS file manager. See _sanitize_folder_name for why ':' is
+    swapped for a lookalike rather than deleted."""
+    name = unicodedata.normalize("NFC", (name or "")).strip()
+    name = name.replace(":", "\uFF1A")
     for ch in _FILE_BAD_CHARS:
         name = name.replace(ch, "")
     name = name.strip(" .")
@@ -2197,8 +2398,7 @@ def _unique_dir(parent, wanted_name):
 
 def _item_folder_rel(cfg, item, kind):
     """Computes the CURRENT canonical relative folder path (relative to
-    files_dir(profile)) for a subject or skill, from its name + category
-    — category-agnostic between subjects/skills sharing the same
+    files_dir(profile)) for a subject or skill, from its name + category - category-agnostic between subjects/skills sharing the same
     category is intentional (kind='subject'|'skill' only matters for
     which category list to look in)."""
     cat_list = cfg.get("subject_categories", []) if kind == "subject" else cfg.get("skill_categories", [])
@@ -2213,13 +2413,13 @@ def _reconcile_item_folder(profile, cfg, item, kind):
     says it SHOULD be right now, physically moving the directory if the
     name or category changed. Non-fatal on any filesystem hiccup (a
     failed move just leaves the old folder in place rather than losing
-    data) — always returns the folder path actually in use afterward."""
+    data) - always returns the folder path actually in use afterward."""
     root = files_dir(profile)
     root.mkdir(parents=True, exist_ok=True)
     wanted_rel = _item_folder_rel(cfg, item, kind)
     current_rel = item.get("folder")
     if current_rel is None:
-        # Never reconciled before — check for a pre-File-Explorer,
+        # Never reconciled before - check for a pre-File-Explorer,
         # id-keyed legacy folder (_files/<id> or _files/skill_<id>) and
         # treat IT as the current location so its files get adopted
         # into the new Category/Name path instead of left behind.
@@ -2227,7 +2427,7 @@ def _reconcile_item_folder(profile, cfg, item, kind):
         if (root / legacy_name).exists():
             current_rel = legacy_name
         else:
-            current_rel = wanted_rel  # nothing legacy to migrate — just create fresh below
+            current_rel = wanted_rel  # nothing legacy to migrate - just create fresh below
     if current_rel == wanted_rel:
         (root / current_rel).mkdir(parents=True, exist_ok=True)
         item["folder"] = current_rel
@@ -2239,7 +2439,7 @@ def _reconcile_item_folder(profile, cfg, item, kind):
         if current_abs and current_abs.exists():
             if wanted_abs.exists():
                 # Destination already has SOMETHING (rare name/category
-                # collision) — merge by picking a disambiguated name
+                # collision) - merge by picking a disambiguated name
                 # rather than overwriting or losing either folder.
                 parts = wanted_rel.rsplit("/", 1)
                 base_name = parts[-1]
@@ -2248,7 +2448,7 @@ def _reconcile_item_folder(profile, cfg, item, kind):
                 wanted_rel = f"{parts[0]}/{unique_name}" if len(parts) > 1 else unique_name
             shutil.move(str(current_abs), str(wanted_abs))
             # A category rename/removal can leave an empty parent
-            # category folder behind — tidy it up if so.
+            # category folder behind - tidy it up if so.
             if current_abs.parent != root and current_abs.parent.exists():
                 try:
                     current_abs.parent.rmdir()
@@ -2258,7 +2458,7 @@ def _reconcile_item_folder(profile, cfg, item, kind):
             wanted_abs.mkdir(parents=True, exist_ok=True)
     except Exception:
         # Filesystem move failed for some reason (permissions, file in
-        # use, etc.) — keep whatever the old folder was rather than
+        # use, etc.) - keep whatever the old folder was rather than
         # silently orphaning the item's files.
         if current_rel and (root / current_rel).exists():
             return current_rel
@@ -2295,12 +2495,53 @@ def _safe_subpath(root, rel_path):
         return None
     return candidate
 
+# ── Legacy-encoding tolerant JSON loading ──
+# Older versions of the app wrote save files with the OS default text
+# encoding (cp1252 on Windows), so any accented character ("é", "è"...)
+# was stored as a single non-UTF-8 byte. Reading those files as strict
+# UTF-8 raised UnicodeDecodeError and made the whole profile unloadable.
+# Some files are MIXED (old bytes plus text re-saved later as UTF-8), so
+# decoding is done per byte-sequence: valid UTF-8 sequences stay UTF-8,
+# every other high byte is read as cp1252.
+import re as _re_enc
+_UTF8_SEQ = _re_enc.compile(
+    rb"[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}"
+    rb"|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}"
+    rb"|\xf4[\x80-\x8f][\x80-\xbf]{2}|[\x80-\xff]")
+
+def _decode_legacy_bytes(raw):
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    def _one(m):
+        b = m.group(0)
+        if len(b) > 1:
+            return b.decode("utf-8")
+        try:
+            return b.decode("cp1252")
+        except UnicodeDecodeError:
+            return b.decode("latin-1")
+    out = []
+    pos = 0
+    for m in _UTF8_SEQ.finditer(raw):
+        out.append(raw[pos:m.start()].decode("ascii", "replace"))
+        out.append(_one(m))
+        pos = m.end()
+    out.append(raw[pos:].decode("ascii", "replace"))
+    return "".join(out)
+
+def _load_json_file(path):
+    """json.load that survives legacy cp1252 / mixed-encoding files."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    return json.loads(_decode_legacy_bytes(raw))
+
 def _read_filemeta(folder_abs):
     p = folder_abs / FILEMETA_NAME
     if p.exists():
         try:
-            with open(p) as f:
-                return json.load(f)
+            return _load_json_file(p)
         except Exception:
             return {}
     return {}
@@ -2314,7 +2555,7 @@ def _write_filemeta(folder_abs, meta):
             except Exception:
                 pass
         return
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
 def config_path(profile):
@@ -2326,21 +2567,22 @@ def data_path(profile):
 def load_config(profile):
     p = config_path(profile)
     if p.exists():
-        with open(p) as f:
-            cfg = json.load(f)
-        # Backfill defaults for fields introduced in later versions —
+        cfg = _load_json_file(p)
+        # Backfill defaults for fields introduced in later versions
         # profiles created before v1.1 won't have these keys yet.
         cfg.setdefault("ml_prediction_enabled", True)
         cfg.setdefault("attendance_default_mode", "manual")
         cfg.setdefault("attendance_autofill_last_date", "")
+        cfg.setdefault("active_theme", "dark")
         cfg.setdefault("skill_categories", [])
         cfg.setdefault("subject_categories", [])
+        cfg.setdefault("global_holidays", [])
         # Migration: subjects/skills from before the freeform File
         # Explorer existed had their files sitting in an id-keyed folder
         # (_files/<subject_id> or _files/skill_<skill_id>) with no
         # `folder` field on the record at all. First load after
         # upgrading, adopt that legacy folder as-is (rather than moving
-        # anything sight-unseen) by just recording its path — the very
+        # anything sight-unseen) by just recording its path - the very
         # next name/category edit (or simply opening Files) will then
         # naturally reconcile it to the proper Category/Name location
         # via _reconcile_item_folder.
@@ -2352,7 +2594,7 @@ def load_config(profile):
         # with no structure behind it. First load after upgrading,
         # every distinct non-empty string in use gets turned into a
         # real category record (by name, deduped), and every skill gets
-        # pointed at it via category_id — after this runs once, `category`
+        # pointed at it via category_id - after this runs once, `category`
         # on a skill is just a legacy display fallback, category_id is
         # the real field.
         existing_names = {c["name"]: c["id"] for c in cfg["skill_categories"]}
@@ -2370,30 +2612,27 @@ def load_config(profile):
                 changed = True
             s["category_id"] = existing_names[legacy_name]
             changed = True
+        for _s in cfg.get("subjects", []):
+            for _sch in _s.get("schedule", []):
+                if not _sch.get("id"):
+                    _sch["id"] = gen_id(10)
+                    changed = True
         if changed:
             save_config(profile, cfg)
         return cfg
     return None
 
-# ── Concurrent-write safety ──
-# Now that the server runs threaded (see app.run(..., threaded=True)),
-# a PC tab and a phone tab really can hit the same profile's save file
-# at the exact same moment (e.g. both stopping a timer within the same
-# second). Two protections against that:
-#   1. A per-profile lock serializes the actual read-modify-write cycle
-#      for that profile's files, so two concurrent requests can't
-#      interleave their writes into a torn/corrupted JSON file.
+# Concurrent-write safety. The server runs threaded, so two requests
+# can hit the same profile's save file at once. Two protections:
+#   1. A per-profile lock serializes the read-modify-write cycle, so
+#      writes can't interleave into a corrupted JSON file.
 #   2. Writes land in a temp file first, then atomically replace the
-#      real file (os.replace) — so even a mid-write crash/power loss
-#      can never leave a half-written, unreadable file behind; the
-#      previous complete version stays intact until the new one is
-#      fully flushed.
-# This does NOT solve "read-then-write" races across two DIFFERENT
-# requests (e.g. both read the same old state and each write back a
-# version missing the other's change) — that would need a bigger
-# redesign. For a solo person using their own phone + PC, that's an
-# extremely narrow window (sub-second) and not worth the complexity;
-# what actually matters day to day (no corrupted files) is covered.
+#      real one (os.replace), so a mid-write crash never leaves a
+#      half-written file behind.
+# Doesn't solve read-then-write races across two different requests
+# (both read old state, each writes back missing the other's change).
+# For a solo person on phone + PC that's a sub-second window, not
+# worth the complexity; what matters (no corrupted files) is covered.
 _profile_locks = defaultdict(threading.RLock)
 _profile_locks_guard = threading.Lock()
 
@@ -2402,25 +2641,43 @@ def _lock_for(profile):
         return _profile_locks[profile]
 
 def _atomic_write_json(path, data):
-    tmp_path = path.parent / (path.name + f".tmp{os.getpid()}")
-    with open(tmp_path, "w") as f:
+    tmp_path = path.parent / (path.name + f".tmp{os.getpid()}_{threading.get_ident()}")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    # On Windows os.replace raises PermissionError while another thread still
+    # has the target open for reading. Retry briefly instead of failing the
+    # whole request (which the app surfaced as a spurious "Request failed").
+    for attempt in range(8):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 def save_config(profile, d):
     d["_last_modified"] = now_str()
     with _lock_for(profile):
-        _atomic_write_json(config_path(profile), d)
+        p = config_path(profile)
+        if p.exists():
+            try:
+                shutil.copy(p, p.parent / (p.name + ".bak"))
+            except Exception:
+                pass
+        _atomic_write_json(p, d)
 
 def load_data(profile):
     p = data_path(profile)
-    if p.exists():
-        with open(p) as f:
-            data = json.load(f)
-    else:
-        data = {}
+    # Read under the same per-profile lock save_data writes under, so a read
+    # can never overlap (and block) the atomic replace of the file.
+    with _lock_for(profile):
+        if p.exists():
+            data = _load_json_file(p)
+        else:
+            data = {}
     return {key: data.get(key, value.copy() if isinstance(value, list) else value) for key, value in DEFAULT_DATA.items()}
 
 def save_data(profile, d):
@@ -2429,7 +2686,7 @@ def save_data(profile, d):
     with _lock_for(profile):
         # Keep one rolling backup of the previous version before overwriting.
         # This is a last-resort safety net independent of the undo/trash
-        # system below — if anything ever wipes data unexpectedly, the prior
+        # system below - if anything ever wipes data unexpectedly, the prior
         # state is still recoverable straight from disk.
         if p.exists():
             try:
@@ -2451,14 +2708,13 @@ def load_trash(profile):
     p = trash_path(profile)
     if p.exists():
         try:
-            with open(p) as f:
-                return json.load(f)
+            return _load_json_file(p)
         except Exception:
             return []
     return []
 
 def save_trash(profile, trash):
-    with open(trash_path(profile), "w") as f:
+    with open(trash_path(profile), "w", encoding="utf-8") as f:
         json.dump(trash[-TRASH_MAX_ENTRIES:], f, indent=2, ensure_ascii=False)
 
 def push_trash(profile, kind, record):
@@ -2486,6 +2742,7 @@ def ensure_profile(profile):
             "ml_prediction_enabled": True,
             "attendance_default_mode": "manual",  # "manual" | "mostly_present" | "mostly_absent"
             "attendance_autofill_last_date": "",
+            "active_theme": "dark",
             "difficulty_labels": {
                 "1": "Trivial", "2": "Very Easy", "3": "Easy", "4": "Fair",
                 "5": "Moderate", "6": "Challenging", "7": "Hard", "8": "Very Hard",
@@ -2497,6 +2754,43 @@ def ensure_profile(profile):
     dp = data_path(profile)
     if not dp.exists():
         save_data(profile, load_data(profile))
+
+def migrate_legacy_saves():
+    """One-time, idempotent upgrade of save files written by older
+    versions: rewrites any config/data/trash/.filemeta JSON that is not
+    valid UTF-8 as clean UTF-8 (keeping a .pre-utf8.bak copy of the
+    original next to it). Runs at startup; files already in UTF-8 are
+    never touched."""
+    try:
+        profiles = [p for p in SAVES_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")]
+    except Exception:
+        return
+    for pdir in profiles:
+        targets = [pdir / "config.json", pdir / "data.json", pdir / "trash.json"]
+        try:
+            targets += list((pdir / FILES_DIR_NAME).rglob(FILEMETA_NAME))
+        except Exception:
+            pass
+        for t in targets:
+            try:
+                if not t.exists():
+                    continue
+                raw = t.read_bytes()
+                try:
+                    raw.decode("utf-8")
+                    continue
+                except UnicodeDecodeError:
+                    pass
+                obj = json.loads(_decode_legacy_bytes(raw))
+                bak = t.parent / (t.name + ".pre-utf8.bak")
+                if not bak.exists():
+                    bak.write_bytes(raw)
+                _atomic_write_json(t, obj)
+                print(f"[migrate] converted {t} to UTF-8")
+            except Exception as e:
+                print(f"[migrate] could not convert {t}: {e}")
+
+migrate_legacy_saves()
 
 def pearson_correlation(x, y):
     """Compute Pearson correlation between two lists of numbers."""
@@ -2583,7 +2877,7 @@ def compute_ml_features(name, cfg, d):
 
 def build_exam_training_data(cfg, d):
     """Build (X, y) training pairs from the person's OWN exam history:
-    X = [self-study minutes logged for that subject up to the exam date,
+    X = [focus minutes logged for that subject up to the exam date,
          average difficulty of those sessions, attendance rate up to that
          date], y = the score they actually got. This is what lets the
          urgency model be genuinely personal instead of a fixed rule that
@@ -2616,7 +2910,7 @@ def build_exam_training_data(cfg, d):
 def _fit_score_model(X_train, y_train):
     """Fits a small linear regression (effort -> exam score) on the
     person's own history. Returns None if sklearn is unavailable or there
-    isn't enough data yet — callers fall back to a self-relative signal
+    isn't enough data yet - callers fall back to a self-relative signal
     in that case rather than a hardcoded universal threshold."""
     if len(X_train) < REC_MIN_EXAM_HISTORY_FOR_ML:
         return None
@@ -2642,7 +2936,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
 
     When there isn't enough exam history yet to train a model (cold
     start), falls back to comparing the subject's study time against the
-    person's OWN average across their other subjects — still personal,
+    person's OWN average across their other subjects - still personal,
     just not predictive yet."""
     subjects = {s["id"]: s for s in cfg.get("subjects", [])}
     if not subjects:
@@ -2650,7 +2944,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
 
     # ml_enabled comes from the person's Settings toggle (some people find
     # a running "predicted exam score" unhealthy to look at). When off,
-    # skip fitting a model entirely — every subject falls through to the
+    # skip fitting a model entirely - every subject falls through to the
     # self-relative cold-start heuristic below instead, which is never
     # framed as a predicted score.
     if ml_enabled:
@@ -2726,7 +3020,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
                     )
                 })
         elif next_exam is not None:
-            # Cold start — not enough exam history to train a model yet.
+            # Cold start - not enough exam history to train a model yet.
             # Compare against the person's own average instead of a fixed
             # global constant.
             if diff >= REC_COLD_START_MIN_DIFFICULTY and mins < avg_minutes_all * REC_COLD_START_STUDY_RATIO:
@@ -2738,7 +3032,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
                     "msg": (
                         f"{sname} is rated difficulty {diff}/10 and you've logged less study time than "
                         f"most of your other subjects ({mins // 60:.0f}h){when}. Not enough exam history yet "
-                        f"for a precise prediction — logging a few scored exams will sharpen this."
+                        f"for a precise prediction - logging a few scored exams will sharpen this."
                     )
                 })
 
@@ -2748,7 +3042,7 @@ def get_urgency_recommendations(cfg, d, ml_enabled=True):
 
 def get_pattern_insights(cfg, d):
     """Secondary, lower-priority insights: nearest-neighbor similarity
-    between subjects (kept from the original design) — "subject A looks
+    between subjects (kept from the original design) - "subject A looks
     like subject B in your history, and B is going better"."""
     features = compute_ml_features("", cfg, d)
     if len(features) < 2:
@@ -2825,24 +3119,33 @@ def get_spaced_repetition_recs(cfg, d):
             recs.append({
                 "type": "info", "source": "spaced_repetition",
                 "urgency": round((days_since - interval) / 5.0, 2),
-                "msg": f"You haven't studied {name} in {days_since} days — a quick review session could help retention (difficulty {diff}/10)."
+                "msg": f"You haven't studied {name} in {days_since} days - a quick review session could help retention (difficulty {diff}/10)."
             })
     return recs
 
+def _live_cfg(cfg):
+    """Config view without archived (deleted) subjects/skills, so they never
+    show up in recommendations while their history still counts elsewhere."""
+    live = dict(cfg)
+    live["subjects"] = [x for x in cfg.get("subjects", []) if not x.get("archived")]
+    live["skills"] = [x for x in cfg.get("skills", []) if not x.get("archived")]
+    return live
+
 def get_recommendations(cfg, d):
-    """Single entry point for all Smart Recommendations — replaces the
+    """Single entry point for all Smart Recommendations - replaces the
     old get_heuristic_recommendations()/get_ml_recommendations() split,
     which used to be called separately and merged in a way that produced
     duplicate/mislabeled entries. Everything here is either predictive
     (regression on the person's own exam history), self-relative
     (cold-start fallback), or a simple attendance-policy check."""
+    cfg = _live_cfg(cfg)
     ml_enabled = cfg.get("ml_prediction_enabled", True)
     recs = get_urgency_recommendations(cfg, d, ml_enabled=ml_enabled)
 
-    # Attendance-rate warning (kept — this is a fixed academic policy
+    # Attendance-rate warning (kept - this is a fixed academic policy
     # threshold, not a personalized guess, so a constant is appropriate
     # here unlike the old difficulty/study-time rule). teacher_absent
-    # records are excluded entirely — a cancelled/no-show lesson isn't
+    # records are excluded entirely - a cancelled/no-show lesson isn't
     # the student's attendance to be judged on.
     attendance_by_subject_events = defaultdict(int)
     attendance_by_subject_present = defaultdict(int)
@@ -2861,14 +3164,14 @@ def get_recommendations(cfg, d):
             if rate < REC_ATTENDANCE_RATE_WARNING_PCT:
                 recs.append({
                     "type": "warning", "source": "heuristic", "urgency": round((REC_ATTENDANCE_RATE_WARNING_PCT - rate) / 10, 2),
-                    "msg": f"Attendance for {s['name']} is {rate:.0f}% — below the {REC_ATTENDANCE_RATE_WARNING_PCT}% threshold."
+                    "msg": f"Attendance for {s['name']} is {rate:.0f}% - below the {REC_ATTENDANCE_RATE_WARNING_PCT}% threshold."
                 })
 
-    # No self-study logged at all for a subject yet
+    # No focus logged at all for a subject yet
     studied_subject_ids = {r.get("subject_id") for r in d.get("self_study", []) if r.get("subject_id")}
     for s in cfg.get("subjects", []):
         if s["id"] not in studied_subject_ids:
-            recs.append({"type": "info", "source": "heuristic", "urgency": 0.1, "msg": f"You haven't logged any self-study for {s['name']} yet."})
+            recs.append({"type": "info", "source": "heuristic", "urgency": 0.1, "msg": f"You haven't logged any focus time for {s['name']} yet."})
 
     if ml_enabled:
         recs += get_pattern_insights(cfg, d)
@@ -2883,8 +3186,10 @@ def list_profiles():
     profiles = []
     for d in sorted(SAVES_DIR.iterdir()):
         if d.is_dir() and (d / "config.json").exists():
-            with open(d / "config.json") as f:
-                cfg = json.load(f)
+            try:
+                cfg = _load_json_file(d / "config.json")
+            except Exception:
+                continue
             profiles.append({
                 "name": d.name,
                 "subjects": len(cfg.get("subjects", [])),
@@ -2921,6 +3226,28 @@ def delete_profile(name):
     shutil.rmtree(sd)
     return jsonify({"ok": True})
 
+@app.route("/api/profiles/<name>/rename", methods=["POST"])
+def rename_profile(name):
+    data = request.get_json(force=True)
+    new = (data.get("name") or "").strip()
+    if not new:
+        return jsonify({"error": "Profile name required"}), 400
+    if not new.replace("_", "").replace("-", "").isalnum():
+        return jsonify({"error": "Only letters, numbers, _ and - allowed"}), 400
+    src, dst = save_dir(name), save_dir(new)
+    if not src.exists():
+        return jsonify({"error": "Profile not found"}), 404
+    if new == name:
+        return jsonify({"ok": True, "name": name})
+    if dst.exists() and new.lower() != name.lower():
+        return jsonify({"error": "A profile with that name already exists"}), 409
+    with _lock_for(name):
+        src.rename(dst)
+    cfg = load_config(new)
+    cfg["profile_name"] = new
+    save_config(new, cfg)
+    return jsonify({"ok": True, "name": new})
+
 @app.route("/api/<name>/wipe", methods=["POST"])
 def wipe_data(name):
     """Reset all tracking data but keep config (subjects, years, etc.).
@@ -2937,9 +3264,8 @@ def wipe_data(name):
 
 @app.route("/api/<name>/undo_delete", methods=["POST"])
 def undo_delete(name):
-    """Restores the single most recently deleted self-study, attendance,
-    or exam record. Nothing fancier than a one-slot-at-a-time stack —
-    deleting again after an undo just pushes a new trash entry, it
+    """Restores the single most recently deleted focus, attendance,
+    or exam record. Nothing fancier than a one-slot-at-a-time stack - deleting again after an undo just pushes a new trash entry, it
     doesn't overwrite anything you already restored."""
     ensure_profile(name)
     trash = load_trash(name)
@@ -2996,8 +3322,8 @@ def update_config(name):
 # ── Data bundle ──
 # The frontend's loadData() has always called this exact path expecting
 # the combined self_study/attendance/exams/events/timers bundle
-# back — but this route never existed, so every call 404'd, was caught
-# silently, and cachedData stayed null forever. That's why self-study,
+# back - but this route never existed, so every call 404'd, was caught
+# silently, and cachedData stayed null forever. That's why focus,
 # attendance, and exam record lists, the dashboard's Today/
 # Recent Activity panels, and the Timetable's exam/event overlays all
 # appeared permanently empty even though records were being saved
@@ -3048,7 +3374,7 @@ def delete_year(name, year_id):
 
 # ── Exam Periods ──
 # A period (start_date/end_date) within an academic year during which
-# ONLY exams populate the timetable — regular C/TD/TP lessons for that
+# ONLY exams populate the timetable - regular C/TD/TP lessons for that
 # subject's recurring schedule are hidden for those dates. Exams can still
 # be added freely outside any exam period too; periods only ever narrow
 # what the *lesson* schedule shows, they never restrict exam creation.
@@ -3086,7 +3412,7 @@ def delete_exam_period(name, year_id, period_id):
 # ── Vacation Weeks ──
 # A date range (a day, several days, or weeks) within an academic year
 # with 0 scheduled lesson (C/TD/TP) hours. Skills CAN still be scheduled
-# during a vacation for self-study/self-skilling — only the subject
+# during a vacation for focus/self-skilling - only the subject
 # lesson schedule is suppressed, not skills or exams.
 @app.route("/api/<name>/years/<year_id>/vacation_weeks", methods=["POST"])
 def add_vacation_week(name, year_id):
@@ -3155,35 +3481,46 @@ def update_subject(name, sub_id):
 
 @app.route("/api/<name>/subjects/<sub_id>", methods=["DELETE"])
 def delete_subject(name, sub_id):
+    """Removes a subject from active use but KEEPS its history: focus
+    sessions, attendance and finished exams stay on the books, so the
+    study hours, XP, Nerds and mastery earned from them are retained.
+    The subject is archived (hidden from pickers/timetable/settings);
+    its schedule, scheduled exams and files are deleted. A subject with
+    no history at all is simply removed."""
     ensure_profile(name)
     cfg = load_config(name)
     subject = next((s for s in cfg.get("subjects", []) if s["id"] == sub_id), None)
-    folder_rel = _reconcile_item_folder(name, cfg, subject, "subject") if subject else None
-    cfg["subjects"] = [s for s in cfg.get("subjects", []) if s["id"] != sub_id]
-    save_config(name, cfg)
-    # Cascade delete: previously, records referencing this subject_id
-    # were left orphaned in data.json (showing as "Unknown" everywhere
-    # and silently inflating/skewing stats). Now everything tied to the
-    # subject — self-study, attendance, exams — is removed with it,
-    # matching the "deleting it deletes everything associated" warning
-    # shown in the UI before this call is made.
+    if not subject:
+        return jsonify({"ok": True})
+    folder_rel = None if subject.get("archived") else _reconcile_item_folder(name, cfg, subject, "subject")
     d = load_data(name)
-    d["self_study"] = [r for r in d.get("self_study", []) if r.get("subject_id") != sub_id]
-    d["attendance"] = [r for r in d.get("attendance", []) if r.get("subject_id") != sub_id]
-    d["exams"] = [r for r in d.get("exams", []) if r.get("subject_id") != sub_id]
+    has_history = (
+        any(r.get("subject_id") == sub_id for r in d.get("self_study", []))
+        or any(r.get("subject_id") == sub_id for r in d.get("attendance", []))
+        or any(e.get("subject_id") == sub_id and e.get("status") != "scheduled" for e in d.get("exams", []))
+    )
+    d["exams"] = [e for e in d.get("exams", []) if not (
+        e.get("subject_id") == sub_id and (e.get("status") == "scheduled" or not has_history))]
+    if has_history:
+        subject["archived"] = True
+        subject["archived_at"] = now_str()
+        subject["schedule"] = []
+        subject["folder"] = None
+    else:
+        cfg["subjects"] = [s for s in cfg.get("subjects", []) if s["id"] != sub_id]
     save_data(name, d)
+    save_config(name, cfg)
     if folder_rel:
         fd = files_dir(name) / folder_rel
         if fd.exists():
             shutil.rmtree(fd, ignore_errors=True)
-            # Clean up now-empty category folder, if any.
             try:
                 fd.parent.relative_to(files_dir(name))
                 if fd.parent != files_dir(name) and fd.parent.exists() and not any(fd.parent.iterdir()):
                     fd.parent.rmdir()
             except Exception:
                 pass
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "archived": has_history})
 
 # ── Skills & Skill Categories ──
 @app.route("/api/<name>/skill_categories", methods=["POST"])
@@ -3208,7 +3545,7 @@ def delete_skill_category(name, cat_id):
     cfg = load_config(name)
     cfg["skill_categories"] = [c for c in cfg.get("skill_categories", []) if c["id"] != cat_id]
     for s in cfg.get("skills", []):
-        if s.get("category_id") == cat_id:
+        if s.get("category_id") == cat_id and not s.get("archived"):
             s["category_id"] = ""
             _reconcile_item_folder(name, cfg, s, "skill")
     save_config(name, cfg)
@@ -3218,9 +3555,9 @@ def delete_skill_category(name, cat_id):
 def add_subject_category(name):
     """Subject categories (e.g. 'Mathematics' holding both 'Algebra' and
     'Analysis') are a separate list from skill_categories, but nothing
-    stops the SAME real-world topic being used as both — 'Mathematics'
+    stops the SAME real-world topic being used as both - 'Mathematics'
     as a subject category (uni coursework) and again as a skill category
-    (e.g. ML self-study) are just two independently-named records that
+    (e.g. ML focus) are just two independently-named records that
     happen to share a label; there's no forced linking between them."""
     ensure_profile(name)
     data = request.get_json(force=True)
@@ -3238,14 +3575,13 @@ def add_subject_category(name):
 
 @app.route("/api/<name>/subject_categories/<cat_id>", methods=["DELETE"])
 def delete_subject_category(name, cat_id):
-    """Deleting a category un-categorizes (never deletes) its subjects —
-    each affected subject's category_id is cleared and its folder is
+    """Deleting a category un-categorizes (never deletes) its subjects - each affected subject's category_id is cleared and its folder is
     reconciled back up to the top level."""
     ensure_profile(name)
     cfg = load_config(name)
     cfg["subject_categories"] = [c for c in cfg.get("subject_categories", []) if c["id"] != cat_id]
     for s in cfg.get("subjects", []):
-        if s.get("category_id") == cat_id:
+        if s.get("category_id") == cat_id and not s.get("archived"):
             s["category_id"] = ""
             _reconcile_item_folder(name, cfg, s, "subject")
     save_config(name, cfg)
@@ -3263,7 +3599,7 @@ def add_skill(name):
         "color": data.get("color", "#e91e63"),
         # Skills can now optionally carry their own recurring schedule
         # blocks (same shape as subject schedule), so they can be placed
-        # on the Timetable — e.g. during a vacation week, when lessons
+        # on the Timetable - e.g. during a vacation week, when lessons
         # are suppressed but self-skilling sessions still make sense.
         "schedule": data.get("schedule", []),
         "folder": None,
@@ -3289,15 +3625,31 @@ def update_skill(name, skill_id):
 
 @app.route("/api/<name>/skills/<skill_id>", methods=["DELETE"])
 def delete_skill(name, skill_id):
+    """Removes a skill from active use but KEEPS its history: focus
+    sessions, attendance and finished exams stay on the books, so the
+    study hours, XP, Nerds and mastery earned from them are retained.
+    The skill is archived (hidden from pickers/timetable/settings);
+    its schedule, scheduled exams and files are deleted. A skill with
+    no history at all is simply removed."""
     ensure_profile(name)
     cfg = load_config(name)
     skill = next((s for s in cfg.get("skills", []) if s["id"] == skill_id), None)
-    folder_rel = _reconcile_item_folder(name, cfg, skill, "skill") if skill else None
-    cfg["skills"] = [s for s in cfg.get("skills", []) if s["id"] != skill_id]
-    save_config(name, cfg)
+    if not skill:
+        return jsonify({"ok": True})
+    folder_rel = None if skill.get("archived") else _reconcile_item_folder(name, cfg, skill, "skill")
     d = load_data(name)
-    d["self_study"] = [r for r in d.get("self_study", []) if r.get("skill_id") != skill_id]
+    has_history = (
+        any(r.get("skill_id") == skill_id for r in d.get("self_study", []))
+    )
+    if has_history:
+        skill["archived"] = True
+        skill["archived_at"] = now_str()
+        skill["schedule"] = []
+        skill["folder"] = None
+    else:
+        cfg["skills"] = [s for s in cfg.get("skills", []) if s["id"] != skill_id]
     save_data(name, d)
+    save_config(name, cfg)
     if folder_rel:
         fd = files_dir(name) / folder_rel
         if fd.exists():
@@ -3308,9 +3660,9 @@ def delete_skill(name, skill_id):
                     fd.parent.rmdir()
             except Exception:
                 pass
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "archived": has_history})
 
-# ── Self-Study Records ──
+# ── Focus Records ──
 @app.route("/api/<name>/self_study", methods=["POST"])
 def add_self_study(name):
     ensure_profile(name)
@@ -3321,9 +3673,9 @@ def add_self_study(name):
     # Timetable time-of-day anchor (see buildDayEvents in app.js, which
     # for a record with no `segments` treats `created` as the session's
     # END and works backward by `minutes` to find its start). The time
-    # typed into the Add Self-Study form is the START time as the person
+    # typed into the Add Focus form is the START time as the person
     # understands it ("I started studying at 14:00"), so it has to be
-    # converted to that same END-anchored `created` here — storing it
+    # converted to that same END-anchored `created` here - storing it
     # directly as `created` (the old behavior) silently mislabeled every
     # manual entry's start time as its end time, shifting it later than
     # it should be on the Timetable. Falls back to the real current time
@@ -3349,7 +3701,7 @@ def add_self_study(name):
         "difficulty": data.get("difficulty", 5),
         "status": data.get("status", "Done"),  # Done, Partial, Skipped
         "note": data.get("note", ""),
-        # Which plant this session grows — explicit selection wins, else
+        # Which plant this session grows - explicit selection wins, else
         # falls back to whichever plant most recently grew, else a
         # random owned plant. Never "all of them," never silently none
         # while any plant is owned. See _resolve_growth_plant_id().
@@ -3362,8 +3714,10 @@ def add_self_study(name):
     reconcile_nerds_ledger(cfg, d)
     save_data(name, d)
     xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
-    xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
-    nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
+    _streak_cur, _ = compute_streak(d)
+    theme_xp_mult, theme_nerds_mult = compute_theme_session_multipliers(cfg, record, _streak_cur)
+    xp_earned = round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult * theme_xp_mult, 1)
+    nerds_earned = round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult * theme_nerds_mult, 1)
     return jsonify({"ok": True, "record": record, "xp_earned": xp_earned, "nerds_earned": nerds_earned})
 
 @app.route("/api/<name>/self_study/<rec_id>", methods=["PUT"])
@@ -3381,7 +3735,7 @@ def update_self_study(name, rec_id):
     if updated_record:
         cfg = load_config(name)
         # The old gain entry (based on the pre-edit minutes/difficulty/
-        # status) is now stale — drop it and log a fresh one from the
+        # status) is now stale - drop it and log a fresh one from the
         # updated record, rather than leaving a wrong amount on the books.
         _remove_ledger_entries(d, "self_study", rec_id)
         _log_self_study_gain(cfg, d, updated_record)
@@ -3411,7 +3765,8 @@ def add_attendance(name):
         "id": gen_id(12),
         "date": data.get("date", today_str()),
         "subject_id": data.get("subject_id", ""),
-        "type": data.get("type", "C"),  # C=Lesson, TD=Practical Work, TP=Lab
+        "type": data.get("type", "C"),  # C=Lesson, TD=Guided Work, TP=Lab
+        "slot_id": data.get("slot_id", ""),
         "event_label": data.get("event_label", ""),  # e.g. "TD1", "Lab 3"
         "status": data.get("status", "present"),  # present, partial, absent, teacher_absent
         "minutes": int(data.get("minutes", 0)),
@@ -3419,6 +3774,10 @@ def add_attendance(name):
         "created": now_str()
     }
     d = load_data(name)
+    d["attendance"] = [r for r in d["attendance"] if not (
+        r.get("subject_id") == record["subject_id"] and r.get("date") == record["date"]
+        and r.get("type") == record["type"]
+        and (r.get("slot_id", "") == record["slot_id"] or (record["slot_id"] and not r.get("slot_id"))))]
     d["attendance"].append(record)
     reconcile_nerds_ledger(load_config(name), d)
     save_data(name, d)
@@ -3454,7 +3813,7 @@ def delete_attendance(name, rec_id):
 # Instead of manually marking every single attended class, the person
 # picks whether they're mostly present or mostly absent, and this fills
 # in the *expected* status for every past scheduled lesson automatically
-# — leaving them to only log the exceptions (the opposite status) by
+# - leaving them to only log the exceptions (the opposite status) by
 # hand. Off by default ("manual"), matching the old fully-manual flow.
 def _daterange(start_str, end_str):
     start = datetime.strptime(start_str, "%Y-%m-%d")
@@ -3470,6 +3829,48 @@ def _date_in_range(date_str, start, end):
         return False
     return start <= date_str <= end
 
+def _slot_applies_on_date(sch, date_str):
+    # Versioned slots: an edited/removed slot is closed with effective_to and
+    # a changed one is re-created with effective_from, so past weeks keep the
+    # schedule they actually had.
+    ef, et = sch.get("effective_from"), sch.get("effective_to")
+    if ef and date_str < ef:
+        return False
+    if et and date_str > et:
+        return False
+    rec = sch.get("recurrence") or "weekly"
+    anchor = sch.get("anchor_date")
+    if rec == "weekly" or not anchor:
+        return True
+    interval = {"biweekly": 2, "triweekly": 3, "monthly": 4}.get(rec, 1)
+    try:
+        def monday(s):
+            dt = datetime.strptime(s, "%Y-%m-%d")
+            return dt - __import__("datetime").timedelta(days=dt.weekday())
+        weeks = (monday(date_str) - monday(anchor)).days // 7
+    except Exception:
+        return True
+    return weeks >= 0 and weeks % interval == 0
+
+
+def _global_holiday_on(cfg, date_str):
+    """True if date_str falls in any GLOBAL holiday (all academic years;
+    'yearly' ones repeat on the same month/day every year)."""
+    md = date_str[5:]
+    for h in cfg.get("global_holidays", []):
+        s = h.get("start_date") or ""
+        e = h.get("end_date") or s
+        if not s:
+            continue
+        if h.get("yearly"):
+            sm, em = s[5:], e[5:]
+            if (sm <= md <= em) if sm <= em else (md >= sm or md <= em):
+                return True
+        elif s <= date_str <= e:
+            return True
+    return False
+
+
 def autofill_attendance_for_profile(name):
     """Bounded to dates within each subject's assigned academic year, and
     skips dates suppressed by that year's exam periods/vacation weeks,
@@ -3483,20 +3884,24 @@ def autofill_attendance_for_profile(name):
     default_status = "present" if mode == "mostly_present" else "absent"
 
     d = load_data(name)
-    existing = set((r.get("subject_id"), r.get("date"), r.get("type")) for r in d.get("attendance", []))
+    existing = set((r.get("subject_id"), r.get("date"), r.get("type"), r.get("slot_id", "")) for r in d.get("attendance", []))
+    legacy_existing = set((r.get("subject_id"), r.get("date"), r.get("type")) for r in d.get("attendance", []) if not r.get("slot_id"))
 
     years_by_id = {y["id"]: y for y in cfg.get("academic_years", [])}
     yesterday = (datetime.strptime(today_str(), "%Y-%m-%d") - __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
     last_filled = cfg.get("attendance_autofill_last_date", "")
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     created = 0
+    now_dt = datetime.now()
 
     for s in cfg.get("subjects", []):
+        if s.get("archived"):
+            continue
         yr = years_by_id.get(s.get("year_id", ""))
         if not yr or not yr.get("start_date") or not yr.get("end_date") or not s.get("schedule"):
             continue
-        range_start = max(yr["start_date"], last_filled) if last_filled else yr["start_date"]
-        range_end = min(yesterday, yr["end_date"])
+        range_start = yr["start_date"]
+        range_end = min(today_str(), yr["end_date"])
         if range_start > range_end:
             continue
         for date_str in _daterange(range_start, range_end):
@@ -3504,14 +3909,25 @@ def autofill_attendance_for_profile(name):
                 continue
             if any(_date_in_range(date_str, v.get("start_date"), v.get("end_date")) for v in yr.get("vacation_weeks", [])):
                 continue
+            if _global_holiday_on(cfg, date_str):
+                continue
             dow = day_names[datetime.strptime(date_str, "%Y-%m-%d").weekday()]
             for sch in s.get("schedule", []):
                 if sch.get("day") != dow:
                     continue
-                sch_type = sch.get("type", "C")
-                key = (s["id"], date_str, sch_type)
-                if key in existing:
+                if not _slot_applies_on_date(sch, date_str):
                     continue
+                sch_type = sch.get("type", "C")
+                key = (s["id"], date_str, sch_type, sch.get("id", ""))
+                if key in existing or (s["id"], date_str, sch_type) in legacy_existing:
+                    continue
+                if date_str == today_str():
+                    try:
+                        eh0, em0 = (sch.get("end") or sch.get("start") or "09:00").split(":")
+                        if int(eh0) * 60 + int(em0) > now_dt.hour * 60 + now_dt.minute:
+                            continue
+                    except Exception:
+                        continue
                 try:
                     sh, sm = (sch.get("start") or "08:00").split(":")
                     eh, em = (sch.get("end") or sch.get("start") or "09:00").split(":")
@@ -3520,7 +3936,8 @@ def autofill_attendance_for_profile(name):
                     minutes = DEFAULT_ATTENDANCE_MINUTES_FALLBACK
                 d.setdefault("attendance", []).append({
                     "id": gen_id(12), "date": date_str, "subject_id": s["id"],
-                    "type": sch_type, "event_label": f"{s['name']} {sch_type} (auto)",
+                    "type": sch_type, "slot_id": sch.get("id", ""),
+                    "event_label": f"{s['name']} {sch_type}{' ' + sch['part'] if sch.get('part') else ''} (auto)",
                     "status": default_status, "minutes": minutes,
                     "note": "Auto-filled by default attendance mode", "created": now_str()
                 })
@@ -3643,7 +4060,7 @@ def delete_event(name, event_id):
 
 # ── Timer (single shared, server-authoritative "active timer" per profile) ──
 # Exactly ONE timer can be running/paused/awaiting-rating per profile at
-# a time — this is what makes starting a timer from a phone and a PC at
+# a time - this is what makes starting a timer from a phone and a PC at
 # the same moment safe: the SECOND device to hit /timer/start is handed
 # back the FIRST device's already-active timer instead of creating a
 # competing one, so a session can never be double-logged. Every device
@@ -3651,9 +4068,9 @@ def delete_event(name, event_id):
 # actually driving it, and pause/resume/stop/skip all operate on that
 # one shared record regardless of which device sent the request.
 # A timer left "running"/"paused"/"awaiting_rating" for longer than this
-# is almost certainly an orphan — a session that outlived a crash, a
+# is almost certainly an orphan - a session that outlived a crash, a
 # killed process, a laptop put to sleep for days, or leftover test data
-# — rather than a real multi-day study session. Auto-cancelling it here
+# - rather than a real multi-day study session. Auto-cancelling it here
 # is what stops a stale timer from silently reappearing on next load
 # with controls that look normal but don't behave like a fresh session
 # (see the "timer showed 30min planned with working-looking buttons on
@@ -3674,7 +4091,7 @@ def _free_timer_ensure_open_segment(t):
     """A 'running' free-mode timer with no OPEN study segment is broken:
     the widget shows Pause/Stop/Cancel (because status says running) but
     the clock can never advance, since paintTimerNumbers() has no open
-    segment to compute elapsed time from — exactly the 'buttons show but
+    segment to compute elapsed time from - exactly the 'buttons show but
     stuck at 0:00, untouched' bug. This can happen if a pause/resume
     cycle got interrupted (crash, killed process, browser closed mid-
     request) leaving segments in an inconsistent state. Self-heals by
@@ -3706,7 +4123,7 @@ def get_active_timer(d):
     if len(active) > 1:
         # Self-heal: legacy data (from before this model existed) or a
         # rare edge case could in theory leave more than one "active"
-        # timer on disk — keep only the most recently started one and
+        # timer on disk - keep only the most recently started one and
         # quietly cancel the rest rather than ever showing two.
         active.sort(key=lambda t: t.get("started_at", ""), reverse=True)
         for stale in active[1:]:
@@ -3714,8 +4131,7 @@ def get_active_timer(d):
     return active[0]
 
 def _get_active_timer_and_advance(d):
-    """Used by /timer/active. Returns (timer_or_None, changed) —
-    `changed` is True only if get_active_timer's self-heal or
+    """Used by /timer/active. Returns (timer_or_None, changed) - `changed` is True only if get_active_timer's self-heal or
     _pomodoro_ensure_current's phase catch-up actually mutated
     something, so the caller can skip an unnecessary save_data() on
     the common case where nothing needed fixing."""
@@ -3754,13 +4170,13 @@ def _pomodoro_phase_minutes(config, step):
 
 def _pomodoro_ensure_current(timer):
     """Walks the timer's Pomodoro phase forward past any phases that
-    have already fully elapsed in real time — matters because devices
+    have already fully elapsed in real time - matters because devices
     only poll periodically (or might be closed entirely for a while),
     so the phase needs to 'catch up' to the actual current time rather
     than staying stuck wherever it was last observed. When the final
     work phase's time is up, the timer moves to 'awaiting_rating'
-    instead of vanishing — someone still needs to confirm the session
-    (difficulty/status/note) before it becomes a real self-study record,
+    instead of vanishing - someone still needs to confirm the session
+    (difficulty/status/note) before it becomes a real focus record,
     so it waits there for whichever device next stops it."""
     if timer.get("mode") != "pomodoro" or timer.get("status") != "running":
         return
@@ -3800,7 +4216,7 @@ def _pomodoro_ensure_current(timer):
 
 def serialize_timer_for_client(timer):
     """Everything a client needs to render the timer widget/mini-badge
-    without doing any of its own bookkeeping — all derived server-side
+    without doing any of its own bookkeeping - all derived server-side
     so two devices can never compute a slightly different answer.
     `server_now` lets each client compute its own countdown/elapsed
     display between polls without assuming its clock matches the
@@ -3899,7 +4315,7 @@ def timer_start(name):
     data = request.get_json(force=True)
     # The whole check-then-create is wrapped in this profile's lock so
     # two devices hitting Start within the same instant can't BOTH see
-    # "nothing active" and both create a timer — one of them always
+    # "nothing active" and both create a timer - one of them always
     # loses the race and is hande the winner's timer instead.
     with _lock_for(name):
         d = load_data(name)
@@ -3941,7 +4357,7 @@ def timer_start(name):
 
 @app.route("/api/<name>/timer/active")
 def timer_active(name):
-    """Single-shot fetch of the current active timer (if any) — called on
+    """Single-shot fetch of the current active timer (if any) - called on
     app load, on switching profiles, and right after this same window's
     own start/pause/resume/stop actions. Not polled on a loop; this is a
     purely local, single-window desktop app now, so there's nothing else
@@ -3961,7 +4377,7 @@ def timer_pause(name, timer_id):
         d = load_data(name)
         t = next((x for x in d["timers"] if x["id"] == timer_id), None)
         if not t or t.get("status") != "running" or t.get("mode") != "free":
-            return jsonify({"error": "No running free timer to pause — it may have already been stopped from another device."}), 409
+            return jsonify({"error": "No running free timer to pause - it may have already been stopped from another device."}), 409
         _timer_close_open_segment(t)
         _timer_open_segment(t, "break")
         t["status"] = "paused"
@@ -3975,7 +4391,7 @@ def timer_resume(name, timer_id):
         d = load_data(name)
         t = next((x for x in d["timers"] if x["id"] == timer_id), None)
         if not t or t.get("status") != "paused":
-            return jsonify({"error": "No paused timer to resume — it may have already been stopped from another device."}), 409
+            return jsonify({"error": "No paused timer to resume - it may have already been stopped from another device."}), 409
         _timer_close_open_segment(t)
         _timer_open_segment(t, "study")
         t["status"] = "running"
@@ -3984,7 +4400,7 @@ def timer_resume(name, timer_id):
 
 @app.route("/api/<name>/timer/<timer_id>/pomodoro_advance", methods=["POST"])
 def timer_pomodoro_advance(name, timer_id):
-    """Manual 'Skip Phase' — credits partial work-phase progress if the
+    """Manual 'Skip Phase' - credits partial work-phase progress if the
     skipped phase was a work block, then jumps straight to the next
     phase (or ends the sequence) regardless of how much time was left."""
     ensure_profile(name)
@@ -3992,7 +4408,7 @@ def timer_pomodoro_advance(name, timer_id):
         d = load_data(name)
         t = next((x for x in d["timers"] if x["id"] == timer_id), None)
         if not t or t.get("mode") != "pomodoro" or t.get("status") != "running":
-            return jsonify({"error": "No running Pomodoro timer to advance — it may have already been stopped from another device."}), 409
+            return jsonify({"error": "No running Pomodoro timer to advance - it may have already been stopped from another device."}), 409
         _pomodoro_ensure_current(t)
         if t.get("status") != "running":
             save_data(name, d)
@@ -4025,19 +4441,19 @@ def timer_pomodoro_advance(name, timer_id):
 
 @app.route("/api/<name>/timer/<timer_id>/stop", methods=["POST"])
 def timer_stop(name, timer_id):
-    """Finalizes the shared timer — from WHICHEVER device sends this
+    """Finalizes the shared timer - from WHICHEVER device sends this
     first. Minutes/segments are read from the SERVER's own record, not
     trusted from the client, so two devices can never submit conflicting
     numbers for the same session; whichever request loses a simultaneous
     double-tap just gets 'already stopped' back instead of creating a
-    second, duplicate self-study record."""
+    second, duplicate focus record."""
     ensure_profile(name)
     data = request.get_json(force=True)
     with _lock_for(name):
         d = load_data(name)
         t = next((x for x in d["timers"] if x["id"] == timer_id), None)
         if not t or t.get("status") not in ("running", "paused", "awaiting_rating"):
-            return jsonify({"error": "This session was already stopped — maybe from another device."}), 409
+            return jsonify({"error": "This session was already stopped - maybe from another device."}), 409
         _pomodoro_ensure_current(t)
         _timer_close_open_segment(t)
         t["status"] = "completed"
@@ -4078,10 +4494,12 @@ def timer_stop(name, timer_id):
 
         xp_earned = 0.0
         nerds_earned = 0.0
+        _streak_cur, _ = compute_streak(d)
         for record in created_records:
             xp_mult, nerds_mult = compute_plant_session_multipliers(d, record)
-            xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult, 1)
-            nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult, 1)
+            theme_xp_mult, theme_nerds_mult = compute_theme_session_multipliers(cfg, record, _streak_cur)
+            xp_earned += round(compute_self_study_record_xp(record["minutes"], record["difficulty"], record["status"]) * xp_mult * theme_xp_mult, 1)
+            nerds_earned += round(compute_self_study_record_nerds(record["minutes"], record["difficulty"], record["status"]) * nerds_mult * theme_nerds_mult, 1)
         return jsonify({
             "ok": True, "xp_earned": round(xp_earned, 1), "nerds_earned": round(nerds_earned, 1),
             "records_created": len(created_records), "actual_minutes": actual_minutes,
@@ -4090,7 +4508,7 @@ def timer_stop(name, timer_id):
 
 @app.route("/api/<name>/timer/<timer_id>/cancel", methods=["POST"])
 def timer_cancel(name, timer_id):
-    """Abandons the active session without logging any study time — e.g.
+    """Abandons the active session without logging any study time - e.g.
     started by mistake, or on the wrong subject. Reachable from any
     device, same as everything else here."""
     ensure_profile(name)
@@ -4098,7 +4516,7 @@ def timer_cancel(name, timer_id):
         d = load_data(name)
         t = next((x for x in d["timers"] if x["id"] == timer_id), None)
         if not t or t.get("status") not in ("running", "paused", "awaiting_rating"):
-            return jsonify({"error": "Nothing to cancel — it may have already been stopped from another device."}), 409
+            return jsonify({"error": "Nothing to cancel - it may have already been stopped from another device."}), 409
         t["status"] = "cancelled"
         t["completed_at"] = now_str()
         save_data(name, d)
@@ -4117,7 +4535,7 @@ def delete_timer(name, timer_id):
 # A freeform mini file-manager rooted at each subject/skill's own
 # folder (see _item_root_dir / _reconcile_item_folder above). Every
 # route below takes an optional `path` (query param on GET, JSON body
-# field on POST) — a '/'-separated path RELATIVE to that root — letting
+# field on POST) - a '/'-separated path RELATIVE to that root - letting
 # the person create/rename/move/delete folders and files anywhere
 # inside their subject/skill's own space, exactly like a normal file
 # manager. `path` empty/omitted always means "the root itself".
@@ -4131,6 +4549,8 @@ def _file_kind(filename):
         return "video"
     if ext in PDF_EXTENSIONS:
         return "pdf"
+    if ext in EPUB_EXTENSIONS:
+        return "epub"
     if ext in IMAGE_EXTENSIONS:
         return "image"
     if ext in (".md", ".markdown"):
@@ -4188,8 +4608,7 @@ def filetree_mkdir(name, ref_type, ref_id):
 @app.route("/api/<name>/filetree/<ref_type>/<ref_id>/newfile", methods=["POST"])
 def filetree_newfile(name, ref_type, ref_id):
     """Creates a brand-new empty (or pre-filled) text/markdown/code file
-    directly, without needing to upload one from outside the app first —
-    the counterpart to mkdir for files instead of folders."""
+    directly, without needing to upload one from outside the app first - the counterpart to mkdir for files instead of folders."""
     ensure_profile(name)
     data = request.get_json(force=True)
     root = _item_root_dir(name, ref_type, ref_id)
@@ -4203,7 +4622,7 @@ def filetree_newfile(name, ref_type, ref_id):
         return jsonify({"error": "Enter a filename"}), 400
     safe_name = _sanitize_file_name(raw_name)
     if Path(safe_name).suffix.lower() not in TEXT_EXTENSIONS:
-        return jsonify({"error": "Only text/markdown/code file types can be created here — upload anything else instead."}), 400
+        return jsonify({"error": "Only text/markdown/code file types can be created here - upload anything else instead."}), 400
     dest = parent / safe_name
     if dest.exists():
         return jsonify({"error": "A file with that name already exists here"}), 409
@@ -4213,7 +4632,7 @@ def filetree_newfile(name, ref_type, ref_id):
 @app.route("/api/<name>/filetree/<ref_type>/<ref_id>/read_text")
 def filetree_read_text(name, ref_type, ref_id):
     """Reads a text/markdown/code file's raw content for the in-browser
-    editor — separate from /download so the editor gets a plain JSON
+    editor - separate from /download so the editor gets a plain JSON
     string (with clear error handling) rather than a raw byte stream."""
     ensure_profile(name)
     root = _item_root_dir(name, ref_type, ref_id)
@@ -4227,7 +4646,7 @@ def filetree_read_text(name, ref_type, ref_id):
     try:
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return jsonify({"error": "This file isn't plain text (or uses an unsupported encoding) — it can't be opened in the editor."}), 400
+        return jsonify({"error": "This file isn't plain text (or uses an unsupported encoding) - it can't be opened in the editor."}), 400
     return jsonify({"content": content})
 
 @app.route("/api/<name>/filetree/<ref_type>/<ref_id>/write_text", methods=["PUT"])
@@ -4268,6 +4687,18 @@ def filetree_rename(name, ref_type, ref_id):
     new_name = _sanitize_folder_name(data.get("new_name", "")) if is_dir else _sanitize_file_name(data.get("new_name", ""))
     if not new_name:
         return jsonify({"error": "Invalid name"}), 400
+    # A file renamed to a bare name with NO extension at all (person just
+    # forgot it - "The Great Gatsby" instead of "The Great Gatsby.pdf")
+    # used to silently strip the extension, which broke the file: it
+    # could no longer be recognized as a PDF/audio/video/etc, so it
+    # wouldn't open - and worse, the person had no obvious way back in
+    # since the broken file still LOOKED like a normal list entry. Rather
+    # than let that happen, quietly keep the old extension whenever the
+    # new name has none. If they explicitly typed a DIFFERENT extension
+    # (the new name has a dot), that's a deliberate choice and is
+    # respected as-is.
+    if not is_dir and "." not in new_name and "." in target.name:
+        new_name = new_name + target.suffix
     dest = target.parent / new_name
     if dest.exists() and dest != target:
         return jsonify({"error": "Something with that name already exists here"}), 409
@@ -4405,9 +4836,9 @@ def filetree_put_meta(name, ref_type, ref_id):
         return jsonify({"error": "File not found"}), 404
     meta = _read_filemeta(target.parent)
     entry = meta.get(target.name, {})
-    # Only merge recognized fields — an unbounded free-form PUT would
+    # Only merge recognized fields - an unbounded free-form PUT would
     # let a stray client bug wedge junk into the sidecar forever.
-    for field in ("notes", "video_notes", "pdf_notes", "pdf_last_page", "audio_last_position"):
+    for field in ("notes", "video_notes", "pdf_notes", "pdf_last_page", "pdf_last_offset", "pdf_zoom", "audio_last_position", "epub_last_location"):
         if field in data:
             entry[field] = data[field]
     entry["updated"] = now_str()
@@ -4417,7 +4848,7 @@ def filetree_put_meta(name, ref_type, ref_id):
 
 @app.route("/api/<name>/filetree/<ref_type>/<ref_id>/siblings")
 def filetree_siblings(name, ref_type, ref_id):
-    """All audio files in the SAME folder as `path` — powers the
+    """All audio files in the SAME folder as `path` - powers the
     persistent audio player's 'more from this folder' dropdown without
     the person needing to leave the player and reopen the explorer."""
     ensure_profile(name)
@@ -4435,7 +4866,7 @@ def filetree_siblings(name, ref_type, ref_id):
             items.append({"name": entry.name, "path": str((folder.relative_to(root) / entry.name)) if folder != root else entry.name})
     return jsonify({"folder_path": str(folder.relative_to(root)) if folder != root else "", "items": items})
 
-# ── Legacy flat file routes — kept as thin wrappers over the tree API so
+# ── Legacy flat file routes - kept as thin wrappers over the tree API so
 # any old bookmarked/cached link still resolves to the file at the root
 # of the subject/skill's folder instead of 404ing outright. ──
 @app.route("/api/<name>/files/<ref_type>/<ref_id>", methods=["POST"])
@@ -4495,21 +4926,21 @@ def ml_recommendations(name):
 # attendance/exam records every time this is requested, rather
 # than being persisted as a mutable counter. A persisted counter would
 # drift out of sync the moment someone edits or deletes a record after
-# the fact (e.g. deletes a self-study session after already being
-# awarded XP for it) — recomputing from source data is slightly more
+# the fact (e.g. deletes a focus session after already being
+# awarded XP for it) - recomputing from source data is slightly more
 # work per request but can never be wrong.
 
 def xp_for_level(level):
-    """XP required to go from `level` to `level+1`. Uncapped — there is
-    no maximum level — but each level costs progressively more XP than
+    """XP required to go from `level` to `level+1`. Uncapped - there is
+    no maximum level - but each level costs progressively more XP than
     the last, the same general shape as long-run MMO leveling curves
     (e.g. League of Legends past level 30): steady, always a bit more
     per level, never actually capped.
 
     Tuned (via XP_CURVE_* in the Control Panel) so early levels come
     fast (level 2 within the first study session) and mid-game unlocks
-    land at realistic usage milestones — roughly: Lv5 ~7h, Lv10 ~34h,
-    Lv15 ~82h, Lv20 ~150h, Lv30 ~375h, Lv50 ~1160h — with high levels
+    land at realistic usage milestones - roughly: Lv5 ~7h, Lv10 ~34h,
+    Lv15 ~82h, Lv20 ~150h, Lv30 ~375h, Lv50 ~1160h - with high levels
     (80-125+) as a genuine multi-year prestige tail rather than a wall
     nobody reaches."""
     return int(XP_CURVE_BASE * (level ** XP_CURVE_EXPONENT)) + XP_CURVE_FLAT
@@ -4532,9 +4963,9 @@ def _self_study_status_mult(status):
     return SELF_STUDY_STATUS_MULT_SKIPPED
 
 def compute_self_study_record_xp(minutes, difficulty, status):
-    """XP for a single self-study record: minutes * (1 + difficulty /
+    """XP for a single focus record: minutes * (1 + difficulty /
     SELF_STUDY_DIFFICULTY_DIVISOR) * a status multiplier. A harder
-    subject (higher difficulty) earns more per minute — e.g. at
+    subject (higher difficulty) earns more per minute - e.g. at
     difficulty 5/10 that's 1.25 XP/min, at difficulty 10/10 it's 1.5
     XP/min, both at status Done (with the default divisor of 20)."""
     mult = _self_study_status_mult(status)
@@ -4542,13 +4973,15 @@ def compute_self_study_record_xp(minutes, difficulty, status):
 
 def compute_total_xp(d, cfg=None):
     xp = 0.0
+    _theme_streak, _ = compute_streak(d) if (cfg or {}).get("active_theme") in THEME_PERKS else (0, 0)
     for r in d.get("self_study", []):
         mins = r.get("minutes", 0)
         diff = r.get("difficulty", 5)
         status = r.get("status", "Done")
         mult = _self_study_status_mult(status)
         xp_mult, _ = compute_plant_session_multipliers(d, r)
-        xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult * xp_mult
+        theme_xp_mult, _ = compute_theme_session_multipliers(cfg, r, _theme_streak)
+        xp += mins * (1 + diff / SELF_STUDY_DIFFICULTY_DIVISOR) * mult * xp_mult * theme_xp_mult
     for r in d.get("attendance", []):
         if r.get("status") == "present":
             xp += ATTENDANCE_XP_PRESENT
@@ -4558,7 +4991,7 @@ def compute_total_xp(d, cfg=None):
         if e.get("status") == "done":
             score = e.get("score")
             xp += EXAM_XP_BASE + ((score / 20.0) * EXAM_XP_SCORE_BONUS_MAX if score is not None else 0)
-    # Additional XP sources (badges/mastery/quests/logins) — added so that
+    # Additional XP sources (badges/mastery/quests/logins) - added so that
     # reaching high levels doesn't depend on raw study minutes alone.
     _, badge_xp = compute_badge_progress(d)
     xp += badge_xp
@@ -4571,11 +5004,11 @@ def compute_total_xp(d, cfg=None):
     return xp
 
 # ── Nerds (spendable currency) ──
-# Deliberately basic/derived-only for now, exactly like XP — no stored
+# Deliberately basic/derived-only for now, exactly like XP - no stored
 # "balance" yet since there's nothing to spend Nerds on (garden/zoo
 # shop is a future feature). When that ships, Nerds will need to become
 # a real persisted, spend-able balance (earned - spent), but the earn
-# side computed here won't need to change — only a spend ledger gets
+# side computed here won't need to change - only a spend ledger gets
 # added alongside it.
 def _nerds_status_mult(status):
     if status == "Done":
@@ -4585,7 +5018,7 @@ def _nerds_status_mult(status):
     return NERDS_STATUS_MULT_SKIPPED
 
 def compute_self_study_record_nerds(minutes, difficulty, status):
-    """Nerds for a single self-study record — same shape as
+    """Nerds for a single focus record - same shape as
     compute_self_study_record_xp, its own (smaller) rate. At difficulty
     5/10 Done this is ~0.75 Nerds/min (45/hour); studying should always
     out-earn passive sources on a per-hour basis."""
@@ -4594,7 +5027,7 @@ def compute_self_study_record_nerds(minutes, difficulty, status):
 
 def nerds_for_level(level):
     """One-time Nerds bonus for reaching `level` (called for every level
-    from 2 up to the current level, cumulatively — see
+    from 2 up to the current level, cumulatively - see
     compute_levelup_nerds). Same progressively-larger-but-uncapped
     shape as xp_for_level, tuned much smaller since this rides on top
     of the Nerds already earned by studying your way there."""
@@ -4609,7 +5042,7 @@ def compute_levelup_nerds(level):
 def compute_mastery_nerds(mastery_list):
     """Nerds from mastery tiers reached, using the already-computed
     mastery list (see compute_mastery) so the tier math itself isn't
-    duplicated — just converted to the Nerds side of the economy."""
+    duplicated - just converted to the Nerds side of the economy."""
     total = 0
     for m in mastery_list:
         tier_idx = m.get("tier_index", -1)
@@ -4618,16 +5051,17 @@ def compute_mastery_nerds(mastery_list):
     return total
 
 def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
-    """Total Nerds BALANCE: everything ever earned (self-study sessions,
+    """Total Nerds BALANCE: everything ever earned (focus sessions,
     one-time level-up bonuses, mastery-tier bonuses, passive Botanarium
     claims) minus everything ever spent (Market purchases). Like
-    everything else in this file, nothing here is a mutable counter —
-    it's entirely replayed from event logs every time, so it can never
+    everything else in this file, nothing here is a mutable counter - it's entirely replayed from event logs every time, so it can never
     drift out of sync with what actually happened."""
     nerds = 0.0
+    _theme_streak2, _ = compute_streak(d) if (cfg or {}).get("active_theme") in THEME_PERKS else (0, 0)
     for r in d.get("self_study", []):
         _, nerds_mult = compute_plant_session_multipliers(d, r)
-        nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done")) * nerds_mult
+        _, theme_nerds_mult = compute_theme_session_multipliers(cfg, r, _theme_streak2)
+        nerds += compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done")) * nerds_mult * theme_nerds_mult
     if level is not None:
         nerds += compute_levelup_nerds(level)
     if mastery_list is not None:
@@ -4636,7 +5070,17 @@ def compute_total_nerds(d, cfg=None, level=None, mastery_list=None):
         mastery_list, _ = compute_mastery(cfg, d)
         nerds += compute_mastery_nerds(mastery_list)
     nerds += sum(c.get("amount", 0) for c in d.get("passive_claims", []))
-    nerds -= sum(p.get("total_cost", 0) for p in d.get("nerds_spent", []))
+    # market_buy entries are legacy: Stock Market purchases are charged through
+    # the trade record's own net (below), so counting the spend too double-charged.
+    nerds -= sum(p.get("total_cost", 0) for p in d.get("nerds_spent", [])
+                 if not str(p.get("item_type", "")).startswith("market_buy:"))
+    # Industrial/Stock-Market trades: each logged trade carries its NET cash
+    # effect (+proceeds on sells, −cost on buys) so the market economy rides
+    # the same replayed-ledger balance as everything else. Kept OUT of
+    # passive_claims deliberately - market volume shouldn't eat into the
+    # Botanarium Bank's daily claim cap (see compute_rolling_24h_claimed).
+    ind = d.get("industrial") or {}
+    nerds += sum(float(t.get("net", 0)) for t in ind.get("trades", []))
     return round(nerds, 1)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4649,10 +5093,10 @@ def get_plant_bonus_def(plant_def, bonus_id):
     return next((b for b in plant_def["level_bonus_defs"] if b["id"] == bonus_id), None)
 
 def compute_weekly_study_hours(d, week=None):
-    """Total self-study hours (Done=1x, Partial=0.5x, Skipped=0x — same
+    """Total focus hours (Done=1x, Partial=0.5x, Skipped=0x - same
     quality weighting used everywhere else) logged in the given ISO
     week (default: the current week). This is the input to the passive
-    yield rate multiplier — a SEPARATE thing from a plant's own
+    yield rate multiplier - a SEPARATE thing from a plant's own
     cumulative growth-hours, which never resets."""
     week = week or _week_key(today_str())
     mins = 0.0
@@ -4663,7 +5107,7 @@ def compute_weekly_study_hours(d, week=None):
     return mins / 60.0
 
 def compute_weekly_yield_multiplier(weekly_study_hours):
-    """A pure REWARD, no longer a penalty — the neglect system already
+    """A pure REWARD, no longer a penalty - the neglect system already
     handles under-studying. At or under WEEKLY_YIELD_LOWER_LIMIT_HOURS
     this week: normal 1.0x. Every hour beyond that adds
     WEEKLY_YIELD_OVER_LIMIT_GROWTH_RATE to the multiplier, capped at
@@ -4676,11 +5120,11 @@ def compute_weekly_yield_multiplier(weekly_study_hours):
     return round(1.0 + bonus, 4)
 
 def _resolve_growth_plant_id(d):
-    """Which plant a NEW self-study session should grow. Explicit
+    """Which plant a NEW focus session should grow. Explicit
     selection (d["selected_plant_id"]) always wins if it's still a plant
     the person owns. If nothing is explicitly selected, growth must
     still go to exactly ONE plant, never all of them and never silently
-    none (as long as at least one plant is owned) — falls back to
+    none (as long as at least one plant is owned) - falls back to
     whichever plant most recently received growth, so switching away
     from the Botanarium page and back doesn't reset who's growing.
     True first-time fallback (no plant has ever grown yet) picks
@@ -4700,8 +5144,8 @@ def _resolve_growth_plant_id(d):
 
 def _fertilizer_multiplier_at(plant_record, timestamp_str):
     """Was Fertilizer active on THIS plant at the moment a given
-    self-study record was created? Fertilizer is a temporary buff (see
-    Control Panel) — plant_record["fertilizer_periods"] is a list of
+    focus record was created? Fertilizer is a temporary buff (see
+    Control Panel) - plant_record["fertilizer_periods"] is a list of
     {start, end} ISO windows (one per purchase/refresh), so a session
     logged outside every window gets no bonus even if fertilizer was
     active earlier or later."""
@@ -4714,22 +5158,22 @@ def _fertilizer_multiplier_at(plant_record, timestamp_str):
 
 def compute_plant_growth_hours(plant_record, d):
     """Cumulative growth-hours a plant has banked toward leveling up.
-    Growth is no longer split across every owned plant at once — each
-    self-study record is stamped at creation time with the
+    Growth is no longer split across every owned plant at once - each
+    focus record is stamped at creation time with the
     `grown_plant_id` that was resolved for growth at that moment (see
     _resolve_growth_plant_id() and the stamping in add_self_study/
     timer_stop), and only minutes stamped for THIS plant (logged since
     it was acquired) count here. Records saved before this feature
     existed have no `grown_plant_id` KEY at all (distinct from having
-    the key present but set to None) — those legacy minutes still count
+    the key present but set to None) - those legacy minutes still count
     toward EVERY plant, preserving whatever progress had already accrued
     under the old all-plants-grow-at-once behavior, so nobody's existing
     plants silently regress. Quality-weighted the same way as everything
     else, with Fertilizer's TEMPORARY per-session rate bonus applied
-    (see _fertilizer_multiplier_at) — unlike before, this is no longer a
+    (see _fertilizer_multiplier_at) - unlike before, this is no longer a
     single flat multiplier for the whole plant; each session only gets
     the bonus if Fertilizer was active on this plant at the moment that
-    specific session was logged. This determines LEVEL — a completely
+    specific session was logged. This determines LEVEL - a completely
     separate track from the weekly passive-yield multiplier above."""
     acquired = plant_record.get("created", "")
     mins = 0.0
@@ -4748,7 +5192,7 @@ def compute_plant_growth_hours(plant_record, d):
 def compute_plant_level_and_prestige(growth_hours, plant_def):
     """Returns (level 1..plant_max_level(plant_def), prestige_tier
     0=none/1../10, hours_into_current_level, hours_needed_for_next / None
-    if maxed). Max level is PER-PLANT — Watermelon has 5, every plant
+    if maxed). Max level is PER-PLANT - Watermelon has 5, every plant
     added since has 4."""
     thresholds = plant_def["level_hours_thresholds"]
     max_level = plant_max_level(plant_def)
@@ -4762,7 +5206,7 @@ def compute_plant_level_and_prestige(growth_hours, plant_def):
         into = growth_hours - thresholds[level - 1]
         nxt = thresholds[level] - thresholds[level - 1]
         return level, 0, into, nxt
-    # Fully grown — check Prestige tiers on the hours ABOVE max-level threshold.
+    # Fully grown - check Prestige tiers on the hours ABOVE max-level threshold.
     overflow = growth_hours - thresholds[max_level - 1]
     prestige_tier = 0
     for n in range(1, len(PLANT_PRESTIGE_NAMES) + 1):
@@ -4776,7 +5220,7 @@ def compute_plant_level_and_prestige(growth_hours, plant_def):
 def get_plant_bonus_value(plant_record, plant_def, bonus_id, level, d=None):
     """Current effective magnitude of one named bonus, including any
     Prestige buff points allocated to it, (fast_grower only) its
-    seed-upgrade tiers, and — when `d` is provided — any active Plant
+    seed-upgrade tiers, and - when `d` is provided - any active Plant
     Collection that names this exact plant AND this exact bonus id as
     part of its domain (see PLANT_COLLECTIONS' domain_bonus_ids). That
     last part is what makes e.g. every owned potato variety's Voluminous
@@ -4799,7 +5243,7 @@ def get_plant_bonus_value(plant_record, plant_def, bonus_id, level, d=None):
     return round(value, 2)
 
 def compute_days_since_last_study(d):
-    """Days since the most recent self-study record of ANY kind — the
+    """Days since the most recent focus record of ANY kind - the
     trigger for GLOBAL neglect. None if no study has ever been logged."""
     dates = [r.get("date", "") for r in d.get("self_study", []) if r.get("date")]
     if not dates:
@@ -4816,14 +5260,14 @@ def is_globally_neglected(d):
 
 def compute_plant_specific_window_days(plant_count):
     """How many days THIS plant can go without enough growth hours
-    before it specifically withers. Scales with collection size — see
+    before it specifically withers. Scales with collection size - see
     the Control Panel comment above PLANT_SPECIFIC_NEGLECT_BASE_DAYS."""
     n = max(1, plant_count)
     return round(PLANT_SPECIFIC_NEGLECT_BASE_DAYS + PLANT_SPECIFIC_NEGLECT_PER_PLANT_DAYS * n)
 
 def compute_plant_recent_growth_hours(plant_record, d, window_days):
     """Growth-hours THIS plant has accrued within the last `window_days`
-    days (not its full since-acquired total — see compute_plant_growth_hours
+    days (not its full since-acquired total - see compute_plant_growth_hours
     for that). This is what plant-specific neglect is measured against,
     so a single token session long ago can't keep resetting the clock
     forever without real recent investment."""
@@ -4853,7 +5297,7 @@ def is_plant_specifically_neglected(plant_record, d):
     plant_def = get_plant_def(plant_record.get("plant_type"))
     if plant_def:
         # Warden adds FLAT extra days to the window before specific
-        # neglect kicks in at all — a different axis from Hardy, which
+        # neglect kicks in at all - a different axis from Hardy, which
         # only softens the yield penalty once neglect has already
         # started. A plant with strong Warden may simply never trigger
         # specific neglect during normal use.
@@ -4862,7 +5306,7 @@ def is_plant_specifically_neglected(plant_record, d):
         warden_days = get_plant_bonus_value(plant_record, plant_def, "warden", level, d)
         window_days += warden_days
     # Grace period: a plant can't fairly be judged "neglected" against a
-    # window it hasn't existed for yet — without this, a plant acquired
+    # window it hasn't existed for yet - without this, a plant acquired
     # seconds ago has (correctly) accrued 0 recent hours and would
     # immediately show up withered before there was ever a chance to
     # study it. Only start checking once at least a full window's worth
@@ -4880,11 +5324,11 @@ def is_plant_specifically_neglected(plant_record, d):
 
 def compute_plant_harvest_progress_hours(plant_record, d, plant_def):
     """Growth-hours accrued toward the NEXT harvest since the last
-    harvest (or since acquisition, if never harvested) — EXCLUDING hours
+    harvest (or since acquisition, if never harvested) - EXCLUDING hours
     logged during the post-harvest HARVEST_LOCKOUT_HOURS window, since
     growth toward the next harvest is meant to pause during that window.
     Entirely separate from compute_plant_growth_hours (which keeps
-    counting everything, uninterrupted, for LEVEL/PRESTIGE) — lockout
+    counting everything, uninterrupted, for LEVEL/PRESTIGE) - lockout
     only ever pauses this harvest-specific tally."""
     anchor = plant_record.get("last_harvest_at") or plant_record.get("created", "")
     lockout_end = None
@@ -4913,7 +5357,7 @@ def compute_plant_harvest_state(plant_record, d, plant_def, level):
     """None if this plant hasn't reached its max level yet. Otherwise a
     dict describing lockout status and progress toward the next harvest.
     'Cornucopia' (see bonus catalog) shrinks the hours-required; nothing
-    here checks inventory space — that's checked at the harvest ROUTE,
+    here checks inventory space - that's checked at the harvest ROUTE,
     since it needs a live inventory-slot count, not just plant state."""
     max_level = plant_max_level(plant_def)
     if level < max_level:
@@ -4948,7 +5392,7 @@ def compute_plant_harvest_state(plant_record, d, plant_def, level):
     }
 
 def compute_plant_state(plant_record, d):
-    """Full computed view of one owned plant — everything the frontend
+    """Full computed view of one owned plant - everything the frontend
     needs to render its card in one shot."""
     plant_def = get_plant_def(plant_record["plant_type"])
     if not plant_def:
@@ -4968,13 +5412,13 @@ def compute_plant_state(plant_record, d):
     tier_name = PLANT_PRESTIGE_NAMES[prestige_tier - 1] if prestige_tier > 0 else f"Level {level}"
     claimable, elapsed_hours, weekly_mult, effective_rate = compute_plant_claimable_nerds(plant_record, plant_def, d, level, bonuses)
     # The visible "wither" state (sprite swap, warning banner) is tied
-    # to the harsher PLANT-SPECIFIC signal, not the softer global one —
+    # to the harsher PLANT-SPECIFIC signal, not the softer global one
     # global neglect quietly dents every plant's numbers without
     # changing how any of them look; specific neglect is the one meant
     # to visibly nag about THIS plant.
     specifically_neglected = is_plant_specifically_neglected(plant_record, d)
     globally_neglected = is_globally_neglected(d)
-    # Withering no longer swaps to a separate sprite file — it always
+    # Withering no longer swaps to a separate sprite file - it always
     # shows the plant's normal current-level sprite; the frontend applies
     # a grayscale CSS filter when `withered` is true (see .plant-withered
     # in styles.css), so a withered seed still reads as a seed, just
@@ -4982,7 +5426,7 @@ def compute_plant_state(plant_record, d):
     sprite_file = plant_def["sprites"][level - 1]
     if harvest_state and harvest_state["locked"]:
         sprite_file = f"{plant_def['id']}h.png"
-    # Fertilizer active/remaining — a temporary buff, not a permanent
+    # Fertilizer active/remaining - a temporary buff, not a permanent
     # stack, so the card needs "is it active right now, and for how much
     # longer" rather than a stack count.
     fert_active = False
@@ -5022,12 +5466,11 @@ def compute_plant_state(plant_record, d):
     }
 
 def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuses=None):
-    """How many Nerds this plant would pay out if claimed RIGHT NOW —
-    base rate for its level, scaled by the weekly study multiplier and
+    """How many Nerds this plant would pay out if claimed RIGHT NOW - base rate for its level, scaled by the weekly study multiplier and
     real hours elapsed since its last claim (capped at
     PASSIVE_YIELD_MAX_STORAGE_HOURS), then Voluminous/Fast Grower on top,
     then a hard penalty if the plant has been neglected for too long
-    (see PLANT_NEGLECT_*). Does NOT apply the Bank's daily cap — that's
+    (see PLANT_NEGLECT_*). Does NOT apply the Bank's daily cap - that's
     enforced at claim time (see claim_plant_yield) since it depends on
     every plant's claims together, not just this one. Also returns the
     effective Nerds/hour rate (post-multipliers) for display on the card."""
@@ -5039,7 +5482,7 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
         if c.get("plant_id") == plant_record["id"] and c.get("created", "") > last_claim_ts:
             last_claim_ts = c["created"]
     # 'Stocky' extends THIS plant's own storage cap beyond the shared
-    # PASSIVE_YIELD_MAX_STORAGE_HOURS default — a genuinely different axis
+    # PASSIVE_YIELD_MAX_STORAGE_HOURS default - a genuinely different axis
     # from Voluminous/Fast Grower (it raises how long you can go between
     # visits before losing anything, not the per-hour rate).
     stocky_hours = get_plant_bonus_value(plant_record, plant_def, "stocky", level, d) if bonuses is None \
@@ -5076,7 +5519,7 @@ def compute_plant_claimable_nerds(plant_record, plant_def, d, level=None, bonuse
     return round(raw, 1), elapsed_hours, weekly_mult, effective_rate
 
 def compute_lifetime_study_hours(d):
-    """Total hours studied EVER (quality-weighted, never resets) — the
+    """Total hours studied EVER (quality-weighted, never resets) - the
     hours-side input to Bank Level eligibility. Deliberately separate
     from a single plant's own growth-hours (which only start counting
     from when THAT plant was acquired)."""
@@ -5087,7 +5530,7 @@ def compute_bank_state(d):
     """The Botanarium Bank's current tier and what it takes to reach the
     next one. Level is fully derived from how many bank upgrades have
     been successfully purchased (logged in nerds_spent, same event-log
-    pattern as everything else) — never a stored counter that could
+    pattern as everything else) - never a stored counter that could
     drift."""
     bought = sum(1 for p in d.get("nerds_spent", []) if p.get("item_type") == "botanarium_bank")
     level = min(1 + bought, len(BOTANARIUM_BANK_LEVELS))
@@ -5105,7 +5548,7 @@ def compute_bank_state(d):
 def compute_rolling_24h_claimed(d):
     """Total passive Nerds claimed (across ALL plants, plus any Market
     sell-backs, which are logged the same way) in the trailing 24 real
-    hours — what the Bank's daily_claim_cap is measured against. Rolling,
+    hours - what the Bank's daily_claim_cap is measured against. Rolling,
     not calendar-day-based, so it can't be gamed by claiming right before
     and right after midnight."""
     cutoff = datetime.now() - __import__("datetime").timedelta(hours=24)
@@ -5223,7 +5666,7 @@ def compute_plant_session_multipliers(d, record_like):
 
     # A small number of collections (currently only "The Full Garden"
     # capstone) grant a flat, universal XP%/Nerds% on top of everything
-    # above, rather than amplifying a specific domain — appropriate only
+    # above, rather than amplifying a specific domain - appropriate only
     # for a collection that spans every domain at once. Family-themed
     # collections instead amplify their members' own existing bonus
     # VALUES directly (handled inside get_plant_bonus_value above), so
@@ -5236,7 +5679,7 @@ def compute_plant_session_multipliers(d, record_like):
 
 def compute_current_balance(name, d):
     """The one place routes should call to check 'how many Nerds does
-    this profile actually have right now' — loads config so mastery-tier
+    this profile actually have right now' - loads config so mastery-tier
     Nerds are correctly included (omitting it would under-count the
     balance and could wrongly block an affordable purchase)."""
     cfg = load_config(name)
@@ -5303,6 +5746,31 @@ def _week_key(date_str):
     except Exception:
         return None
 
+def compute_activity_totals(d):
+    """Aggregates activity_log into total minutes per kind, plus a
+    per-page breakdown for 'page' entries (shown in Stats - see
+    /api/<name>/activity/summary). Entries are already bucketed per
+    day+kind(+page) by the ping endpoint, so this is just a sum."""
+    music_minutes = 0.0
+    video_minutes = 0.0
+    app_minutes = 0.0
+    by_page = defaultdict(float)
+    for e in d.get("activity_log", []):
+        mins = e.get("minutes", 0)
+        kind = e.get("kind")
+        if kind == "music":
+            music_minutes += mins
+        elif kind == "video":
+            video_minutes += mins
+        elif kind == "page":
+            app_minutes += mins
+            if e.get("page"):
+                by_page[e["page"]] += mins
+    return {
+        "music_minutes": music_minutes, "video_minutes": video_minutes,
+        "app_minutes": app_minutes, "by_page": dict(by_page),
+    }
+
 def compute_badge_progress(d):
     """Returns list of badge dicts with tier reached + xp. Also used to
     feed extra XP sources so leveling doesn't rely on raw study time
@@ -5361,6 +5829,7 @@ def compute_badge_progress(d):
     _, best_streak = compute_streak(d)
     login_dates = sorted(set(d.get("logins", [])))
     login_streak_best = _best_run(login_dates)
+    activity_totals = compute_activity_totals(d)
 
     values = {
         "hours": (total_minutes, "thresholds_min"),
@@ -5375,6 +5844,9 @@ def compute_badge_progress(d):
         "weekend": (weekend, "thresholds_count"),
         "marathon": (marathon, "thresholds_count"),
         "login_streak": (login_streak_best, "thresholds_days"),
+        "music_time": (round(activity_totals["music_minutes"]), "thresholds_min"),
+        "video_time": (round(activity_totals["video_minutes"]), "thresholds_min"),
+        "app_time": (round(activity_totals["app_minutes"]), "thresholds_min"),
     }
 
     badges = []
@@ -5413,7 +5885,7 @@ def compute_mastery(cfg, d):
     """Per-subject, per-skill, AND per-skill-category mastery, all on the
     same Bachelor's..Laureate tier ladder, based on minutes invested. A
     category's mastery is a pure aggregate of its daughter skills' Done
-    minutes — leveling a category is really just "level up 2+ skills
+    minutes - leveling a category is really just "level up 2+ skills
     that share a category," so it stacks naturally on top of, not
     instead of, each skill's own mastery XP."""
     thresholds = MASTERY_MINUTE_THRESHOLDS
@@ -5435,14 +5907,14 @@ def compute_mastery(cfg, d):
         # mastery uses its own smaller xp table
         xp = sum(MASTERY_TIER_XP[:tier_idx + 1]) if tier_idx >= 0 else 0
         total_mastery_xp += xp
-        mastery.append({"type": "subject", "id": s["id"], "name": s["name"], "minutes": mins,
+        mastery.append({"type": "subject", "id": s["id"], "name": s["name"] + (" (archived)" if s.get("archived") else ""), "minutes": mins,
                          "tier_index": tier_idx, "tier_name": TIERS[tier_idx] if tier_idx >= 0 else None, "next_threshold": nxt})
     for s in cfg.get("skills", []):
         mins = minutes_by_skill.get(s["id"], 0)
         tier_idx, xp, nxt = _tier_progress(mins, thresholds)
         xp = sum(MASTERY_TIER_XP[:tier_idx + 1]) if tier_idx >= 0 else 0
         total_mastery_xp += xp
-        mastery.append({"type": "skill", "id": s["id"], "name": s["name"], "minutes": mins,
+        mastery.append({"type": "skill", "id": s["id"], "name": s["name"] + (" (archived)" if s.get("archived") else ""), "minutes": mins,
                          "tier_index": tier_idx, "tier_name": TIERS[tier_idx] if tier_idx >= 0 else None, "next_threshold": nxt})
     minutes_by_category = defaultdict(float)
     for s in cfg.get("skills", []):
@@ -5462,7 +5934,7 @@ def _week_records(records, week):
 
 def compute_quest_progress(d):
     """Weekly quests, evaluated per ISO week found in the data. Fully
-    derived (no 'claimed' state) — a week either satisfies a quest or it
+    derived (no 'claimed' state) - a week either satisfies a quest or it
     doesn't, so total XP from quests is just the sum across every week
     that satisfied each quest. Also returns THIS week's live status."""
     all_weeks = set()
@@ -5501,7 +5973,7 @@ def compute_login_xp(d):
     """LOGIN_XP_DAILY per unique login day, LOGIN_XP_STREAK_BONUS on
     every LOGIN_XP_STREAK_BONUS_EVERYth consecutive day of an unbroken
     streak. Login dates are appended (deduped) by the /ping_login
-    endpoint, so this is just as derivable as everything else — no
+    endpoint, so this is just as derivable as everything else - no
     fragile incremented counter."""
     dates = sorted(set(d.get("logins", [])))
     if not dates:
@@ -5545,23 +6017,20 @@ def title_for_level(level):
     return title
 
 # ═══════════════════════════════════════════════════════════════════
-# ── Finance Ledger (Nerds income/expense history) ──
-# Every entry here is a REAL event logged at the moment it happened —
-# not a historical simulation/guess. Self-study gains are logged the
-# instant a session is saved; level-up and mastery-tier bonuses are
-# logged the instant reconcile_nerds_ledger() notices they were newly
-# crossed (called right after every action that can change XP/mastery);
-# plant claims and Market purchases were already real-time logs
-# (passive_claims / nerds_spent) and are simply read straight through.
+# Finance Ledger (Nerds income/expense history)
+# Every entry is a real event logged when it happened, not a replayed
+# guess. Focus gains log the instant a session saves; level-up
+# and mastery bonuses log the instant reconcile_nerds_ledger() notices
+# they were newly crossed; plant claims and Market purchases are
+# already real-time logs, just read straight through.
 #
-# Edits and deletes are handled by RECONCILING rather than recomputing
-# from scratch: if a self-study record is edited/deleted, its old gain
-# entry is removed and (for edits) replaced with a fresh one; if that
-# change knocks XP/mastery back below a previously-credited level/tier,
-# reconcile_nerds_ledger() logs an explicit reversal entry. This keeps
-# the ledger's running balance always equal to compute_total_nerds()'s
-# live formula-based balance, without ever needing to replay all of
-# history to figure out "what day did this actually happen."
+# Edits/deletes are handled by reconciling, not recomputing from
+# scratch: an edited/deleted focus record has its old gain entry
+# removed and replaced; if that drops XP/mastery below a previously
+# credited level or tier, an explicit reversal entry is logged. This
+# keeps the ledger's running balance always equal to
+# compute_total_nerds()'s live balance, with no need to replay history
+# to figure out which day something happened.
 # ═══════════════════════════════════════════════════════════════════
 
 def _remove_ledger_entries(d, source, record_id):
@@ -5569,7 +6038,7 @@ def _remove_ledger_entries(d, source, record_id):
                           if not (e.get("source") == source and e.get("record_id") == record_id)]
 
 def _log_self_study_gain(cfg, d, record):
-    """Logs (or re-logs, after an edit) the Nerds gain for ONE self-study
+    """Logs (or re-logs, after an edit) the Nerds gain for ONE focus
     record, tagged with record_id so it can be found/removed again on
     edit or delete. Notes explicitly when a plant's Hydration/Refreshing
     bonus boosted this specific session above the base rate."""
@@ -5580,22 +6049,26 @@ def _log_self_study_gain(cfg, d, record):
     if base <= 0:
         return
     _, nerds_mult = compute_plant_session_multipliers(d, record)
-    amount = round(base * nerds_mult, 1)
+    _streak_cur5, _ = compute_streak(d)
+    _, theme_nerds_mult = compute_theme_session_multipliers(cfg, record, _streak_cur5)
+    amount = round(base * nerds_mult * theme_nerds_mult, 1)
     subj = next((s for s in cfg.get("subjects", []) if s["id"] == record.get("subject_id")), None)
     skill = next((s for s in cfg.get("skills", []) if s["id"] == record.get("skill_id")), None)
-    name = subj["name"] if subj else (skill["name"] if skill else "Self-Study")
+    name = subj["name"] if subj else (skill["name"] if skill else "Focus")
     detail = f"{mins}min @ difficulty {record.get('difficulty', 5)}/10, {record.get('status', 'Done')}"
     if nerds_mult > 1.001:
         detail += f" · Plant bonus applied (+{round((nerds_mult - 1) * 100, 1)}% Nerds)"
+    if theme_nerds_mult > 1.001:
+        detail += f" · Theme perk applied (+{round((theme_nerds_mult - 1) * 100, 1)}% Nerds)"
     d.setdefault("nerds_earned", []).append({
         "id": gen_id(10), "date": record.get("date", ""), "created": record.get("created") or now_str(),
-        "source": "self_study", "record_id": record["id"], "label": f"Self-Study: {name}",
+        "source": "self_study", "record_id": record["id"], "label": f"Focus: {name}",
         "amount": amount, "detail": detail
     })
 
 def _backfill_self_study_ledger(cfg, d):
-    """One-time catch-up for self-study records that predate this ledger
-    (or a prior sync gap) — logs the gain using the record's OWN true
+    """One-time catch-up for focus records that predate this ledger
+    (or a prior sync gap) - logs the gain using the record's OWN true
     date/created, so it lands on its correct historical day rather than
     showing up as "today." Idempotent: a record with an existing entry
     is skipped. Returns True if anything was added."""
@@ -5610,7 +6083,7 @@ def _backfill_self_study_ledger(cfg, d):
 
 def _ledger_credited_set(d, source, id_field):
     """Last-entry-wins credited state for a given ledger source/id_field
-    (e.g. source='level_up', id_field='level') — True if the most recent
+    (e.g. source='level_up', id_field='level') - True if the most recent
     entry for that id was a gain, False if it was a reversal."""
     state = {}
     for e in sorted(d.get("nerds_earned", []), key=lambda x: x.get("created", "")):
@@ -5624,12 +6097,12 @@ def _ledger_credited_set(d, source, id_field):
 
 def reconcile_nerds_ledger(cfg, d):
     """Call after ANY action that could change total XP or mastery
-    (self-study/attendance/exam add/edit/delete, login). Compares what's
+    (focus/attendance/exam add/edit/delete, login). Compares what's
     CURRENTLY true (live level, live mastery tiers) against what the
     ledger has credited so far, and logs the difference: gains for
     anything newly reached, reversal entries for anything that dropped
     (e.g. a deleted session knocked someone back a level). Self-healing
-    by design — safe to call as often as needed. Returns True if
+    by design - safe to call as often as needed. Returns True if
     anything changed (so callers know whether a save is warranted)."""
     changed = False
 
@@ -5688,7 +6161,7 @@ def reconcile_nerds_ledger(cfg, d):
 
 def compute_plant_claim_ledger_entries(d):
     """Passive Botanarium claims AND Market seed sell-backs both live in
-    d['passive_claims'] (see claim_plant_yield / shop_sell) — already
+    d['passive_claims'] (see claim_plant_yield / shop_sell) - already
     real-time logs, just split apart here for clearer ledger labeling."""
     plants_by_id = {p["id"]: p for p in d.get("plants", [])}
     entries = []
@@ -5703,7 +6176,7 @@ def compute_plant_claim_ledger_entries(d):
             detail = f"{c.get('elapsed_hours', 0)}h banked, weekly multiplier {c.get('weekly_multiplier', 1)}x"
             entries.append({
                 "date": c.get("date", ""), "created": c.get("created", ""), "source": "plant_claim",
-                "label": f"{pname} — Passive Yield Claimed", "amount": amount, "detail": detail
+                "label": f"{pname} - Passive Yield Claimed", "amount": amount, "detail": detail
             })
         else:
             entries.append({
@@ -5713,7 +6186,7 @@ def compute_plant_claim_ledger_entries(d):
     return entries
 
 def compute_spend_ledger_entries(d):
-    """Every Market/Bank/Fertilizer/Theme purchase — d['nerds_spent'] is
+    """Every Market/Bank/Fertilizer/Theme purchase - d['nerds_spent'] is
     already a complete real-time log (see _spend_nerds); this just
     relabels each entry into something readable."""
     entries = []
@@ -5723,7 +6196,25 @@ def compute_spend_ledger_entries(d):
         qty = p.get("qty", 1)
         unit_cost = p.get("unit_cost", 0)
         total_cost = p.get("total_cost", 0)
-        if item_type == "fertilizer":
+        if item_type.startswith("market_buy:"):
+            continue   # already represented by its Stock Market trade entry
+        if item_type.startswith("place:"):
+            key = item_type[len("place:"):]
+            label = {"hands:mining": "Placed Bare Hands miner", "hands:wood": "Placed Bare Hands forester"}.get(key, f"Built {key}")
+            source = "industrial_build"
+        elif item_type.startswith("tool_upgrade:") or item_type.startswith("tool_skip:"):
+            label = "Tool upgraded to " + item_type.split(":", 1)[1].replace("_", " ").title()
+            source = "industrial_upgrade"
+        elif item_type.startswith("cap_"):
+            label = f"Industrial {item_type[4:]} slot bought"
+            source = "industrial_cap"
+        elif item_type == "industrial_warehouse":
+            label = "Warehouse built"
+            source = "industrial_warehouse"
+        elif item_type.startswith("warehouse_upgrade:"):
+            label = "Warehouse upgraded"
+            source = "industrial_warehouse"
+        elif item_type == "fertilizer":
             label = "Fertilizer Applied"
             source = "fertilizer"
         elif item_type == "botanarium_bank":
@@ -5745,6 +6236,68 @@ def compute_spend_ledger_entries(d):
         })
     return entries
 
+def compute_industrial_trade_ledger_entries(d):
+    """Stock Market buy/sell trades, logged by industrial_core.py in
+    d['industrial']['trades'] with their own net cash effect already
+    attached (+proceeds on a sell, -cost on a buy - see
+    execute_trade_price/market_trade in industrial_routes.py). That net
+    already feeds compute_total_nerds()'s live balance, but the Finance
+    ledger builds its own separate list of entries and never included
+    these, so a sale changed the balance with no corresponding line ever
+    showing up on the Finance page. Relabels each trade into a normal
+    ledger entry, same as every other Nerds source here. Trades only
+    store a plain date (no time-of-day), so `created` is synthesized as
+    noon on that date purely so it still sorts sensibly alongside
+    timestamped entries from other sources on the same day."""
+    ind = d.get("industrial") or {}
+    entries = []
+    for t in ind.get("trades", []):
+        net = t.get("net", 0)
+        if not net:
+            continue
+        side = t.get("side", "")
+        item = t.get("item", "")
+        qty = t.get("qty", 0)
+        unit = t.get("unit", 0)
+        date = t.get("date", "")
+        verb = "Sold" if side == "sell" else "Bought"
+        entries.append({
+            "date": date, "created": f"{date}T12:00:00" if date else now_str(),
+            "source": "market_trade",
+            "label": f"Stock Market: {verb} {qty}x {item}",
+            "amount": net, "detail": f"{qty}x @ {unit} Nerds/unit"
+        })
+    return entries
+
+def _refresh_ledger_entries(cfg, d):
+    """Re-derive logged gains with TODAY's formulas (older entries were written
+    under previous economy settings, which made the ledger drift from the real
+    balance). Works on copies."""
+    out = []
+    streak_cur, _ = compute_streak(d)
+    recs = {r["id"]: r for r in d.get("self_study", [])}
+    for e in d.get("nerds_earned", []):
+        e = dict(e)
+        src = e.get("source")
+        sign = 1 if e.get("amount", 0) >= 0 else -1
+        try:
+            if src == "level_up" and e.get("level"):
+                e["amount"] = sign * nerds_for_level(int(e["level"]))
+            elif src == "mastery" and e.get("mastery_key"):
+                e["amount"] = sign * MASTERY_TIER_NERDS[int(str(e["mastery_key"]).rsplit(":", 1)[1])]
+            elif src == "self_study":
+                r = recs.get(e.get("record_id"))
+                if r is None:
+                    continue
+                base = compute_self_study_record_nerds(r.get("minutes", 0), r.get("difficulty", 5), r.get("status", "Done"))
+                _, nm = compute_plant_session_multipliers(d, r)
+                _, tm = compute_theme_session_multipliers(cfg, r, streak_cur)
+                e["amount"] = round(base * nm * tm, 1)
+        except Exception:
+            pass
+        out.append(e)
+    return out
+
 def compute_nerds_ledger(cfg, d):
     """Assembles every logged gain and spend into one chronologically-
     ordered ledger, computes a running balance across it (which always
@@ -5752,10 +6305,18 @@ def compute_nerds_ledger(cfg, d):
     that formula has a matching real-time entry-source here), then
     groups by calendar day for the Finance page, most-recent day first."""
     entries = (
-        list(d.get("nerds_earned", []))
+        _refresh_ledger_entries(cfg, d)
         + compute_plant_claim_ledger_entries(d)
         + compute_spend_ledger_entries(d)
+        + compute_industrial_trade_ledger_entries(d)
     )
+    _lvl, _, _ = level_from_xp(compute_total_xp(d, cfg))
+    _live = compute_total_nerds(d, cfg=cfg, level=_lvl)
+    _diff = round(_live - sum(e.get("amount", 0) for e in entries), 1)
+    if abs(_diff) >= 0.1:
+        entries.append({"date": today_str(), "created": now_str(), "source": "adjustment",
+                        "label": "Balance adjustment (sync)", "amount": _diff,
+                        "detail": "Reconciles older entries recorded under previous economy settings."})
     entries.sort(key=lambda e: (e.get("date", ""), e.get("created", "")))
     running = 0.0
     for e in entries:
@@ -5812,17 +6373,21 @@ def gamification_status(name):
     current_streak, best_streak = compute_streak(d)
     login_stats = _login_stats(d)
     # Level-gated themes unlock at their level, same as always. Themes
-    # that instead carry a `price` (see THEME_CATALOG) are level 0 —
+    # that instead carry a `price` (see THEME_CATALOG) are level 0
     # they must be explicitly purchased (logged in nerds_spent) to
     # count as unlocked, regardless of level, since a level-0 gate would
     # otherwise trivially pass for everyone.
-    purchased_theme_ids = {p["item_type"][len("theme_"):] for p in d.get("nerds_spent", []) if p.get("item_type", "").startswith("theme_")}
+    purchased_theme_ids = {
+        p["item_type"][len("theme_"):] for p in d.get("nerds_spent", [])
+        if p.get("item_type", "").startswith("theme_") and not p["item_type"].startswith("theme_upgrade_")
+    }
     unlocked = [t["id"] for t in THEME_CATALOG if (t.get("price") is None and t["level"] <= level) or t["id"] in purchased_theme_ids]
     locked = [t for t in THEME_CATALOG if t["id"] not in unlocked]
+    owned_upgrades = [p["item_type"] for p in d.get("nerds_spent", []) if p.get("item_type", "").startswith("theme_upgrade_")]
     badges, _ = compute_badge_progress(d)
     mastery, _ = compute_mastery(cfg, d)
     quests_this_week, _ = compute_quest_progress(d)
-    total_nerds = compute_total_nerds(d, level=level, mastery_list=mastery)
+    total_nerds = compute_total_nerds(d, cfg=cfg, level=level, mastery_list=mastery)
     return jsonify({
         "xp": round(total_xp, 1),
         "nerds": total_nerds,
@@ -5840,6 +6405,11 @@ def gamification_status(name):
         "unlocked_themes": unlocked,
         "locked_themes": locked,
         "theme_catalog": THEME_CATALOG,
+        "active_theme": cfg.get("active_theme", "dark"),
+        "theme_perks": THEME_PERKS,
+        "theme_upgrades_owned": owned_upgrades,
+        "theme_upgrade_prices": THEME_UPGRADE_PRICES,
+        "vault_theme_catalog": VAULT_THEME_CATALOG,
         "badges": badges,
         "mastery": mastery,
         "quests_this_week": quests_this_week
@@ -5847,7 +6417,7 @@ def gamification_status(name):
 
 @app.route("/api/<name>/ping_login", methods=["POST"])
 def ping_login(name):
-    """Records today's date as a login (deduped) — call once per app
+    """Records today's date as a login (deduped) - call once per app
     load. Source data for the login-streak XP/badge, same derived-not-
     persisted-counter approach as everything else."""
     ensure_profile(name)
@@ -5863,6 +6433,54 @@ def ping_login(name):
     login_stats = _login_stats(d)
     return jsonify({"ok": True, "new_today": is_new, **login_stats})
 
+# ── Activity time tracking (music / video / pages) ──
+# The frontend sends a small heartbeat (see app.js's activity ticker
+# helpers) roughly every ACTIVITY_PING_INTERVAL_SECONDS while a music
+# track is playing, a video is playing, or the app is simply open on
+# some page - each contributing toward its own badge ladder (Melomaniac,
+# Cinephile, Dedicated - see BADGE_DEFS). Capped per-ping so a clock-
+# skewed or malicious client can't inflate minutes arbitrarily; bucketed
+# into one row per day+kind(+page) rather than one row per heartbeat so
+# the log doesn't grow unbounded over months of use.
+ACTIVITY_PING_MAX_SECONDS = 120
+ACTIVITY_VALID_KINDS = {"music", "video", "page"}
+
+@app.route("/api/<name>/activity/ping", methods=["POST"])
+def activity_ping(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    kind = data.get("kind")
+    if kind not in ACTIVITY_VALID_KINDS:
+        return jsonify({"error": "Unknown activity kind"}), 400
+    seconds = max(0, min(ACTIVITY_PING_MAX_SECONDS, float(data.get("seconds", 0))))
+    if seconds <= 0:
+        return jsonify({"ok": True})
+    page = data.get("page") if kind == "page" else None
+    minutes = seconds / 60.0
+    d = load_data(name)
+    today = today_str()
+    bucket = next((e for e in d.get("activity_log", []) if e.get("date") == today and e.get("kind") == kind and e.get("page") == page), None)
+    if bucket:
+        bucket["minutes"] = round(bucket.get("minutes", 0) + minutes, 3)
+    else:
+        d.setdefault("activity_log", []).append({
+            "id": gen_id(8), "date": today, "kind": kind, "page": page, "minutes": round(minutes, 3)
+        })
+    save_data(name, d)
+    return jsonify({"ok": True})
+
+@app.route("/api/<name>/activity/summary")
+def activity_summary(name):
+    ensure_profile(name)
+    d = load_data(name)
+    totals = compute_activity_totals(d)
+    return jsonify({
+        "music_hours": round(totals["music_minutes"] / 60.0, 2),
+        "video_hours": round(totals["video_minutes"] / 60.0, 2),
+        "app_hours": round(totals["app_minutes"] / 60.0, 2),
+        "by_page_minutes": {k: round(v, 1) for k, v in totals["by_page"].items()},
+    })
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ── Botanarium routes ──
@@ -5874,7 +6492,7 @@ def _inventory_qty(d, item_type):
     return None
 
 def compute_purchased_inventory_slots(d):
-    """Derived, not stored — same event-log philosophy as everything
+    """Derived, not stored - same event-log philosophy as everything
     else. Each successful purchase is one 'inventory_slot' entry in
     nerds_spent."""
     return sum(1 for p in d.get("nerds_spent", []) if p.get("item_type") == "inventory_slot")
@@ -5883,7 +6501,7 @@ def compute_inventory_slot_count(d):
     return INVENTORY_SLOT_COUNT + compute_purchased_inventory_slots(d)
 
 def next_inventory_slot_cost(d):
-    """None once INVENTORY_SLOT_MAX_PURCHASES is reached — no further
+    """None once INVENTORY_SLOT_MAX_PURCHASES is reached - no further
     slots purchasable past that ceiling."""
     n = compute_purchased_inventory_slots(d)
     if n >= INVENTORY_SLOT_MAX_PURCHASES:
@@ -5892,7 +6510,7 @@ def next_inventory_slot_cost(d):
 
 def _inventory_next_free_slot(d):
     """Returns the first open slot index within the CURRENT (base +
-    purchased) slot count, or None if every slot is occupied — callers
+    purchased) slot count, or None if every slot is occupied - callers
     must treat None as 'refuse this addition', never silently overflow
     or discard the item."""
     slot_count = compute_inventory_slot_count(d)
@@ -5903,7 +6521,7 @@ def _inventory_next_free_slot(d):
     return None
 
 def _inventory_has_space(d, item_type):
-    """True if `item_type` can be added right now — either it already
+    """True if `item_type` can be added right now - either it already
     has a stack (adding just increases qty, no new slot needed) or a
     free slot exists for a brand new stack."""
     if _inventory_qty(d, item_type):
@@ -5913,7 +6531,7 @@ def _inventory_has_space(d, item_type):
 def _inventory_add(d, item_type, qty):
     """Returns True if added, False if refused (inventory full and this
     is a brand-new item type with no free slot). Never overflows past
-    the current slot count and never silently drops the item — the
+    the current slot count and never silently drops the item - the
     caller is responsible for not charging Nerds / not consuming a
     harvest / etc. when this returns False."""
     it = _inventory_qty(d, item_type)
@@ -5940,7 +6558,7 @@ def _inventory_remove(d, item_type, qty):
 
 def _inventory_move(d, item_type, to_slot):
     """Moves one item stack to a specific slot, swapping places with
-    whatever (if anything) already occupies that slot — a real
+    whatever (if anything) already occupies that slot - a real
     rearrange, not just a reorder of the underlying list."""
     if to_slot < 0 or to_slot >= compute_inventory_slot_count(d):
         return False
@@ -5955,7 +6573,7 @@ def _inventory_move(d, item_type, to_slot):
 
 def _spend_nerds(d, item_type, qty, unit_cost):
     """Logs a purchase (see nerds_spent in DEFAULT_DATA) rather than
-    decrementing a stored balance — compute_total_nerds() replays this
+    decrementing a stored balance - compute_total_nerds() replays this
     log, so a purchase can never desync from the actual balance."""
     total_cost = round(unit_cost * qty, 1)
     d.setdefault("nerds_spent", []).append({
@@ -5966,7 +6584,7 @@ def _spend_nerds(d, item_type, qty, unit_cost):
 
 @app.route("/api/book_of_wonders")
 def book_of_wonders():
-    """Clementine's Book of Wonders — static reference content, not
+    """Clementine's Book of Wonders - static reference content, not
     profile-scoped (the pedia is the same for everyone). Returns the
     full category tree plus every entry; the frontend groups entries
     under their category/subcategory client-side."""
@@ -5975,9 +6593,10 @@ def book_of_wonders():
 @app.route("/api/<name>/botanarium/catalog")
 def botanarium_catalog(name):
     """The full plant catalog (owned or not) plus a resolved sprite URL
-    for every growth stage — the Botanarium page uses this to show
+    for every growth stage - the Botanarium page uses this to show
     'not yet owned' plants too, and the Book of Wonders reuses it."""
     ensure_profile(name)
+    _cat_d = load_data(name)
     catalog = []
     for p in PLANT_DEFS:
         catalog.append({
@@ -5989,9 +6608,9 @@ def botanarium_catalog(name):
             "max_level": plant_max_level(p),
             "harvest_hours_interval": HARVEST_GROWTH_HOURS_INTERVAL,
             "harvest_lockout_hours": HARVEST_LOCKOUT_HOURS,
-            "seed_buy_price": p.get("seed_buy_price", SEED_SHOP_BUY_PRICE),
-            "seed_sell_price": p.get("seed_sell_price", SEED_SHOP_SELL_PRICE),
-            "fruit_sell_price": p.get("fruit_sell_price", FRUIT_SELL_PRICE),
+            "seed_buy_price": _dyn_price(_cat_d, p["seed_item"], "buy"),
+            "seed_sell_price": _dyn_price(_cat_d, p["seed_item"], "sell"),
+            "fruit_sell_price": _dyn_price(_cat_d, f"{p['id']}_fruit", "sell"),
         })
     return jsonify({
         "catalog": catalog,
@@ -6042,7 +6661,7 @@ def fertilize_plant(name, plant_id):
     temporary boost to how fast THIS plant's study minutes convert into
     growth-hours (e.g. +20% means 2 hours of studying bank as if it were
     2.4 hours toward leveling) for FERTILIZER_DURATION_HOURS. It does
-    NOT change the Nerds cost/value of anything else — there's no other
+    NOT change the Nerds cost/value of anything else - there's no other
     purchasable plant upgrade with a cost tied to this. Buying again
     while still active just refreshes the window back to a full
     FERTILIZER_DURATION_HOURS from now, rather than stacking multiple
@@ -6133,7 +6752,7 @@ def claim_plant_yield(name, plant_id):
     amount = round(min(raw_amount, remaining_cap), 1)
 
     if amount <= 0:
-        reason = "Nothing to claim yet." if raw_amount <= 0 else "Your Botanarium Bank's 24h claim cap is already reached — upgrade the Bank to raise it, or wait for the window to roll over."
+        reason = "Nothing to claim yet." if raw_amount <= 0 else "Your Botanarium Bank's 24h claim cap is already reached - upgrade the Bank to raise it, or wait for the window to roll over."
         return jsonify({"ok": True, "amount": 0, "reason": reason})
 
     claim = {
@@ -6145,11 +6764,21 @@ def claim_plant_yield(name, plant_id):
 
     seed_dropped = False
     seedy_pct = get_plant_bonus_value(plant, plant_def, "seedy", level, d)
-    if seedy_pct > 0 and __import__("random").random() * 100 < seedy_pct:
+    # Seed drops have a per-plant cooldown so spamming Claim can't farm seeds.
+    last_seed = plant.get("last_seed_drop_at")
+    seed_on_cooldown = False
+    if last_seed:
+        try:
+            seed_on_cooldown = (datetime.now() - datetime.strptime(last_seed, "%Y-%m-%dT%H:%M:%S")).total_seconds() < SEED_DROP_COOLDOWN_HOURS * 3600
+        except Exception:
+            pass
+    if seedy_pct > 0 and not seed_on_cooldown and __import__("random").random() * 100 < seedy_pct:
         # The Nerds claim itself always succeeds regardless of inventory
-        # space — only the BONUS seed drop is skipped if there's no room,
+        # space - only the BONUS seed drop is skipped if there's no room,
         # since the main action here is claiming Nerds, not the seed.
         seed_dropped = _inventory_add(d, plant_def["seed_item"], 1)
+        if seed_dropped:
+            plant["last_seed_drop_at"] = now_str()
 
     save_data(name, d)
     return jsonify({"ok": True, "amount": amount, "seed_dropped": seed_dropped, "seed_item": plant_def["seed_item"] if seed_dropped else None})
@@ -6161,9 +6790,9 @@ def harvest_plant(name, plant_id):
     (see compute_plant_harvest_progress_hours), it can be harvested for
     Fruit item(s). Harvesting then locks the plant's sprite to its
     depleted "<id>h.png" look and pauses further harvest-hour accrual for
-    HARVEST_LOCKOUT_HOURS — passive Nerds yield and leveling/prestige
+    HARVEST_LOCKOUT_HOURS - passive Nerds yield and leveling/prestige
     growth keep working normally throughout. REFUSED outright (nothing
-    consumed — no lockout starts, no growth-hours spent) if there's no
+    consumed - no lockout starts, no growth-hours spent) if there's no
     inventory slot free for this plant's fruit type."""
     ensure_profile(name)
     d = load_data(name)
@@ -6179,12 +6808,12 @@ def harvest_plant(name, plant_id):
     if not harvest_state:
         return jsonify({"error": "This plant hasn't reached its max level yet."}), 400
     if harvest_state["locked"]:
-        return jsonify({"error": f"Still recovering from its last harvest — {harvest_state['lockout_remaining_minutes']}min left."}), 400
+        return jsonify({"error": f"Still recovering from its last harvest - {harvest_state['lockout_remaining_minutes']}min left."}), 400
     if not harvest_state["ready"]:
         return jsonify({"error": f"Not enough growth hours yet ({harvest_state['progress_hours']}/{harvest_state['hours_required']}h)."}), 400
     fruit_item = harvest_state["fruit_item"]
     if not _inventory_has_space(d, fruit_item):
-        return jsonify({"error": "Your inventory is full — free up a slot (or buy another) before harvesting. Nothing was consumed."}), 400
+        return jsonify({"error": "Your inventory is full - free up a slot (or buy another) before harvesting. Nothing was consumed."}), 400
     plant["last_harvest_at"] = now_str()
     plant["harvest_count"] = plant.get("harvest_count", 0) + 1
     qty = 1
@@ -6245,7 +6874,7 @@ def get_inventory(name):
 
 @app.route("/api/<name>/inventory/buy_slot", methods=["POST"])
 def buy_inventory_slot(name):
-    """Purchases ONE additional inventory slot — cost climbs each time
+    """Purchases ONE additional inventory slot - cost climbs each time
     (see INVENTORY_SLOT_COST_GROWTH), capped at INVENTORY_SLOT_MAX_PURCHASES
     total purchases. Nothing is stored beyond the standard nerds_spent
     log entry; slot count is always derived from it."""
@@ -6271,26 +6900,37 @@ def move_inventory_item(name):
     save_data(name, d)
     return jsonify({"ok": True, "inventory": d.get("inventory", [])})
 
+def _dyn_price(d, item_type, side, qty=1):
+    """The ONE source of truth for seed/fruit prices: the live Stock Market price."""
+    ic = _industrial_routes.ic
+    ind = ic.ensure_state(d)
+    return ic.execute_trade_price(ind, item_type, side, qty, epoch_days=ic.epoch_days_now())
+
+def _log_market_trade(d, side, item, qty, unit, total):
+    ic = _industrial_routes.ic
+    ind = ic.ensure_state(d)
+    ind.setdefault("trades", []).append({
+        "id": gen_id(8), "date": today_str(), "epoch": ic.epoch_days_now(),
+        "side": side, "item": item, "qty": qty, "unit": unit,
+        "total": total, "net": total if side == "sell" else -total,
+    })
+
 @app.route("/api/<name>/shop/catalog")
 def shop_catalog(name):
-    """Every plant's seed_item (buyable + sellable), plus every plant's
-    fruit item (sell-only for now, no dedicated sprite yet — see
-    is_fruit/sprite: None). Adding a plant to PLANT_DEFS needs zero shop
-    code changes on top of this."""
     ensure_profile(name)
+    d = load_data(name)
     items = []
     for p in PLANT_DEFS:
+        seed, fruit = p["seed_item"], f"{p['id']}_fruit"
         items.append({
-            "item_type": p["seed_item"], "label": f"{p['name']} Seed",
+            "item_type": seed, "label": f"{p['name']} Seed",
             "sprite": f"/sprites/{p['sprite_dir']}/{p['sprites'][0]}",
-            "buy_price": p.get("seed_buy_price", SEED_SHOP_BUY_PRICE),
-            "sell_price": p.get("seed_sell_price", SEED_SHOP_SELL_PRICE),
+            "buy_price": _dyn_price(d, seed, "buy"), "sell_price": _dyn_price(d, seed, "sell"),
             "plant_id": p["id"], "is_fruit": False,
         })
         items.append({
-            "item_type": f"{p['id']}_fruit", "label": p.get("fruit_name", p["name"]),
-            "sprite": None, "buy_price": None,
-            "sell_price": p.get("fruit_sell_price", FRUIT_SELL_PRICE),
+            "item_type": fruit, "label": p.get("fruit_name", p["name"]),
+            "sprite": None, "buy_price": None, "sell_price": _dyn_price(d, fruit, "sell"),
             "plant_id": p["id"], "is_fruit": True,
         })
     return jsonify({"items": items})
@@ -6301,21 +6941,22 @@ def shop_buy(name):
     data = request.get_json(force=True)
     item_type = data.get("item_type")
     qty = max(1, int(data.get("qty", 1)))
-    d = load_data(name)
-    seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
-    if not seed_def:
-        return jsonify({"error": "Unknown item"}), 400
-    if not _inventory_has_space(d, item_type):
-        return jsonify({"error": "Your inventory is full — free up a slot, or buy another slot, before buying this."}), 400
-    unit_price = seed_def.get("seed_buy_price", SEED_SHOP_BUY_PRICE)
-    cost = unit_price * qty
-    balance = compute_current_balance(name, d)
-    if balance < cost:
-        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
-    _spend_nerds(d, item_type, qty, unit_price)
-    _inventory_add(d, item_type, qty)
-    save_data(name, d)
-    return jsonify({"ok": True, "item_type": item_type, "qty": qty, "cost": cost})
+    with _lock_for(name):
+        d = load_data(name)
+        seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
+        if not seed_def:
+            return jsonify({"error": "Unknown item"}), 400
+        if not _inventory_has_space(d, item_type):
+            return jsonify({"error": "Your inventory is full - free up a slot, or buy another slot, before buying this."}), 400
+        unit = _dyn_price(d, item_type, "buy", qty)
+        cost = round(unit * qty, 1)
+        balance = compute_current_balance(name, d)
+        if balance < cost:
+            return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+        _inventory_add(d, item_type, qty)
+        _log_market_trade(d, "buy", item_type, qty, unit, cost)
+        save_data(name, d)
+        return jsonify({"ok": True, "item_type": item_type, "qty": qty, "cost": cost, "unit_price": unit})
 
 @app.route("/api/<name>/shop/sell", methods=["POST"])
 def shop_sell(name):
@@ -6323,38 +6964,18 @@ def shop_sell(name):
     data = request.get_json(force=True)
     item_type = data.get("item_type")
     qty = max(1, int(data.get("qty", 1)))
-    d = load_data(name)
-    seed_def = next((p for p in PLANT_DEFS if p["seed_item"] == item_type), None)
-    fruit_def = next((p for p in PLANT_DEFS if f"{p['id']}_fruit" == item_type), None)
-    if not seed_def and not fruit_def:
-        return jsonify({"error": "Unknown item"}), 400
-    if not _inventory_remove(d, item_type, qty):
-        return jsonify({"error": "Not enough of that item to sell"}), 400
-    if seed_def:
-        # Richseed boosts THIS plant's own seed sell price — based on the
-        # best-leveled copy the person currently owns (0 bonus if they
-        # don't own a grown copy of this plant at all yet).
-        richseed_pct = 0.0
-        owned = [p for p in d.get("plants", []) if p["plant_type"] == seed_def["id"]]
-        if owned:
-            best_pct = 0.0
-            for rec in owned:
-                gh = compute_plant_growth_hours(rec, d)
-                lvl, _, _, _ = compute_plant_level_and_prestige(gh, seed_def)
-                best_pct = max(best_pct, get_plant_bonus_value(rec, seed_def, "richseed", lvl, d))
-            richseed_pct = best_pct
-        base_price = seed_def.get("seed_sell_price", SEED_SHOP_SELL_PRICE)
-        unit_price = round(base_price * (1 + richseed_pct / 100.0), 1)
-    else:
-        unit_price = fruit_def.get("fruit_sell_price", FRUIT_SELL_PRICE)
-    proceeds = round(unit_price * qty, 1)
-    d.setdefault("passive_claims", []).append({
-        "id": gen_id(8), "plant_id": None, "plant_type": None, "date": today_str(),
-        "created": now_str(), "amount": proceeds, "elapsed_hours": 0, "weekly_multiplier": 0,
-        "note": f"Sold {qty}x {item_type}"
-    })
-    save_data(name, d)
-    return jsonify({"ok": True, "item_type": item_type, "qty": qty, "proceeds": proceeds})
+    with _lock_for(name):
+        d = load_data(name)
+        known = any(p["seed_item"] == item_type or f"{p['id']}_fruit" == item_type for p in PLANT_DEFS)
+        if not known:
+            return jsonify({"error": "Unknown item"}), 400
+        unit = _dyn_price(d, item_type, "sell", qty)
+        if not _inventory_remove(d, item_type, qty):
+            return jsonify({"error": "Not enough of that item to sell"}), 400
+        proceeds = round(unit * qty, 1)
+        _log_market_trade(d, "sell", item_type, qty, unit, proceeds)
+        save_data(name, d)
+        return jsonify({"ok": True, "item_type": item_type, "qty": qty, "proceeds": proceeds, "unit_price": unit})
 
 @app.route("/api/<name>/shop/buy_theme", methods=["POST"])
 def buy_theme(name):
@@ -6376,11 +6997,105 @@ def buy_theme(name):
     save_data(name, d)
     return jsonify({"ok": True, "theme_id": theme_id})
 
+# Theme upgrades: a looping video background in place of a theme's
+# static photo, a per-theme ambient audio loop, and (for a small number
+# of themes with animated sprite creatures - currently just Bioluminal
+# Reef) a repeatable "unlock the next creature" purchase. All three are
+# separate, independently purchasable add-ons on top of a theme someone
+# already owns (level-unlocked or bought). Only premium and vault
+# themes carry upgrades, same tier as THEME_PERKS. Ownership is logged
+# the exact same way a theme purchase itself is, in nerds_spent, so
+# nothing new needs to be persisted - for the repeatable "fish" type,
+# each purchase just logs another entry with the SAME item_type, and
+# the count of those entries IS the unlocked count (see
+# gamification_status's theme_upgrades_owned, a flat list that
+# naturally includes one entry per purchase).
+THEME_UPGRADE_PRICES = {k: int(v * ECON_COST_MULT) for k, v in {"video": 7000, "ambient_audio": 2500, "fish": 2200}.items()}
+
+# Themes that unlock their sprite creatures one at a time via the
+# repeatable "fish" upgrade above, and how many total exist. This is
+# the server-side mirror of app.js's BIOLUMINAL_REEF_TOTAL_FISH (auto-
+# computed there from THEME_SPRITE_CONFIGS' species list) - keep this
+# number in sync by hand whenever that species list changes, since the
+# backend has no way to read the frontend's JS to compute it itself.
+THEME_FISH_UNLOCK_TOTALS = {
+    # Must equal the sum of every species' `count` in app.js's
+    # kept in sync by hand since the backend can't read that JS file itself.
+    "vault_bioluminal_reef": 3,
+}
+
+def _theme_upgrade_eligible(theme_id):
+    t = next((x for x in THEME_CATALOG if x["id"] == theme_id), None)
+    if t and t.get("premium"):
+        return True
+    return any(v["id"] == theme_id for v in VAULT_THEME_CATALOG)
+
+def _owns_theme(theme_id, level, d):
+    theme = next((t for t in THEME_CATALOG if t["id"] == theme_id), None)
+    purchased = {
+        p["item_type"][len("theme_"):] for p in d.get("nerds_spent", [])
+        if p.get("item_type", "").startswith("theme_") and not p["item_type"].startswith("theme_upgrade_")
+    }
+    if theme:
+        return (theme.get("price") is None and theme["level"] <= level) or theme_id in purchased
+    # A pure vault theme (not in THEME_CATALOG) has no unlock/purchase
+    # path at all yet - reserved for a future Quest Book grant. Rather
+    # than block its upgrades behind an ownership state that can never
+    # be reached, treat "eligible for upgrades" the same as "eligible
+    # to preview" for these, so video/audio/fish upgrades can be built
+    # and tested now instead of sitting as unreachable dead code until
+    # that system ships. This never affects THEME_CATALOG themes above.
+    return any(v["id"] == theme_id for v in VAULT_THEME_CATALOG)
+
+@app.route("/api/<name>/shop/buy_theme_upgrade", methods=["POST"])
+def buy_theme_upgrade(name):
+    ensure_profile(name)
+    data = request.get_json(force=True)
+    theme_id = data.get("theme_id")
+    upgrade_type = data.get("upgrade_type")
+    if upgrade_type not in THEME_UPGRADE_PRICES:
+        return jsonify({"error": "Unknown upgrade type"}), 400
+    if not _theme_upgrade_eligible(theme_id):
+        return jsonify({"error": "This theme has no upgrades"}), 400
+    d = load_data(name)
+    cfg = load_config(name)
+    total_xp = compute_total_xp(d, cfg)
+    level, _, _ = level_from_xp(total_xp)
+    if not _owns_theme(theme_id, level, d):
+        return jsonify({"error": "Unlock or buy the base theme first"}), 400
+
+    if upgrade_type == "fish":
+        total = THEME_FISH_UNLOCK_TOTALS.get(theme_id)
+        if not total:
+            return jsonify({"error": "This theme has no creatures to unlock"}), 400
+        item_type = f"theme_upgrade_{theme_id}_fish"
+        owned_count = sum(1 for p in d.get("nerds_spent", []) if p.get("item_type") == item_type)
+        if owned_count >= total:
+            return jsonify({"error": "Every creature for this theme is already unlocked"}), 400
+        cost = THEME_UPGRADE_PRICES["fish"]
+        balance = compute_current_balance(name, d)
+        if balance < cost:
+            return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+        _spend_nerds(d, item_type, 1, cost)
+        save_data(name, d)
+        return jsonify({"ok": True, "theme_id": theme_id, "upgrade_type": "fish", "unlocked": owned_count + 1, "total": total})
+
+    item_type = f"theme_upgrade_{theme_id}_{upgrade_type}"
+    if any(p.get("item_type") == item_type for p in d.get("nerds_spent", [])):
+        return jsonify({"error": "You already own this upgrade"}), 400
+    cost = THEME_UPGRADE_PRICES[upgrade_type]
+    balance = compute_current_balance(name, d)
+    if balance < cost:
+        return jsonify({"error": f"Not enough Nerds (need {cost}, have {round(balance,1)})"}), 400
+    _spend_nerds(d, item_type, 1, cost)
+    save_data(name, d)
+    return jsonify({"ok": True, "theme_id": theme_id, "upgrade_type": upgrade_type})
+
 @app.route("/api/<name>/inventory/use_seed", methods=["POST"])
 def use_seed(name):
     """A seed's action depends on context: if you don't yet own that
     plant, using its seed PLANTS it (creates the plant record). If you
-    already own it, seeds can't be "used" directly — they're spent via
+    already own it, seeds can't be "used" directly - they're spent via
     /plants/<id>/upgrade_fast_grower or sold via /shop/sell instead."""
     ensure_profile(name)
     data = request.get_json(force=True)
@@ -6401,7 +7116,7 @@ def use_seed(name):
     d.setdefault("plants", []).append(plant)
     # Auto-select the very first plant ever planted so a fresh Botanarium
     # doesn't silently grow nothing until the person discovers the Select
-    # button — subsequent plants are never auto-selected (planting a
+    # button - subsequent plants are never auto-selected (planting a
     # second plant shouldn't yank growth away from whichever one the
     # person already chose).
     if d.get("selected_plant_id") is None:
@@ -6432,17 +7147,23 @@ def select_plant_for_growth(name, plant_id):
 # ── Charts (seaborn) ──
 # Charts are rendered server-side with seaborn/matplotlib and served as
 # PNGs, styled to match the app's neon-dark theme. This replaced an
-# earlier Chart.js (client-side) implementation — seaborn gives a much
+# earlier Chart.js (client-side) implementation - seaborn gives a much
 # more polished, "professional report" look, and the same generator
 # functions are reused by the PDF weekly report below.
 import io as _io
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import seaborn as sns
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    import seaborn as sns
+    CHARTS_AVAILABLE = True
+except Exception as _chart_import_err:   # server must still boot without chart libs
+    print(f"[charts disabled] {_chart_import_err}")
+    CHARTS_AVAILABLE = False
+    plt = sns = mticker = None
 
-# Fallback constants (also THEME_PALETTES["dark"]'s values) — kept as
+# Fallback constants (also THEME_PALETTES["dark"]'s values) - kept as
 # plain names so any code that still references them directly works.
 CHART_BG = "#10151d"
 CHART_PANEL = "#161d29"
@@ -6655,7 +7376,7 @@ def generate_chart(chart_id, cfg, d, stats_cache=None, theme="dark"):
 
     if chart_id == "self_study_by_subject":
         items = stats["self_study"]["by_subject"]
-        return _pie(list(items.keys()), [v / 60 for v in items.values()], "Self-Study Distribution (hours)", tc)
+        return _pie(list(items.keys()), [v / 60 for v in items.values()], "Focus Distribution (hours)", tc)
     if chart_id == "daily_study_hours":
         by_date = stats["self_study"]["by_date"]
         dates = sorted(by_date.keys())
@@ -6717,6 +7438,8 @@ def generate_chart(chart_id, cfg, d, stats_cache=None, theme="dark"):
 
 @app.route("/api/<name>/charts/<chart_id>")
 def get_chart(name, chart_id):
+    if not CHARTS_AVAILABLE:
+        return jsonify({"error": "Charts need matplotlib + seaborn installed"}), 503
     ensure_profile(name)
     cfg = load_config(name)
     d = load_data(name)
@@ -6751,7 +7474,7 @@ def _report_cover_page(profile_name, cfg, week_stats, gam, start_date, end_date,
     att = week_stats["attendance"]
     ex = week_stats["exams"]
     lines = [
-        f"Self-study logged:      {ss['total_hours']}h across {ss['total_sessions']} session(s)",
+        f"Focus logged:      {ss['total_hours']}h across {ss['total_sessions']} session(s)",
         f"Subjects/skills touched: {len(ss['by_subject'])}",
         f"Attendance:              {att['present']} present / {att['partial']} partial / {att['absent']} absent",
         f"Exams this week:        {ex['total']} ({ex['done']} completed)",
@@ -6780,6 +7503,8 @@ def _report_cover_page(profile_name, cfg, week_stats, gam, start_date, end_date,
 
 @app.route("/api/<name>/report/weekly")
 def weekly_report(name):
+    if not CHARTS_AVAILABLE:
+        return jsonify({"error": "Reports need matplotlib + seaborn installed"}), 503
     ensure_profile(name)
     cfg = load_config(name)
     d = load_data(name)
@@ -6829,7 +7554,7 @@ def _compute_stats_payload(cfg, d):
     subjects = {s["id"]: s for s in cfg.get("subjects", [])}
     skills = {s["id"]: s for s in cfg.get("skills", [])}
 
-    # Self-study stats
+    # Focus stats
     self_study_by_subject = {}
     self_study_by_date = {}
     self_study_total_minutes = 0
@@ -6863,7 +7588,7 @@ def _compute_stats_payload(cfg, d):
     attendance_present = 0
     attendance_partial = 0
     attendance_absent = 0
-    attendance_teacher_absent = 0  # not the student's fault — tracked separately, never counted as an absence
+    attendance_teacher_absent = 0  # not the student's fault - tracked separately, never counted as an absence
     attendance_minutes_by_subject = {}
     attendance_by_type = {"C": 0, "TD": 0, "TP": 0}
 
@@ -6987,7 +7712,7 @@ def _compute_stats_payload(cfg, d):
     events_total = len(d.get("events", []))
     events_done = sum(1 for e in d.get("events", []) if e.get("status") == "done")
 
-    # ── Smart Recommendations (single unified engine — see
+    # ── Smart Recommendations (single unified engine - see
     # get_recommendations() near the top of this file) ──
     recommendations = get_recommendations(cfg, d)
 
@@ -7013,7 +7738,7 @@ def _compute_stats_payload(cfg, d):
         if diff is not None:
             difficulty_vs_score.append({"difficulty": diff, "score": e["score"], "subject": subjects.get(sid, {}).get("name", "Unknown")})
 
-    # Predicted vs actual (in-sample) — visualizes how well the urgency
+    # Predicted vs actual (in-sample) - visualizes how well the urgency
     # model's regression actually fits this person's own history. Only
     # computed when ML prediction is enabled (see ml_prediction_enabled).
     predicted_vs_actual = []
@@ -7026,8 +7751,8 @@ def _compute_stats_payload(cfg, d):
             for actual, pred in zip(y_train, preds):
                 predicted_vs_actual.append({"actual": actual, "predicted": round(max(0, min(20, float(pred))), 2)})
 
-    # XP over time (cumulative), from the "flow" sources only (self-study,
-    # attendance, exams) — badges/quests/logins are lumpy milestone
+    # XP over time (cumulative), from the "flow" sources only (focus,
+    # attendance, exams) - badges/quests/logins are lumpy milestone
     # bonuses rather than a daily trend, so they're left out of this
     # specific chart to keep the curve meaningful.
     xp_events = []
@@ -7122,7 +7847,7 @@ def get_stats(name):
 
 @app.route("/api/version")
 def get_version():
-    """Single source of truth for the running backend's version — the
+    """Single source of truth for the running backend's version - the
     frontend's APP_VERSION const (app.js) is the display-side default;
     this endpoint is what actually reflects what's running right now."""
     return jsonify({"version": APP_VERSION})
@@ -7130,19 +7855,100 @@ def get_version():
 # ── Static files ──
 @app.route("/")
 def index():
-    return send_file(APP_DIR / "index.html")
+    return send_file(APP_DIR / "index.html", mimetype="text/html; charset=utf-8", max_age=0)
 
 @app.route("/app.js")
 def app_js():
-    return send_file(APP_DIR / "app.js")
+    return send_file(APP_DIR / "app.js", mimetype="text/javascript; charset=utf-8", max_age=0)
 
 @app.route("/styles.css")
 def styles_css():
-    return send_file(APP_DIR / "styles.css")
+    return send_file(APP_DIR / "styles.css", mimetype="text/css; charset=utf-8", max_age=0)
+
+@app.route("/industrial.js")
+def industrial_js():
+    return send_file(APP_DIR / "industrial.js", mimetype="text/javascript; charset=utf-8", max_age=0)
+
+@app.route("/stockmarket.js")
+def stockmarket_js():
+    return send_file(APP_DIR / "stockmarket.js", mimetype="text/javascript; charset=utf-8", max_age=0)
+
+@app.route("/industrial.css")
+def industrial_css():
+    return send_file(APP_DIR / "industrial.css", mimetype="text/css; charset=utf-8", max_age=0)
+
+# ═══════════════════════════════════════════════════════════════════
+# ── Industrial Production & Stock Market blueprint ──
+# Registered LAST so the core API routes above keep priority. The module
+# gets every server helper it needs injected here (dependency injection -
+# it must never `import server`, which runs as __main__).
+# ═══════════════════════════════════════════════════════════════════
+import industrial_routes as _industrial_routes
+
+# Botanarium produce (fruits AND seeds) joins the commodity pool (§6:
+# every movable item is tracked with a fluctuating price) - built here
+# rather than imported so PLANT_DEFS stays the single source of truth.
+# Seeds get a real base_price derived from their own buy/sell prices
+# (previously fruits alone flowed into the market with NO price
+# override at all, so every single one priced at the same flat 5.0
+# fallback regardless of value - Watermelon Fruit and Pumpkin traded
+# identically. Both fruits and seeds now carry their real value in.
+_PLANT_COMMODITIES = []
+for _p in PLANT_DEFS:
+    _PLANT_COMMODITIES.append({
+        "item_type": _p["seed_item"], "label": f"{_p['name']} Seed",
+        "base_price": round(_p.get("seed_buy_price", SEED_SHOP_BUY_PRICE) * 0.62, 1),
+        "is_seed": True,
+    })
+    _PLANT_COMMODITIES.append({
+        "item_type": f"{_p['id']}_fruit", "label": _p.get("fruit_name", _p["name"]),
+        "base_price": _p.get("fruit_sell_price", FRUIT_SELL_PRICE),
+        "is_seed": False,
+    })
+
+_industrial_routes.init_deps({
+    "ensure_profile": ensure_profile,
+    "load_data": load_data,
+    "save_data": save_data,
+    "gen_id": gen_id,
+    "_spend_nerds": _spend_nerds,
+    "compute_current_balance": compute_current_balance,
+    "_inventory_add": _inventory_add,
+    "_inventory_has_space": _inventory_has_space,
+    "plant_commodities": _PLANT_COMMODITIES,
+    "lock_for": _lock_for,
+})
+# Let the event engine target Botanarium produce too (frost warnings,
+# farm-to-table trends, Exchange Spotlight picks), and give every one
+# of them a real base price instead of the flat fallback.
+_industrial_routes.ic.register_extra_commodities([c["item_type"] for c in _PLANT_COMMODITIES])
+_industrial_routes.ic.BASE_PRICE_OVERRIDES.update({c["item_type"]: c["base_price"] for c in _PLANT_COMMODITIES})
+app.register_blueprint(_industrial_routes.bp)
+
+@app.route("/api/theme_thumb/<stem>")
+def theme_thumb(stem):
+    """Small cached JPEG preview of a theme background (the Progression
+    page used to load every full-size background PNG at once)."""
+    safe = secure_filename(stem)
+    src = SPRITES_DIR / "themes" / f"{safe}.png"
+    if not src.exists():
+        abort(404)
+    cache = SAVES_DIR / "_thumbs"
+    cache.mkdir(exist_ok=True)
+    dst = cache / f"{safe}_{int(src.stat().st_mtime)}.jpg"
+    if not dst.exists():
+        try:
+            from PIL import Image
+            im = Image.open(src).convert("RGB")
+            im.thumbnail((520, 340))
+            im.save(dst, "JPEG", quality=78)
+        except Exception:
+            return send_file(src, max_age=600)
+    return send_file(dst, max_age=86400)
 
 @app.route("/sprites/<path:subpath>")
 def sprite_file(subpath):
-    """Serves everything under /sprites/<category>/<file> — e.g.
+    """Serves everything under /sprites/<category>/<file> - e.g.
     /sprites/crops/watermelon0.png, /sprites/gui/item-slot.png,
     /sprites/nerds/coin_01.png. Drop new art straight into the matching
     folder next to server.py; no route changes ever needed."""
@@ -7153,13 +7959,30 @@ def sprite_file(subpath):
         abort(404)
     if not requested.exists() or not requested.is_file():
         abort(404)
-    return send_file(requested)
+    return send_file(requested, max_age=600)
+
+# ── Boot handshake: the page reports in once it has actually rendered, so
+# desktop.py can detect a blank/white native window and fall back to the
+# browser instead of leaving the user staring at nothing. ──
+_BOOT_TOKENS = set()
+
+@app.route("/api/boot_ok", methods=["POST"])
+def boot_ok():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "")
+    if token:
+        _BOOT_TOKENS.add(token)
+    return jsonify({"ok": True})
+
+@app.route("/api/boot_status")
+def boot_status():
+    return jsonify({"ok": request.args.get("token", "") in _BOOT_TOKENS})
 
 if __name__ == "__main__":
     print(f"Cultivar v{APP_VERSION}")
     print("=" * 58)
     print(f"  Running locally at: http://127.0.0.1:{PORT}")
-    print("  (This app is desktop-only — open it via desktop.py / start.bat")
+    print("  (This app is desktop-only - open it via desktop.py / start.bat")
     print("   for the native window, rather than hitting this URL directly.)")
     print("=" * 58)
     app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)

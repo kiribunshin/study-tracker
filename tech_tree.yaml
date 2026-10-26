@@ -1,0 +1,4386 @@
+meta:
+  project: Cultivar — Industrial Production Tech Tree
+  version: 1.0-draft-v3
+  node_count: 209
+  notes:
+  - 'v3: added `produces` (structured item/machine output list) to every node, added 7 new production
+    lines (Textiles, Masonry, Jewelry, Consumer Electronics, Papermaking, Hardware Retail, Vehicles) for
+    Stock Market richness, rebalanced Lead-Acid (cheap/easy, Tier-2 gated) vs Nickel-Iron (pricier, Tier-3
+    gated) batteries, and validated: NO dangling prerequisite references, NO dependency cycles (checked
+    programmatically at generation time).'
+  - Every node's resource_requirements ARE enforced conceptually as 'must possess these items to research
+    this node' — the YAML just doesn't render that visually in a tree diagram; see the SVG's hover-tooltips,
+    and the companion items catalog, for that view.
+  - All study_hours and resource_requirements quantities remain DRAFT BALANCE VALUES — the coding chat
+    should retune freely. Structure (ids, prerequisites, branch, target_type, produces) is the part that
+    was deliberately designed and shouldn't be casually changed.
+  - branch='unlock' nodes gate crafting/building capability. branch='efficiency' nodes only buff.
+  - era is used purely for chart left-to-right ordering; not a hard gameplay gate.
+nodes:
+- id: starter_generator
+  name: Crude Hand-Crank Generator
+  branch: unlock
+  category: starter_kit
+  era: starter
+  study_hours: 0
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Weakest power generator in the game. Always available, no research needed.
+  effect: null
+  description: A hand-cranked dynamo. Tedious, but it works from the moment you start playing.
+  produces:
+  - item: Crude Hand-Crank Generator
+    is_machine: true
+    crafted_at: null
+- id: starter_wire
+  name: Crude Conductive Wire
+  branch: unlock
+  category: starter_kit
+  era: starter
+  study_hours: 0
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Weakest power wire tier. Lossy and low-throughput, but free from the start.
+  effect: null
+  description: Scrap-metal-and-fiber wire — routes a trickle of power without any smelting required.
+  produces:
+  - item: Crude Conductive Wire
+    is_machine: true
+    crafted_at: null
+- id: starter_pipe
+  name: Crude Hollow Pipe
+  branch: unlock
+  category: starter_kit
+  era: starter
+  study_hours: 0
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Weakest item/fluid pipe tier (reed/hollowed-wood). Free from the start.
+  effect: null
+  description: Hollowed wood or reed segments — the first, crudest way to move items or fluids on the
+    grid.
+  produces:
+  - item: Crude Hollow Pipe
+    is_machine: true
+    crafted_at: null
+- id: starter_storage
+  name: Basic Storage Bag
+  branch: unlock
+  category: starter_kit
+  era: starter
+  study_hours: 0
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: First inventory capacity tier. Free from the start.
+  effect: null
+  description: A simple woven bag — the base rung of the storage-capacity ladder.
+  produces:
+  - item: Basic Storage Bag
+    is_machine: true
+    crafted_at: null
+- id: fabricator_tier1
+  name: Fabricator I
+  branch: unlock
+  category: fabricator
+  era: starter
+  study_hours: 0
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Build Fabricator I — 2 input slots, primitive-era assembly recipes. Free from the start.
+  effect: null
+  description: A basic assembly bench, like a crafting table — available day one. Must be grid-adjacent
+    to a Storage Node to read its contents.
+  produces:
+  - item: Fabricator I
+    is_machine: true
+    crafted_at: null
+- id: stone_tool_making
+  name: Stone Tool Making
+  branch: unlock
+  category: primitive_tools
+  era: primitive
+  study_hours: 3
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft Stone-tier tools (pickaxe, axe) from Hands.
+  effect: null
+  description: Knapping flint and hard stone into functional cutting and pounding edges.
+  produces: []
+- id: fire_mastery
+  name: Fire Mastery
+  branch: unlock
+  category: primitive_tools
+  era: primitive
+  study_hours: 4
+  prerequisites:
+  - stone_tool_making
+  resource_requirements:
+  - item: Wood
+    quantity: 10
+  tool_requirements: []
+  unlocks: Enables controlled fire; prerequisite for all smelting and calcining.
+  effect: null
+  description: Reliable fire-starting and containment — the basis of every thermal process to follow.
+  produces: []
+- id: cordage_and_binding
+  name: Cordage & Binding
+  branch: unlock
+  category: primitive_tools
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - stone_tool_making
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft composite tools (handle + head bindings), required for tiered tool upgrades. Also unlocks
+    raw Cordage as a craftable/sellable item.
+  effect: null
+  description: Twisting plant fiber and sinew into cord strong enough to lash a head to a haft.
+  produces:
+  - item: Cordage
+    is_machine: false
+    crafted_at: null
+- id: basic_smelting
+  name: Basic Smelting
+  branch: unlock
+  category: metallurgy_foundations
+  era: primitive
+  study_hours: 8
+  prerequisites:
+  - fire_mastery
+  resource_requirements:
+  - item: Clay
+    quantity: 5
+  tool_requirements: []
+  unlocks: Build a Basic Smelting Kiln; enables smelting of Tier 1-2 ores.
+  effect: null
+  description: A clay-lined pit fire hot enough to coax metal out of soft ores.
+  produces:
+  - item: Basic Smelting Kiln
+    is_machine: true
+    crafted_at: null
+- id: pottery_and_ceramics
+  name: Pottery & Ceramics
+  branch: unlock
+  category: primitive_tools
+  era: primitive
+  study_hours: 4
+  prerequisites:
+  - fire_mastery
+  resource_requirements:
+  - item: Clay
+    quantity: 8
+  tool_requirements: []
+  unlocks: Build a Pottery Kiln; craft ceramic crucibles and molds, required for casting.
+  effect: null
+  description: Fired clay vessels that hold their shape under heat — the first molds.
+  produces:
+  - item: Pottery Kiln
+    is_machine: true
+    crafted_at: null
+  - item: Ceramic Crucible
+    is_machine: false
+    crafted_at: Pottery Kiln
+  - item: Ceramic Mold
+    is_machine: false
+    crafted_at: Pottery Kiln
+- id: woodworking_basics
+  name: Woodworking Basics
+  branch: unlock
+  category: wood
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - stone_tool_making
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft basic wood components; Stone Axe available.
+  effect: null
+  description: Shaping, joining, and seasoning wood reliably enough to build with it.
+  produces: []
+- id: cement_production
+  name: Cement Production
+  branch: unlock
+  category: construction
+  era: primitive
+  study_hours: 5
+  prerequisites:
+  - fire_mastery
+  resource_requirements:
+  - item: Limestone
+    quantity: 8
+  - item: Clay
+    quantity: 4
+  tool_requirements: []
+  unlocks: Build a Cement Kiln; craft Cement by calcining limestone and clay.
+  effect: null
+  description: Heating limestone and clay together to a partial fusion — the basis of all masonry to come.
+  produces:
+  - item: Cement Kiln
+    is_machine: true
+    crafted_at: null
+  - item: Cement
+    is_machine: false
+    crafted_at: Cement Kiln
+- id: coal_processing
+  name: Coal Processing
+  branch: unlock
+  category: ore_coal
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - basic_smelting
+  resource_requirements:
+  - item: Raw Coal
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Coal into its usable industrial form.
+  effect: null
+  description: Tier 1 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Coal (Processed)
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: salt_refining
+  name: Salt Refining
+  branch: unlock
+  category: ore_salt
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - basic_smelting
+  resource_requirements:
+  - item: Raw Salt
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and refine Salt into its usable industrial form.
+  effect: null
+  description: Tier 1 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Refined Salt
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: gypsum_processing
+  name: Gypsum Processing
+  branch: unlock
+  category: ore_gypsum
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - basic_smelting
+  resource_requirements:
+  - item: Raw Gypsum
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Gypsum into its usable industrial form.
+  effect: null
+  description: Tier 1 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Processed Gypsum
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: copper_metallurgy
+  name: Copper Metallurgy
+  branch: unlock
+  category: ore_copper
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Copper
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Copper into Ingots — one integrated line.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Copper Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: tin_metallurgy
+  name: Tin Metallurgy
+  branch: unlock
+  category: ore_tin
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Tin
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Tin into Ingots — one integrated line.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Tin Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: zinc_metallurgy
+  name: Zinc Metallurgy
+  branch: unlock
+  category: ore_zinc
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Zinc
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Zinc into Ingots — one integrated line.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Zinc Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: iron_metallurgy
+  name: Iron Metallurgy
+  branch: unlock
+  category: ore_iron
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Iron
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Iron into Ingots — one integrated line.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Iron Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: lead_metallurgy
+  name: Lead Metallurgy
+  branch: unlock
+  category: ore_lead
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Lead
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Lead into Ingots — one integrated line.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Lead Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: sulfur_refining
+  name: Sulfur Refining
+  branch: unlock
+  category: ore_sulfur
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - basic_smelting
+  resource_requirements:
+  - item: Raw Sulfur
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and refine Sulfur into its usable industrial form.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Refined Sulfur
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: quartz_processing
+  name: Quartz Processing
+  branch: unlock
+  category: ore_quartz
+  era: early_metallurgy
+  study_hours: 6
+  prerequisites:
+  - basic_smelting
+  resource_requirements:
+  - item: Raw Quartz
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Quartz into its usable industrial form.
+  effect: null
+  description: Tier 2 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Quartz (Purified)
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: silver_metallurgy
+  name: Silver Metallurgy
+  branch: unlock
+  category: ore_silver
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - blast_furnace_design
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Silver
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Silver into Ingots — one integrated line.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Silver Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: nickel_metallurgy
+  name: Nickel Metallurgy
+  branch: unlock
+  category: ore_nickel
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - blast_furnace_design
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Nickel
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Nickel into Ingots — one integrated line.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Nickel Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: cobalt_metallurgy
+  name: Cobalt Metallurgy
+  branch: unlock
+  category: ore_cobalt
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - blast_furnace_design
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Cobalt
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Cobalt into Ingots — one integrated line.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Cobalt Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: chromium_metallurgy
+  name: Chromium Metallurgy
+  branch: unlock
+  category: ore_chromium
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - blast_furnace_design
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Chromium
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Chromium into Ingots — one integrated line.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Chromium Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: manganese_metallurgy
+  name: Manganese Metallurgy
+  branch: unlock
+  category: ore_manganese
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - blast_furnace_design
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Manganese
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Manganese into Ingots — one integrated line.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Manganese Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: aluminum_electrolysis
+  name: Aluminum (Bauxite) Electrolysis
+  branch: unlock
+  category: ore_aluminum
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - electrolyzer_1
+  resource_requirements:
+  - item: Raw Aluminum (Bauxite)
+    quantity: 4
+  tool_requirements: []
+  unlocks: Extract pure Aluminum (Bauxite) via electrolytic reduction.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once. Hall-Héroult process
+    — needs the Electrolyzer line, not a blast furnace.
+  produces:
+  - item: Aluminum Ingot
+    is_machine: false
+    crafted_at: Basic Electrolyzer
+- id: lithium_refining
+  name: Lithium Refining
+  branch: unlock
+  category: ore_lithium
+  era: industrial
+  study_hours: 13
+  prerequisites:
+  - blast_furnace_design
+  - electrolyzer_1
+  resource_requirements:
+  - item: Raw Lithium
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and refine Lithium into its usable industrial form.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once. Brine extraction +
+    electrolytic refining to battery-grade lithium.
+  produces:
+  - item: Lithium (Battery-Grade)
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: graphite_processing
+  name: Graphite Processing
+  branch: unlock
+  category: ore_graphite
+  era: industrial
+  study_hours: 10
+  prerequisites:
+  - blast_furnace_design
+  resource_requirements:
+  - item: Raw Graphite
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Graphite into its usable industrial form.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Graphite
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: fluorite_processing
+  name: Fluorite Processing
+  branch: unlock
+  category: ore_fluorite
+  era: industrial
+  study_hours: 10
+  prerequisites:
+  - blast_furnace_design
+  resource_requirements:
+  - item: Raw Fluorite
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Fluorite into its usable industrial form.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Processed Fluorite
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: barite_processing
+  name: Barite Processing
+  branch: unlock
+  category: ore_barite
+  era: industrial
+  study_hours: 10
+  prerequisites:
+  - blast_furnace_design
+  resource_requirements:
+  - item: Raw Barite
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and process Barite into its usable industrial form.
+  effect: null
+  description: Tier 3 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Processed Barite
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: gold_metallurgy
+  name: Gold Metallurgy
+  branch: unlock
+  category: ore_gold
+  era: precious
+  study_hours: 24
+  prerequisites:
+  - advanced_refining_furnace
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Gold
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Gold into Ingots — one integrated line.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Gold Ingot
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: platinum_metallurgy
+  name: Platinum Metallurgy
+  branch: unlock
+  category: ore_platinum
+  era: precious
+  study_hours: 24
+  prerequisites:
+  - advanced_refining_furnace
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Raw Platinum
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine, smelt, and cast Platinum into Ingots — one integrated line.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once.
+  produces:
+  - item: Platinum Ingot
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: palladium_refining
+  name: Palladium Refining
+  branch: unlock
+  category: ore_palladium
+  era: precious
+  study_hours: 11
+  prerequisites:
+  - advanced_refining_furnace
+  - platinum_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Mine and refine Palladium into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Byproduct of Platinum
+    refining.
+  produces:
+  - item: Refined Palladium
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: rhodium_refining
+  name: Rhodium Refining
+  branch: unlock
+  category: ore_rhodium
+  era: precious
+  study_hours: 11
+  prerequisites:
+  - advanced_refining_furnace
+  - platinum_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Mine and refine Rhodium into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Byproduct of Platinum
+    refining.
+  produces:
+  - item: Refined Rhodium
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: iridium_refining
+  name: Iridium Refining
+  branch: unlock
+  category: ore_iridium
+  era: precious
+  study_hours: 11
+  prerequisites:
+  - advanced_refining_furnace
+  - platinum_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Mine and refine Iridium into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Byproduct of Platinum
+    refining.
+  produces:
+  - item: Refined Iridium
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: ruthenium_refining
+  name: Ruthenium Refining
+  branch: unlock
+  category: ore_ruthenium
+  era: precious
+  study_hours: 11
+  prerequisites:
+  - advanced_refining_furnace
+  - platinum_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Mine and refine Ruthenium into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Byproduct of Platinum
+    refining.
+  produces:
+  - item: Refined Ruthenium
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: osmium_refining
+  name: Osmium Refining
+  branch: unlock
+  category: ore_osmium
+  era: precious
+  study_hours: 11
+  prerequisites:
+  - advanced_refining_furnace
+  - platinum_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Mine and refine Osmium into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Byproduct of Platinum
+    refining.
+  produces:
+  - item: Refined Osmium
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: tungsten_refining
+  name: Tungsten Refining
+  branch: unlock
+  category: ore_tungsten
+  era: precious
+  study_hours: 20
+  prerequisites:
+  - advanced_refining_furnace
+  resource_requirements:
+  - item: Raw Tungsten
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and refine Tungsten into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Powder metallurgy
+    — sintered, not cast.
+  produces:
+  - item: Tungsten Ingot
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: titanium_extraction
+  name: Titanium Extraction
+  branch: unlock
+  category: ore_titanium
+  era: precious
+  study_hours: 38
+  prerequisites:
+  - advanced_refining_furnace
+  resource_requirements:
+  - item: Raw Titanium
+    quantity: 4
+  tool_requirements: []
+  unlocks: Reduce Titanium ore into a usable Ingot via the Kroll Process.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Kroll Process — real
+    titanium yields sponge metal needing a separate melt step; abstracted into one node here for playability,
+    still produces a usable Ingot.
+  produces:
+  - item: Titanium Ingot
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: gemstone_refining
+  name: Gemstone Refining
+  branch: unlock
+  category: ore_gemstone
+  era: precious
+  study_hours: 20
+  prerequisites:
+  - advanced_refining_furnace
+  resource_requirements:
+  - item: Raw Gemstone
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mine and refine Gemstone into its usable industrial form.
+  effect: null
+  description: Tier 4 material. Researching this unlocks the FULL pipeline at once. Rough gems mined and
+    cut — feeds the Jewelry & Ornamental Crafting line specifically.
+  produces:
+  - item: Cut Gemstone
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: bronze_alloying
+  name: Bronze Alloying
+  branch: unlock
+  category: alloys
+  era: early_metallurgy
+  study_hours: 12
+  prerequisites:
+  - copper_metallurgy
+  - tin_metallurgy
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 3
+  - item: Tin Ingot
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Bronze Ingots; unlocks Bronze-tier tools.
+  effect: null
+  description: 'The archetypal alloy: copper hardened with a fraction of tin.'
+  produces:
+  - item: Bronze Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: brass_alloying
+  name: Brass Alloying
+  branch: unlock
+  category: alloys
+  era: early_metallurgy
+  study_hours: 11
+  prerequisites:
+  - copper_metallurgy
+  - zinc_metallurgy
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 3
+  - item: Zinc Ingot
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Brass Ingots; used in early fittings and later circuit hardware.
+  effect: null
+  description: Copper and zinc combined for a corrosion-resistant, machinable alloy.
+  produces:
+  - item: Brass Ingot
+    is_machine: false
+    crafted_at: Basic Smelting Kiln
+- id: blast_furnace_design
+  name: Blast Furnace Design
+  branch: unlock
+  category: metallurgy_foundations
+  era: early_metallurgy
+  study_hours: 18
+  prerequisites:
+  - iron_metallurgy
+  - coal_processing
+  resource_requirements:
+  - item: Clay
+    quantity: 20
+  - item: Iron Ingot
+    quantity: 5
+  tool_requirements: []
+  unlocks: Build a Blast Furnace; required for Tier 3 ore processing and Steel Production.
+  effect: null
+  description: A forced-draft furnace hot enough to reduce iron ore continuously at scale.
+  produces:
+  - item: Blast Furnace
+    is_machine: true
+    crafted_at: null
+- id: steel_production
+  name: Steel Production
+  branch: unlock
+  category: alloys
+  era: early_metallurgy
+  study_hours: 20
+  prerequisites:
+  - blast_furnace_design
+  - iron_metallurgy
+  resource_requirements:
+  - item: Iron Ingot
+    quantity: 4
+  - item: Coal (Processed)
+    quantity: 3
+  tool_requirements: []
+  unlocks: Craft Steel Ingots; unlocks Steel-tier tools.
+  effect: null
+  description: Controlled carbon content turns brittle iron into tough, workable steel.
+  produces:
+  - item: Steel Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: stainless_steel
+  name: Stainless Steel Alloying
+  branch: unlock
+  category: alloys
+  era: industrial
+  study_hours: 26
+  prerequisites:
+  - steel_production
+  - chromium_metallurgy
+  - nickel_metallurgy
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 4
+  - item: Chromium Ingot
+    quantity: 1
+  - item: Nickel Ingot
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Stainless Steel; required for Reinforced-tier tools and food-safe/chemical equipment.
+  effect: null
+  description: Chromium's passive oxide layer makes steel resistant to corrosion.
+  produces:
+  - item: Stainless Steel Ingot
+    is_machine: false
+    crafted_at: Blast Furnace
+- id: advanced_refining_furnace
+  name: Advanced Refining Furnace
+  branch: unlock
+  category: metallurgy_foundations
+  era: industrial
+  study_hours: 30
+  prerequisites:
+  - blast_furnace_design
+  - basic_electromagnetism
+  - copper_wire_production
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 10
+  - item: Copper Wire
+    quantity: 5
+  tool_requirements: []
+  unlocks: Build an Advanced Refining Furnace; required to process all Tier 4 precious ores.
+  effect: null
+  description: Electrically-assisted temperature control needed to isolate precious and platinum-group
+    metals.
+  produces:
+  - item: Advanced Refining Furnace
+    is_machine: true
+    crafted_at: null
+- id: carbide_metallurgy
+  name: Carbide Metallurgy
+  branch: unlock
+  category: alloys
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - tungsten_refining
+  - steel_production
+  resource_requirements:
+  - item: Tungsten Ingot
+    quantity: 2
+  - item: Steel Ingot
+    quantity: 3
+  tool_requirements: []
+  unlocks: Craft Tungsten Carbide; unlocks Carbide-tier tools (final hand-tool era tier).
+  effect: null
+  description: Tungsten carbide's hardness closes out the hand-tool era in style.
+  produces:
+  - item: Tungsten Carbide
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: concrete_casting
+  name: Concrete Casting
+  branch: unlock
+  category: construction
+  era: early_metallurgy
+  study_hours: 12
+  prerequisites:
+  - cement_production
+  - pottery_and_ceramics
+  resource_requirements:
+  - item: Cement
+    quantity: 6
+  - item: Gravel
+    quantity: 10
+  tool_requirements: []
+  unlocks: Craft Concrete; enables Concrete Prefab Wall Panels — a sturdier alternative to wood construction.
+  effect: null
+  description: Cement, aggregate, and water — the second construction material line.
+  produces:
+  - item: Concrete
+    is_machine: false
+    crafted_at: Cement Kiln
+- id: glassmaking
+  name: Glassmaking
+  branch: unlock
+  category: construction
+  era: early_metallurgy
+  study_hours: 12
+  prerequisites:
+  - quartz_processing
+  - fire_mastery
+  resource_requirements:
+  - item: Quartz (Purified)
+    quantity: 6
+  tool_requirements: []
+  unlocks: Build a Glass Furnace; used in Solar Panels, lab equipment, and prefab building windows.
+  effect: null
+  description: Melting purified silica into a transparent, moldable material.
+  produces:
+  - item: Glass Furnace
+    is_machine: true
+    crafted_at: null
+  - item: Glass
+    is_machine: false
+    crafted_at: Glass Furnace
+- id: wooden_pickaxe
+  name: Wooden Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: primitive
+  study_hours: 3
+  prerequisites: []
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Wooden Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Wooden Pickaxe. Cruder than the
+    Stone tier below it, and gated behind nothing but Hands - shaping a wooden
+    head needs no metallurgy or stoneworking know-how at all.
+  produces:
+  - item: Wooden Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: stone_pickaxe
+  name: Stone Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: primitive
+  study_hours: 4
+  prerequisites:
+  - wooden_pickaxe
+  - stone_tool_making
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Stone Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Stone Pickaxe. This is the tier
+    Stone Tool Making actually unlocks - knapped stone needs that technique,
+    unlike the cruder Wooden Pickaxe below it.
+  produces:
+  - item: Stone Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: copper_pickaxe
+  name: Copper Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: early_metallurgy
+  study_hours: 7
+  prerequisites:
+  - stone_pickaxe
+  - copper_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Copper Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Copper Pickaxe.
+  produces:
+  - item: Copper Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: bronze_pickaxe
+  name: Bronze Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: early_metallurgy
+  study_hours: 10
+  prerequisites:
+  - copper_pickaxe
+  - bronze_alloying
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Bronze Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Bronze Pickaxe.
+  produces:
+  - item: Bronze Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: iron_pickaxe
+  name: Iron Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: early_metallurgy
+  study_hours: 13
+  prerequisites:
+  - bronze_pickaxe
+  - iron_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Iron Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Iron Pickaxe.
+  produces:
+  - item: Iron Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: steel_pickaxe
+  name: Steel Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - iron_pickaxe
+  - steel_production
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Steel Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Steel Pickaxe.
+  produces:
+  - item: Steel Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: reinforced_pickaxe
+  name: Reinforced Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - steel_pickaxe
+  - stainless_steel
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Reinforced Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Reinforced Pickaxe.
+  produces:
+  - item: Reinforced Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: carbide_pickaxe
+  name: Carbide Pickaxe
+  branch: unlock
+  category: mining_tools
+  era: industrial
+  study_hours: 26
+  prerequisites:
+  - reinforced_pickaxe
+  - carbide_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Carbide Pickaxe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era mining implement — Carbide Pickaxe.
+  produces:
+  - item: Carbide Pickaxe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: stone_axe
+  name: Stone Axe
+  branch: unlock
+  category: wood_tools
+  era: primitive
+  study_hours: 3
+  prerequisites:
+  - woodworking_basics
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Stone Axe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era forestry implement — Stone Axe.
+  produces:
+  - item: Stone Axe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: copper_axe
+  name: Copper Axe
+  branch: unlock
+  category: wood_tools
+  era: early_metallurgy
+  study_hours: 6
+  prerequisites:
+  - stone_axe
+  - copper_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Copper Axe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era forestry implement — Copper Axe.
+  produces:
+  - item: Copper Axe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: bronze_axe
+  name: Bronze Axe
+  branch: unlock
+  category: wood_tools
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - copper_axe
+  - bronze_alloying
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Bronze Axe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era forestry implement — Bronze Axe.
+  produces:
+  - item: Bronze Axe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: iron_axe
+  name: Iron Axe
+  branch: unlock
+  category: wood_tools
+  era: early_metallurgy
+  study_hours: 12
+  prerequisites:
+  - bronze_axe
+  - iron_metallurgy
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Iron Axe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era forestry implement — Iron Axe.
+  produces:
+  - item: Iron Axe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: steel_axe
+  name: Steel Axe
+  branch: unlock
+  category: wood_tools
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - iron_axe
+  - steel_production
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks the Steel Axe family (3 in-family levels).
+  effect: null
+  description: Hand-tool-era forestry implement — Steel Axe.
+  produces:
+  - item: Steel Axe
+    is_machine: false
+    crafted_at: Fabricator I
+- id: sawmill_1
+  name: Sawmill I
+  branch: unlock
+  category: wood_processing
+  era: primitive
+  study_hours: 5
+  prerequisites:
+  - woodworking_basics
+  resource_requirements:
+  - item: Wood
+    quantity: 10
+  tool_requirements: []
+  unlocks: Build Sawmill I — turns Logs into Planks.
+  effect: null
+  description: A water- or hand-powered saw blade replacing the axe for volume lumber.
+  produces:
+  - item: Sawmill I
+    is_machine: true
+    crafted_at: null
+  - item: Planks
+    is_machine: false
+    crafted_at: Sawmill I
+- id: sawmill_2
+  name: Sawmill II
+  branch: unlock
+  category: wood_processing
+  era: early_metallurgy
+  study_hours: 12
+  prerequisites:
+  - sawmill_1
+  - steel_axe
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 2
+  tool_requirements: []
+  unlocks: Higher-throughput Planks; unlocks Plywood.
+  effect: null
+  description: Steel blades and a proper frame — faster, cleaner cuts.
+  produces:
+  - item: Sawmill II
+    is_machine: true
+    crafted_at: null
+  - item: Plywood
+    is_machine: false
+    crafted_at: Sawmill II
+- id: sawmill_3
+  name: Sawmill III
+  branch: unlock
+  category: wood_processing
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - sawmill_2
+  - machining_basics
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Engineered Lumber; highest wood-throughput tier.
+  effect: null
+  description: Precision-milled lumber products at industrial scale.
+  produces:
+  - item: Sawmill III
+    is_machine: true
+    crafted_at: null
+  - item: Engineered Lumber
+    is_machine: false
+    crafted_at: Sawmill III
+- id: carpentry_workshop_1
+  name: Carpentry Workshop I
+  branch: unlock
+  category: wood_processing
+  era: primitive
+  study_hours: 6
+  prerequisites:
+  - sawmill_1
+  - fabricator_tier1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft basic Furniture (Stool, Table) and Prefab Wood Wall Panels — both sellable.
+  effect: null
+  description: A simple bench for turning Planks into finished, sellable goods.
+  produces:
+  - item: Carpentry Workshop I
+    is_machine: true
+    crafted_at: null
+  - item: Stool
+    is_machine: false
+    crafted_at: Carpentry Workshop I
+  - item: Table
+    is_machine: false
+    crafted_at: Carpentry Workshop I
+  - item: Prefab Wood Wall Panel
+    is_machine: false
+    crafted_at: Carpentry Workshop I
+- id: carpentry_workshop_2
+  name: Carpentry Workshop II
+  branch: unlock
+  category: wood_processing
+  era: early_metallurgy
+  study_hours: 14
+  prerequisites:
+  - carpentry_workshop_1
+  - sawmill_2
+  - primitive_fasteners
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft advanced furniture (Cabinet, Bed Frame) and Prefab Wood Flooring.
+  effect: null
+  description: Fasteners let joinery move beyond pegs and glue.
+  produces:
+  - item: Carpentry Workshop II
+    is_machine: true
+    crafted_at: null
+  - item: Cabinet
+    is_machine: false
+    crafted_at: Carpentry Workshop II
+  - item: Bed Frame
+    is_machine: false
+    crafted_at: Carpentry Workshop II
+  - item: Prefab Wood Flooring
+    is_machine: false
+    crafted_at: Carpentry Workshop II
+- id: carpentry_workshop_3
+  name: Carpentry Workshop III
+  branch: unlock
+  category: wood_processing
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - carpentry_workshop_2
+  - sawmill_3
+  - precision_tooling
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft premium furniture sets and modular Prefab Wood Building Kits.
+  effect: null
+  description: Machine-precision joinery for flat-pack, modular construction kits.
+  produces:
+  - item: Carpentry Workshop III
+    is_machine: true
+    crafted_at: null
+  - item: Premium Furniture Set
+    is_machine: false
+    crafted_at: Carpentry Workshop III
+  - item: Prefab Wood Building Kit
+    is_machine: false
+    crafted_at: Carpentry Workshop III
+- id: press_1
+  name: Basic Press
+  branch: unlock
+  category: mechanical
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - copper_metallurgy
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 3
+  tool_requirements: []
+  unlocks: Stamp Ingots into Plates/Sheets.
+  effect: null
+  description: A lever or screw press — the foundation of all sheet-metal work.
+  produces:
+  - item: Basic Press
+    is_machine: true
+    crafted_at: null
+  - item: Metal Plate
+    is_machine: false
+    crafted_at: Basic Press
+- id: roller_1
+  name: Basic Rolling Mill
+  branch: unlock
+  category: mechanical
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - copper_metallurgy
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 3
+  tool_requirements: []
+  unlocks: Roll Ingots into Rods/Wire Stock.
+  effect: null
+  description: Paired rollers squeeze ingots into uniform rod stock.
+  produces:
+  - item: Basic Rolling Mill
+    is_machine: true
+    crafted_at: null
+  - item: Metal Rod
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+- id: primitive_fasteners
+  name: Fastener Fabrication
+  branch: unlock
+  category: mechanical
+  era: early_metallurgy
+  study_hours: 9
+  prerequisites:
+  - press_1
+  - roller_1
+  resource_requirements:
+  - item: Metal Plate
+    quantity: 2
+  - item: Metal Rod
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Nuts, Bolts, and Screws — sellable, and a required ingredient in a huge range of recipes.
+  effect: null
+  description: The unglamorous foundation of mechanical assembly everywhere.
+  produces:
+  - item: Nut
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+  - item: Bolt
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+  - item: Screw
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+- id: press_2
+  name: Advanced Press
+  branch: unlock
+  category: mechanical
+  era: industrial
+  study_hours: 18
+  prerequisites:
+  - press_1
+  - steel_production
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Stamp Steel Plates.
+  effect: null
+  description: Heavier tooling and more force for tougher stock.
+  produces:
+  - item: Advanced Press
+    is_machine: true
+    crafted_at: null
+  - item: Steel Plate
+    is_machine: false
+    crafted_at: Advanced Press
+- id: roller_2
+  name: Advanced Rolling Mill
+  branch: unlock
+  category: mechanical
+  era: industrial
+  study_hours: 18
+  prerequisites:
+  - roller_1
+  - steel_production
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Roll Steel Rods.
+  effect: null
+  description: Higher-tolerance rollers for consistent steel stock.
+  produces:
+  - item: Advanced Rolling Mill
+    is_machine: true
+    crafted_at: null
+  - item: Steel Rod
+    is_machine: false
+    crafted_at: Advanced Rolling Mill
+- id: gear_shaft_fabrication
+  name: Gear & Shaft Fabrication
+  branch: unlock
+  category: mechanical
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - press_2
+  - roller_2
+  - rotational_mechanics
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 3
+  - item: Steel Rod
+    quantity: 3
+  tool_requirements: []
+  unlocks: Build a Gear Cutting Station; craft Gears and Shafts.
+  effect: null
+  description: Cutting teeth and machining shafts to real tolerances — feeds directly into motor design.
+  produces:
+  - item: Gear Cutting Station
+    is_machine: true
+    crafted_at: null
+  - item: Gear
+    is_machine: false
+    crafted_at: Gear Cutting Station
+  - item: Shaft
+    is_machine: false
+    crafted_at: Gear Cutting Station
+- id: mechanical_assemblies
+  name: Mechanical Assemblies
+  branch: unlock
+  category: mechanical
+  era: industrial
+  study_hours: 26
+  prerequisites:
+  - gear_shaft_fabrication
+  - primitive_fasteners
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Build a Mechanical Assembly Workshop; craft Gearboxes, Bearing Assemblies, and other common
+    mechanisms — sellable and used in machine-era tool recipes.
+  effect: null
+  description: Common mechanical sub-assemblies built from gears, shafts, and fasteners.
+  produces:
+  - item: Mechanical Assembly Workshop
+    is_machine: true
+    crafted_at: null
+  - item: Gearbox
+    is_machine: false
+    crafted_at: Mechanical Assembly Workshop
+  - item: Bearing Assembly
+    is_machine: false
+    crafted_at: Mechanical Assembly Workshop
+- id: press_3
+  name: Precision Press
+  branch: unlock
+  category: mechanical
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - press_2
+  - precision_tooling
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Stamp Tungsten/Titanium Plates.
+  effect: null
+  description: Tight-tolerance tooling for the hardest alloys.
+  produces:
+  - item: Precision Press
+    is_machine: true
+    crafted_at: null
+  - item: Tungsten Plate
+    is_machine: false
+    crafted_at: Precision Press
+  - item: Titanium Plate
+    is_machine: false
+    crafted_at: Precision Press
+- id: roller_3
+  name: Precision Rolling Mill
+  branch: unlock
+  category: mechanical
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - roller_2
+  - precision_tooling
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Roll Tungsten/Titanium Rods.
+  effect: null
+  description: Precision rollers for the toughest metals in the game.
+  produces:
+  - item: Precision Rolling Mill
+    is_machine: true
+    crafted_at: null
+  - item: Tungsten Rod
+    is_machine: false
+    crafted_at: Precision Rolling Mill
+  - item: Titanium Rod
+    is_machine: false
+    crafted_at: Precision Rolling Mill
+- id: machining_basics
+  name: Machining Basics
+  branch: unlock
+  category: engineering
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - reinforced_pickaxe
+  - steel_axe
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 6
+  tool_requirements: []
+  unlocks: Craft precision-fit components; required for all machine-era tools.
+  effect: null
+  description: Files, lathes, and jigs precise enough to make interchangeable parts.
+  produces: []
+- id: precision_tooling
+  name: Precision Tooling
+  branch: unlock
+  category: engineering
+  era: industrial
+  study_hours: 26
+  prerequisites:
+  - machining_basics
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks fine-tolerance components required for circuit and motor assembly.
+  effect: null
+  description: The jump from 'good enough' to precise, repeatable manufacturing tolerances.
+  produces: []
+- id: rotational_mechanics
+  name: Rotational Mechanics
+  branch: unlock
+  category: engineering
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - machining_basics
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Design gears, shafts, and bearings; required for Gear & Shaft Fabrication, motors, and drills.
+  effect: null
+  description: Understanding torque, gearing ratios, and bearing wear.
+  produces: []
+- id: magnetism_theory
+  name: Magnetism Theory
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 18
+  prerequisites:
+  - precision_tooling
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Theoretical basis for electromagnetism and motor design.
+  effect: null
+  description: Understanding magnetic fields well enough to exploit them mechanically.
+  produces: []
+- id: basic_electromagnetism
+  name: Basic Electromagnetism
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - magnetism_theory
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Generate current via induction; required for wire production and generators.
+  effect: null
+  description: Turning magnetism and motion into usable electrical current.
+  produces: []
+- id: wire_drawing
+  name: Wire Drawing
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 12
+  prerequisites:
+  - basic_electromagnetism
+  - roller_1
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 4
+  tool_requirements: []
+  unlocks: Draw rolled rod stock into fine wire.
+  effect: null
+  description: Pulling rolled rod stock through progressively smaller dies to form uniform wire.
+  produces:
+  - item: Wire Stock
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+- id: copper_wire_production
+  name: Copper Wire Production
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 9
+  prerequisites:
+  - wire_drawing
+  resource_requirements:
+  - item: Copper Ingot
+    quantity: 3
+  tool_requirements: []
+  unlocks: Craft Copper Wire; required for circuits and motors.
+  effect: null
+  description: Standardized insulated copper wire, the workhorse conductor.
+  produces:
+  - item: Copper Wire
+    is_machine: false
+    crafted_at: Fabricator I
+- id: circuit_fundamentals
+  name: Circuit Fundamentals
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 15
+  prerequisites:
+  - basic_electromagnetism
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Theory of current, voltage, and resistance — required for all circuit components.
+  effect: null
+  description: You know what a resistor IS well before you're able to design a working motor.
+  produces: []
+- id: resistor_fabrication
+  name: Resistor Fabrication
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 8
+  prerequisites:
+  - circuit_fundamentals
+  - graphite_processing
+  - fabricator_tier2
+  resource_requirements:
+  - item: Graphite
+    quantity: 2
+  - item: Clay
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Resistors.
+  effect: null
+  description: Carbon-composite resistive elements — simple, and buildable well ahead of motors.
+  produces:
+  - item: Resistor
+    is_machine: false
+    crafted_at: Fabricator II
+- id: capacitor_fabrication
+  name: Capacitor Fabrication
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 10
+  prerequisites:
+  - circuit_fundamentals
+  - aluminum_electrolysis
+  - fabricator_tier2
+  resource_requirements:
+  - item: Aluminum Ingot
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Capacitors; required for battery charge regulation.
+  effect: null
+  description: Storing charge between two conductive plates separated by a dielectric.
+  produces:
+  - item: Capacitor
+    is_machine: false
+    crafted_at: Fabricator II
+- id: basic_circuit_assembly
+  name: Basic Circuit Assembly
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 17
+  prerequisites:
+  - resistor_fabrication
+  - copper_wire_production
+  resource_requirements:
+  - item: Resistor
+    quantity: 4
+  - item: Copper Wire
+    quantity: 6
+  tool_requirements: []
+  unlocks: Assemble basic circuit boards; required for all powered-tool control systems.
+  effect: null
+  description: Combining wire and resistive elements into a working, repeatable circuit.
+  produces:
+  - item: Circuit Board
+    is_machine: false
+    crafted_at: Fabricator II
+- id: basic_motor_design
+  name: Basic Motor Design
+  branch: unlock
+  category: electrical
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - rotational_mechanics
+  - copper_wire_production
+  - gear_shaft_fabrication
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Theoretical + practical motor design. This is R&D only — build an Engine Factory to actually
+    manufacture motors.
+  effect: null
+  description: The genuine convergence node — needs magnetism, wire production, gearing knowledge, AND
+    actual manufactured gears simultaneously. Produces no items itself; see Engine Factory I.
+  produces: []
+- id: engine_factory_1
+  name: Engine Factory I
+  branch: unlock
+  category: vehicles
+  era: industrial
+  study_hours: 14
+  prerequisites:
+  - basic_motor_design
+  - fabricator_tier2
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 4
+  - item: Gear
+    quantity: 2
+  tool_requirements: []
+  unlocks: Build Engine Factory I — the actual place Basic Motors get manufactured. Nothing that needs
+    a motor can be built without this existing somewhere on your grid.
+  effect: null
+  description: Motor Design was the theory; this is the physical assembly line.
+  produces:
+  - item: Engine Factory I
+    is_machine: true
+    crafted_at: null
+  - item: Basic Motor
+    is_machine: false
+    crafted_at: Engine Factory I
+- id: engine_factory_2
+  name: Engine Factory II (Heavy/Diesel)
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 26
+  prerequisites:
+  - engine_factory_1
+  - oil_refining_advanced
+  - press_2
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 8
+  - item: Steel Rod
+    quantity: 4
+  tool_requirements: []
+  unlocks: Build Engine Factory II — required before Heavy Diesel Engines can be manufactured anywhere.
+  effect: null
+  description: Scaling the assembly line up to handle combustion engines, not just electric motors.
+  produces:
+  - item: Engine Factory II
+    is_machine: true
+    crafted_at: null
+- id: electric_tool_housing
+  name: Electric Tool Housing
+  branch: unlock
+  category: engineering
+  era: industrial
+  study_hours: 14
+  prerequisites:
+  - engine_factory_1
+  - basic_circuit_assembly
+  - polymer_synthesis
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 4
+  - item: Plastic Casing
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft housings that combine a motor + circuit into a self-contained powered tool shell.
+  effect: null
+  description: The last step before you can actually build an Electric Drill.
+  produces:
+  - item: Electric Tool Housing
+    is_machine: false
+    crafted_at: Fabricator II
+- id: electric_drill
+  name: Electric Drill
+  branch: unlock
+  category: mining_tools
+  era: industrial
+  study_hours: 9
+  prerequisites:
+  - electric_tool_housing
+  - carbide_pickaxe
+  - fabricator_tier3
+  resource_requirements:
+  - item: Basic Motor
+    quantity: 1
+  - item: Circuit Board
+    quantity: 1
+  tool_requirements: []
+  unlocks: Unlocks the Electric Drill mining tool family — first machine-era mining tool.
+  effect: null
+  description: Hand tools give way to powered ones. Everything before this was necessary to get here.
+  produces:
+  - item: Electric Drill
+    is_machine: false
+    crafted_at: Fabricator III
+- id: pneumatic_drill
+  name: Pneumatic Drill
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 18
+  prerequisites:
+  - electric_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Pneumatic Drill — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Pneumatic Drill
+    is_machine: false
+    crafted_at: Fabricator III
+- id: jackhammer
+  name: Jackhammer
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 24
+  prerequisites:
+  - pneumatic_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Jackhammer — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Jackhammer
+    is_machine: false
+    crafted_at: Fabricator III
+- id: industrial_rock_drill
+  name: Industrial Rock Drill
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 32
+  prerequisites:
+  - jackhammer
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Industrial Rock Drill — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Industrial Rock Drill
+    is_machine: false
+    crafted_at: Fabricator III
+- id: small_mechanical_drill
+  name: Small Mechanical Drill
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 38
+  prerequisites:
+  - industrial_rock_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Small Mechanical Drill — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Small Mechanical Drill
+    is_machine: false
+    crafted_at: Fabricator III
+- id: mining_rig
+  name: Mining Rig
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 50
+  prerequisites:
+  - small_mechanical_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Mining Rig — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Mining Rig
+    is_machine: false
+    crafted_at: Fabricator III
+- id: drill_vehicle
+  name: Drill Vehicle
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 62
+  prerequisites:
+  - mining_rig
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Drill Vehicle — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Drill Vehicle
+    is_machine: false
+    crafted_at: Fabricator III
+- id: tunnel_boring_machine
+  name: Tunnel Boring Machine
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 85
+  prerequisites:
+  - drill_vehicle
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Tunnel Boring Machine — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Tunnel Boring Machine
+    is_machine: false
+    crafted_at: Fabricator III
+- id: industrial_mining_excavator
+  name: Industrial Mining Excavator
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 110
+  prerequisites:
+  - tunnel_boring_machine
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Industrial Mining Excavator — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Industrial Mining Excavator
+    is_machine: false
+    crafted_at: Fabricator III
+- id: deep_earth_drilling_platform
+  name: Deep-Earth Drilling Platform
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 140
+  prerequisites:
+  - industrial_mining_excavator
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Deep-Earth Drilling Platform — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Deep-Earth Drilling Platform
+    is_machine: false
+    crafted_at: Fabricator III
+- id: geothermal_drill
+  name: Geothermal Drill
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 170
+  prerequisites:
+  - deep_earth_drilling_platform
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Geothermal Drill — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Geothermal Drill
+    is_machine: false
+    crafted_at: Fabricator III
+- id: planetary_mining_system
+  name: Planetary Mining System
+  branch: unlock
+  category: mining_tools
+  era: advanced
+  study_hours: 220
+  prerequisites:
+  - geothermal_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Planetary Mining System — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Planetary Mining System
+    is_machine: false
+    crafted_at: Fabricator III
+- id: chainsaw
+  name: Chainsaw
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 20
+  prerequisites:
+  - steel_axe
+  - electric_tool_housing
+  - fabricator_tier3
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Chainsaw — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Chainsaw
+    is_machine: false
+    crafted_at: Fabricator III
+- id: heavy_chainsaw
+  name: Heavy Chainsaw
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 26
+  prerequisites:
+  - chainsaw
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Heavy Chainsaw — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Heavy Chainsaw
+    is_machine: false
+    crafted_at: Fabricator III
+- id: felling_saw
+  name: Felling Saw / Two-Man Saw
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - heavy_chainsaw
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Felling Saw / Two-Man Saw — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Felling Saw / Two-Man Saw
+    is_machine: false
+    crafted_at: Fabricator III
+- id: harvester
+  name: Harvester
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 42
+  prerequisites:
+  - felling_saw
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Harvester — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Harvester
+    is_machine: false
+    crafted_at: Fabricator III
+- id: feller_buncher
+  name: Feller Buncher
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 58
+  prerequisites:
+  - harvester
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Feller Buncher — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Feller Buncher
+    is_machine: false
+    crafted_at: Fabricator III
+- id: logging_harvester
+  name: Logging Harvester
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 75
+  prerequisites:
+  - feller_buncher
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Logging Harvester — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Logging Harvester
+    is_machine: false
+    crafted_at: Fabricator III
+- id: industrial_forestry_machine
+  name: Industrial Forestry Machine
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 95
+  prerequisites:
+  - logging_harvester
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Industrial Forestry Machine — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Industrial Forestry Machine
+    is_machine: false
+    crafted_at: Fabricator III
+- id: mega_harvester
+  name: Mega Harvester
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 125
+  prerequisites:
+  - industrial_forestry_machine
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Mega Harvester — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Mega Harvester
+    is_machine: false
+    crafted_at: Fabricator III
+- id: autonomous_forestry_fleet
+  name: Autonomous Forestry Fleet
+  branch: unlock
+  category: wood_tools
+  era: advanced
+  study_hours: 165
+  prerequisites:
+  - mega_harvester
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Unlocks Autonomous Forestry Fleet — upgrade-module based (no in-family levels).
+  effect: null
+  description: 'Machine-era forestry tool: improved via attachments/upgrade modules rather than flat leveling.'
+  produces:
+  - item: Autonomous Forestry Fleet
+    is_machine: false
+    crafted_at: Fabricator III
+- id: electrolyzer_1
+  name: Basic Electrolyzer
+  branch: unlock
+  category: chemistry
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - basic_electromagnetism
+  - copper_wire_production
+  resource_requirements:
+  - item: Copper Wire
+    quantity: 4
+  tool_requirements: []
+  unlocks: Enables electrolysis processes — required for Aluminum and Lithium refining.
+  effect: null
+  description: Passing current through a solution to drive a reduction reaction.
+  produces:
+  - item: Basic Electrolyzer
+    is_machine: true
+    crafted_at: null
+- id: electrolyzer_2
+  name: Advanced Electrolyzer
+  branch: unlock
+  category: chemistry
+  era: advanced
+  study_hours: 28
+  prerequisites:
+  - electrolyzer_1
+  - advanced_refining_furnace
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Higher-throughput electrolysis for large-scale Lithium and Aluminum production.
+  effect: null
+  description: Industrial-scale electrolytic cells with far higher throughput.
+  produces:
+  - item: Advanced Electrolyzer
+    is_machine: true
+    crafted_at: null
+- id: chemical_reactor_1
+  name: Basic Chemical Reactor
+  branch: unlock
+  category: chemistry
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - sulfur_refining
+  - fire_mastery
+  resource_requirements:
+  - item: Refined Sulfur
+    quantity: 4
+  tool_requirements: []
+  unlocks: Synthesize Sulfuric Acid and other basic industrial chemicals — also feeds Lead-Acid batteries
+    and Blasting Techniques.
+  effect: null
+  description: Controlled chemical synthesis at a small, safe scale.
+  produces:
+  - item: Basic Chemical Reactor
+    is_machine: true
+    crafted_at: null
+  - item: Sulfuric Acid
+    is_machine: false
+    crafted_at: Basic Chemical Reactor
+- id: chemical_reactor_2
+  name: Petrochemical Reactor
+  branch: unlock
+  category: chemistry
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - chemical_reactor_1
+  - oil_refining_advanced
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Crack petroleum into Ethylene/Propylene, synthesizing base Polymers.
+  effect: null
+  description: High-temperature cracking of hydrocarbons into reactive building blocks.
+  produces:
+  - item: Petrochemical Reactor
+    is_machine: true
+    crafted_at: null
+  - item: Ethylene
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+  - item: Propylene
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+- id: polymer_synthesis
+  name: Polymer Synthesis (Plastics)
+  branch: unlock
+  category: chemistry
+  era: advanced
+  study_hours: 18
+  prerequisites:
+  - chemical_reactor_2
+  resource_requirements:
+  - item: Ethylene
+    quantity: 6
+  tool_requirements: []
+  unlocks: Craft Plastic Casing and other plastic components — required for Electric Tool Housing.
+  effect: null
+  description: Polymerizing cracked petrochemicals into moldable plastics.
+  produces:
+  - item: Plastic Casing
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+  - item: Polymer Resin
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+- id: chemical_reactor_3
+  name: Advanced Chemical Reactor
+  branch: unlock
+  category: chemistry
+  era: advanced
+  study_hours: 36
+  prerequisites:
+  - chemical_reactor_2
+  - precision_tooling
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Synthesize advanced catalysts and high-purity electrolytes.
+  effect: null
+  description: Precision-controlled synthesis for catalysts and battery-grade reagents.
+  produces:
+  - item: Advanced Chemical Reactor
+    is_machine: true
+    crafted_at: null
+  - item: Advanced Catalyst
+    is_machine: false
+    crafted_at: Advanced Chemical Reactor
+  - item: High-Purity Electrolyte
+    is_machine: false
+    crafted_at: Advanced Chemical Reactor
+- id: lead_acid_battery
+  name: Lead-Acid Battery
+  branch: unlock
+  category: energy_storage
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - lead_metallurgy
+  - chemical_reactor_1
+  - fabricator_tier2
+  resource_requirements:
+  - item: Lead Ingot
+    quantity: 2
+  - item: Sulfuric Acid
+    quantity: 2
+  tool_requirements: []
+  unlocks: Cheapest, easiest battery chemistry. High leak rate, moderate capacity — the default early
+    cell.
+  effect: null
+  description: Sulfuric acid and lead plates. Deliberately the cheap, easy, obvious first choice — Lead
+    is Tier 2 (early and common), keeping this chemistry accessible well before Nickel-Iron.
+  produces:
+  - item: Lead-Acid Battery Cell
+    is_machine: false
+    crafted_at: Fabricator II
+- id: nickel_iron_battery
+  name: Nickel-Iron Battery
+  branch: unlock
+  category: energy_storage
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - nickel_metallurgy
+  - iron_metallurgy
+  - press_2
+  - fabricator_tier2
+  resource_requirements:
+  - item: Nickel Ingot
+    quantity: 3
+  - item: Iron Ingot
+    quantity: 4
+  - item: Steel Plate
+    quantity: 1
+  tool_requirements: []
+  unlocks: Alternative chemistry — sturdier and longer-lived than Lead-Acid, medium leak, medium-high
+    capacity. Costs 3x the hours and needs Tier 3 Nickel, deliberately later/harder than Lead-Acid.
+  effect: null
+  description: The 'Edison cell' — nearly indestructible, if a bit inefficient. A genuine sidegrade choice,
+    not a strict upgrade, but structurally gated later since Nickel is a Tier 3 material.
+  produces:
+  - item: Nickel-Iron Battery Cell
+    is_machine: false
+    crafted_at: Fabricator II
+- id: lithium_ion_battery
+  name: Lithium-Ion Battery
+  branch: unlock
+  category: energy_storage
+  era: advanced
+  study_hours: 32
+  prerequisites:
+  - lithium_refining
+  - basic_circuit_assembly
+  - fabricator_tier3
+  resource_requirements:
+  - item: Lithium (Battery-Grade)
+    quantity: 3
+  - item: Copper Wire
+    quantity: 2
+  tool_requirements: []
+  unlocks: High capacity, low leak rate — the premium mid-to-late-game chemistry.
+  effect: null
+  description: Needs a protection circuit to be safe, but the capacity-to-weight ratio is unmatched by
+    anything earlier.
+  produces:
+  - item: Lithium-Ion Battery Cell
+    is_machine: false
+    crafted_at: Fabricator III
+- id: solid_state_battery
+  name: Solid-State Battery
+  branch: unlock
+  category: energy_storage
+  era: advanced
+  study_hours: 48
+  prerequisites:
+  - lithium_ion_battery
+  - chemical_reactor_3
+  - precision_tooling
+  resource_requirements:
+  - item: Lithium (Battery-Grade)
+    quantity: 4
+  - item: Advanced Catalyst
+    quantity: 1
+  tool_requirements: []
+  unlocks: Top-tier chemistry — minimal leak, highest capacity. Endgame battery.
+  effect: null
+  description: A solid electrolyte instead of a liquid one — safer, denser, and precision-manufacturing-hungry.
+  produces:
+  - item: Solid-State Battery Cell
+    is_machine: false
+    crafted_at: Fabricator III
+- id: battery_bank
+  name: Battery Bank
+  branch: unlock
+  category: energy_storage
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - lead_acid_battery
+  - capacitor_fabrication
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Larger Volt storage; works with any battery chemistry you've unlocked.
+  effect: null
+  description: Ganged cells with regulation circuitry — meaningfully less waste than a single cell.
+  produces:
+  - item: Battery Bank
+    is_machine: true
+    crafted_at: null
+- id: grid_storage
+  name: Grid Storage
+  branch: unlock
+  category: energy_storage
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - battery_bank
+  - lithium_ion_battery
+  - stainless_steel
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Industrial-scale Volt storage; works with any battery chemistry you've unlocked.
+  effect: null
+  description: The top storage tier — pairs best with low-leak chemistries like Lithium-Ion.
+  produces:
+  - item: Grid Storage
+    is_machine: true
+    crafted_at: null
+- id: wind_turbine
+  name: Wind Turbine
+  branch: unlock
+  category: energy
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - basic_motor_design
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 6
+  tool_requirements: []
+  unlocks: Renewable Volt generation; lower output, runs unattended.
+  effect: null
+  description: Converts wind into rotation into current via your motor design.
+  produces:
+  - item: Wind Turbine
+    is_machine: true
+    crafted_at: null
+- id: solar_panel
+  name: Solar Panel
+  branch: unlock
+  category: energy
+  era: industrial
+  study_hours: 26
+  prerequisites:
+  - basic_electromagnetism
+  - silver_metallurgy
+  - glassmaking
+  resource_requirements:
+  - item: Silver Ingot
+    quantity: 1
+  - item: Glass
+    quantity: 4
+  tool_requirements: []
+  unlocks: Renewable Volt generation from sunlight; lower output, runs unattended.
+  effect: null
+  description: Photovoltaic cells — needs refined silver contacts and a glass cover.
+  produces:
+  - item: Solar Panel
+    is_machine: true
+    crafted_at: null
+- id: coal_power_plant
+  name: Coal Power Plant
+  branch: unlock
+  category: energy
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - coal_processing
+  - basic_motor_design
+  resource_requirements:
+  - item: Coal (Processed)
+    quantity: 8
+  - item: Steel Ingot
+    quantity: 5
+  tool_requirements: []
+  unlocks: High-output, fuel-consuming Volt generation.
+  effect: null
+  description: Burn coal to boil water to spin a turbine — the industrial workhorse.
+  produces:
+  - item: Coal Power Plant
+    is_machine: true
+    crafted_at: null
+- id: oil_extraction
+  name: Oil Extraction (Basic Rig)
+  branch: unlock
+  category: energy
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - machining_basics
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 8
+  tool_requirements: []
+  unlocks: Extract Crude Oil.
+  effect: null
+  description: First-tier oil rig; low yield, entirely mechanical.
+  produces:
+  - item: Basic Oil Rig
+    is_machine: true
+    crafted_at: null
+  - item: Crude Oil
+    is_machine: false
+    crafted_at: Basic Oil Rig
+- id: oil_refining_basic
+  name: Basic Oil Refining
+  branch: unlock
+  category: energy
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - oil_extraction
+  resource_requirements:
+  - item: Crude Oil
+    quantity: 10
+  tool_requirements: []
+  unlocks: Build Oil Refinery I; refine Crude Oil into Kerosene.
+  effect: null
+  description: Simple fractional distillation splits crude into its first usable fraction.
+  produces:
+  - item: Oil Refinery I
+    is_machine: true
+    crafted_at: null
+  - item: Kerosene
+    is_machine: false
+    crafted_at: Oil Refinery I
+- id: oil_refining_advanced
+  name: Advanced Oil Refining
+  branch: unlock
+  category: energy
+  era: advanced
+  study_hours: 32
+  prerequisites:
+  - oil_refining_basic
+  - advanced_refining_furnace
+  resource_requirements:
+  - item: Crude Oil
+    quantity: 15
+  tool_requirements: []
+  unlocks: Build Oil Refinery II; refine Crude Oil into Diesel and Gas; enables Gas Power Plant and the
+    Petrochemical Reactor.
+  effect: null
+  description: Multi-stage distillation and cracking for higher-value fuel fractions.
+  produces:
+  - item: Oil Refinery II
+    is_machine: true
+    crafted_at: null
+  - item: Diesel
+    is_machine: false
+    crafted_at: Oil Refinery II
+  - item: Gas (Refined)
+    is_machine: false
+    crafted_at: Oil Refinery II
+- id: gas_power_plant
+  name: Gas Power Plant
+  branch: unlock
+  category: energy
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - oil_refining_advanced
+  - basic_circuit_assembly
+  resource_requirements:
+  - item: Gas (Refined)
+    quantity: 10
+  - item: Steel Ingot
+    quantity: 8
+  tool_requirements: []
+  unlocks: Highest-output fossil Volt generation, most fuel-efficient of the fossil line.
+  effect: null
+  description: Combined-cycle-style gas turbine generation.
+  produces:
+  - item: Gas Power Plant
+    is_machine: true
+    crafted_at: null
+- id: fabricator_tier2
+  name: Fabricator II
+  branch: unlock
+  category: fabricator
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - fabricator_tier1
+  - steel_production
+  resource_requirements:
+  - item: Steel Ingot
+    quantity: 6
+  tool_requirements: []
+  unlocks: Build Fabricator II — 4 input slots, machine-era assembly recipes.
+  effect: null
+  description: Handles multi-component assembly like motors-into-housings.
+  produces:
+  - item: Fabricator II
+    is_machine: true
+    crafted_at: null
+- id: fabricator_tier3
+  name: Fabricator III
+  branch: unlock
+  category: fabricator
+  era: advanced
+  study_hours: 32
+  prerequisites:
+  - fabricator_tier2
+  - basic_circuit_assembly
+  resource_requirements:
+  - item: Circuit Board
+    quantity: 2
+  tool_requirements: []
+  unlocks: Build Fabricator III — 6 input slots, circuit-era assembly recipes.
+  effect: null
+  description: Precision assembly for electronics-integrated tools and machines.
+  produces:
+  - item: Fabricator III
+    is_machine: true
+    crafted_at: null
+- id: textile_weaving
+  name: Textile Weaving
+  branch: unlock
+  category: textiles
+  era: primitive
+  study_hours: 6
+  prerequisites:
+  - cordage_and_binding
+  resource_requirements:
+  - item: Cordage
+    quantity: 6
+  tool_requirements: []
+  unlocks: Build a Hand Loom; craft Cloth and Rope from fiber — sellable, used in later padding/insulation
+    recipes.
+  effect: null
+  description: A hand loom turns fiber into usable, sellable textile goods.
+  produces:
+  - item: Hand Loom
+    is_machine: true
+    crafted_at: null
+  - item: Cloth Bolt
+    is_machine: false
+    crafted_at: Hand Loom
+  - item: Rope
+    is_machine: false
+    crafted_at: Hand Loom
+- id: textile_mill
+  name: Textile Mill
+  branch: unlock
+  category: textiles
+  era: industrial
+  study_hours: 24
+  prerequisites:
+  - textile_weaving
+  - engine_factory_1
+  resource_requirements:
+  - item: Basic Motor
+    quantity: 1
+  - item: Cloth Bolt
+    quantity: 4
+  tool_requirements: []
+  unlocks: Mechanized power loom — much higher-throughput Cloth than hand-weaving.
+  effect: null
+  description: The scale-up from hand-sewing to proper machinery, as requested — same product, far higher
+    volume.
+  produces:
+  - item: Textile Mill
+    is_machine: true
+    crafted_at: null
+  - item: Cloth Bolt (Industrial)
+    is_machine: false
+    crafted_at: Textile Mill
+- id: synthetic_textiles
+  name: Synthetic Textiles
+  branch: unlock
+  category: textiles
+  era: advanced
+  study_hours: 22
+  prerequisites:
+  - polymer_synthesis
+  - textile_mill
+  resource_requirements:
+  - item: Polymer Resin
+    quantity: 5
+  tool_requirements: []
+  unlocks: Craft high-strength synthetic textiles from polymer resin.
+  effect: null
+  description: Petrochemical-derived fibers, run through the same mechanized mill infrastructure — stronger
+    and cheaper at scale than natural fiber.
+  produces:
+  - item: Synthetic Fabric
+    is_machine: false
+    crafted_at: Textile Mill
+  - item: Synthetic Rope
+    is_machine: false
+    crafted_at: Textile Mill
+- id: brickworks
+  name: Brickworks
+  branch: unlock
+  category: construction
+  era: primitive
+  study_hours: 6
+  prerequisites:
+  - fire_mastery
+  resource_requirements:
+  - item: Clay
+    quantity: 10
+  - item: Sand
+    quantity: 6
+  tool_requirements: []
+  unlocks: Build a Brickworks; craft Bricks from fired clay and sand.
+  effect: null
+  description: A kiln dedicated to firing uniform, stackable bricks.
+  produces:
+  - item: Brickworks
+    is_machine: true
+    crafted_at: null
+  - item: Brick
+    is_machine: false
+    crafted_at: Brickworks
+- id: masonry_workshop_1
+  name: Masonry Workshop I
+  branch: unlock
+  category: construction
+  era: primitive
+  study_hours: 8
+  prerequisites:
+  - brickworks
+  - fabricator_tier1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft Prefab Brick Wall Panels and decorative stonework — sellable.
+  effect: null
+  description: A third construction-material line alongside Wood and Concrete.
+  produces:
+  - item: Masonry Workshop I
+    is_machine: true
+    crafted_at: null
+  - item: Prefab Brick Wall Panel
+    is_machine: false
+    crafted_at: Masonry Workshop I
+  - item: Garden Statue
+    is_machine: false
+    crafted_at: Masonry Workshop I
+- id: masonry_workshop_2
+  name: Masonry Workshop II
+  branch: unlock
+  category: construction
+  era: early_metallurgy
+  study_hours: 18
+  prerequisites:
+  - masonry_workshop_1
+  - concrete_casting
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft reinforced concrete construction goods.
+  effect: null
+  description: Combining brick and concrete techniques for sturdier, higher-value panels.
+  produces:
+  - item: Masonry Workshop II
+    is_machine: true
+    crafted_at: null
+  - item: Reinforced Concrete Panel
+    is_machine: false
+    crafted_at: Masonry Workshop II
+  - item: Ornamental Facade
+    is_machine: false
+    crafted_at: Masonry Workshop II
+- id: masonry_workshop_3
+  name: Industrial Construction Plant
+  branch: unlock
+  category: construction
+  era: industrial
+  study_hours: 30
+  prerequisites:
+  - masonry_workshop_2
+  - steel_production
+  - press_2
+  - roller_2
+  resource_requirements:
+  - item: Steel Rod
+    quantity: 4
+  - item: Concrete
+    quantity: 8
+  tool_requirements: []
+  unlocks: Craft steel-reinforced (rebar) concrete and modular steel-framed prefab building kits — the
+    full-scale industrial construction line, anything a real construction industry can make.
+  effect: null
+  description: Steel Rod from the Rolling Mill line becomes rebar — concrete alone plateaus without it.
+  produces:
+  - item: Industrial Construction Plant
+    is_machine: true
+    crafted_at: null
+  - item: Rebar-Reinforced Concrete Panel
+    is_machine: false
+    crafted_at: Industrial Construction Plant
+  - item: Steel-Framed Prefab Building Kit
+    is_machine: false
+    crafted_at: Industrial Construction Plant
+- id: jewelers_bench
+  name: Jeweler's Bench
+  branch: unlock
+  category: luxury_goods
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - primitive_fasteners
+  - carbide_metallurgy
+  resource_requirements:
+  - item: Tungsten Carbide
+    quantity: 1
+  - item: Metal Plate
+    quantity: 2
+  tool_requirements: []
+  unlocks: Build a Jeweler's Bench — the actual cutting/setting tool jewelry-making requires. Nothing
+    in this line can be crafted without it.
+  effect: null
+  description: Carbide burins and cutting wheels precise enough to engrave metal and facet stone — this
+    is why jewelry needs Carbide Metallurgy as an ancestor, not just 'a Fabricator'.
+  produces:
+  - item: Jeweler's Bench
+    is_machine: true
+    crafted_at: null
+- id: jewelry_crafting_1
+  name: Jewelry & Ornamental Crafting I
+  branch: unlock
+  category: luxury_goods
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - silver_metallurgy
+  - jewelers_bench
+  resource_requirements:
+  - item: Silver Ingot
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft sellable silver jewelry.
+  effect: null
+  description: Precious metals had no sink before this — now they feed a genuinely lucrative, volatile
+    luxury-goods line for the Stock Market.
+  produces:
+  - item: Silver Ring
+    is_machine: false
+    crafted_at: Jeweler's Bench
+  - item: Silver Necklace
+    is_machine: false
+    crafted_at: Jeweler's Bench
+- id: jewelry_crafting_2
+  name: Jewelry & Ornamental Crafting II
+  branch: unlock
+  category: luxury_goods
+  era: precious
+  study_hours: 26
+  prerequisites:
+  - jewelry_crafting_1
+  - gold_metallurgy
+  - gemstone_refining
+  resource_requirements:
+  - item: Gold Ingot
+    quantity: 2
+  - item: Cut Gemstone
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft sellable gold jewelry — high value, volatile-price luxury goods.
+  effect: null
+  description: Gold jewelry, the classic hedge-and-flex commodity — now actually needs cut gems in stock.
+  produces:
+  - item: Gold Ring
+    is_machine: false
+    crafted_at: Jeweler's Bench
+  - item: Gold Necklace
+    is_machine: false
+    crafted_at: Jeweler's Bench
+  - item: Gold Watch
+    is_machine: false
+    crafted_at: Jeweler's Bench
+- id: jewelry_crafting_3
+  name: Jewelry & Ornamental Crafting III
+  branch: unlock
+  category: luxury_goods
+  era: precious
+  study_hours: 36
+  prerequisites:
+  - jewelry_crafting_2
+  - platinum_metallurgy
+  resource_requirements:
+  - item: Platinum Ingot
+    quantity: 1
+  - item: Cut Gemstone
+    quantity: 3
+  tool_requirements: []
+  unlocks: Craft the highest-value luxury jewelry — extremely price-volatile on the Stock Market.
+  effect: null
+  description: The top of the luxury-goods line.
+  produces:
+  - item: Platinum Ring
+    is_machine: false
+    crafted_at: Jeweler's Bench
+  - item: Platinum Necklace (Gem-Set)
+    is_machine: false
+    crafted_at: Jeweler's Bench
+- id: semiconductor_silicon_refining
+  name: Semiconductor-Grade Silicon Refining
+  branch: unlock
+  category: electronics
+  era: advanced
+  study_hours: 24
+  prerequisites:
+  - quartz_processing
+  - chemical_reactor_2
+  resource_requirements:
+  - item: Quartz (Purified)
+    quantity: 6
+  tool_requirements: []
+  unlocks: Build a Silicon Refinement Plant; refine purified quartz into ultra-pure semiconductor-grade
+    silicon wafers.
+  effect: null
+  description: Glass-grade purity isn't nearly good enough — this is a separate, much stricter process.
+  produces:
+  - item: Silicon Refinement Plant
+    is_machine: true
+    crafted_at: null
+  - item: Semiconductor-Grade Silicon Wafer
+    is_machine: false
+    crafted_at: Silicon Refinement Plant
+- id: precision_microscopy
+  name: Precision Microscopy
+  branch: unlock
+  category: electronics
+  era: industrial
+  study_hours: 20
+  prerequisites:
+  - glassmaking
+  - precision_tooling
+  resource_requirements:
+  - item: Glass
+    quantity: 4
+  tool_requirements: []
+  unlocks: Build an Optical Microscope — required to inspect and align components too small to see reliably
+    by hand. A prerequisite for both Photolithography and RAM Fabrication.
+  effect: null
+  description: Precision optics ground to a tolerance regular Glassmaking alone can't guarantee.
+  produces:
+  - item: Optical Microscope
+    is_machine: true
+    crafted_at: null
+- id: photolithography
+  name: Photolithography
+  branch: unlock
+  category: electronics
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - semiconductor_silicon_refining
+  - precision_microscopy
+  - basic_circuit_assembly
+  resource_requirements:
+  - item: Semiconductor-Grade Silicon Wafer
+    quantity: 2
+  tool_requirements: []
+  unlocks: Build a Photolithography Rig — etches circuit patterns directly onto silicon wafers.
+  effect: null
+  description: Projecting a circuit pattern onto a photosensitive wafer coating, then etching it.
+  produces:
+  - item: Photolithography Rig
+    is_machine: true
+    crafted_at: null
+- id: pcb_printing
+  name: PCB Printing & Etching
+  branch: unlock
+  category: electronics
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - basic_circuit_assembly
+  - chemical_reactor_1
+  - copper_wire_production
+  - press_1
+  resource_requirements:
+  - item: Metal Plate
+    quantity: 2
+  - item: Sulfuric Acid
+    quantity: 2
+  tool_requirements: []
+  unlocks: Build a PCB Etching Station; etch copper-clad boards into Printed Circuit Boards (PCBs) — required
+    for any electronics product beyond a single loose Circuit Board.
+  effect: null
+  description: Acid-etching away everything on a copper-clad board except the traces you want.
+  produces:
+  - item: PCB Etching Station
+    is_machine: true
+    crafted_at: null
+  - item: Printed Circuit Board (PCB)
+    is_machine: false
+    crafted_at: PCB Etching Station
+- id: semiconductor_fabrication
+  name: Semiconductor Fabrication
+  branch: unlock
+  category: electronics
+  era: advanced
+  study_hours: 40
+  prerequisites:
+  - photolithography
+  - pcb_printing
+  - electrolyzer_2
+  resource_requirements:
+  - item: Semiconductor-Grade Silicon Wafer
+    quantity: 3
+  tool_requirements: []
+  unlocks: Build a Semiconductor Fab Plant; fabricate basic Microchips — combines every prior electronics
+    prerequisite into a working chip.
+  effect: null
+  description: 'The convergence point of the whole electronics backbone: lithography, PCB etching, AND
+    high-throughput electrolysis all required at once.'
+  produces:
+  - item: Semiconductor Fab Plant
+    is_machine: true
+    crafted_at: null
+  - item: Microchip (Basic Logic)
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+- id: cpu_fabrication
+  name: CPU Fabrication
+  branch: unlock
+  category: electronics
+  era: advanced
+  study_hours: 50
+  prerequisites:
+  - semiconductor_fabrication
+  - chemical_reactor_3
+  resource_requirements:
+  - item: Microchip (Basic Logic)
+    quantity: 4
+  - item: Printed Circuit Board (PCB)
+    quantity: 1
+  tool_requirements: []
+  unlocks: Fabricate a working CPU.
+  effect: null
+  description: Advanced catalysts from Chemical Reactor III are needed for the final doping/etch passes.
+  produces:
+  - item: CPU
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+- id: ram_fabrication
+  name: RAM Fabrication
+  branch: unlock
+  category: electronics
+  era: advanced
+  study_hours: 45
+  prerequisites:
+  - semiconductor_fabrication
+  - capacitor_fabrication
+  - precision_microscopy
+  resource_requirements:
+  - item: Microchip (Basic Logic)
+    quantity: 3
+  - item: Capacitor
+    quantity: 6
+  tool_requirements: []
+  unlocks: Fabricate RAM Modules.
+  effect: null
+  description: RAM is fundamentally a huge grid of capacitors — hence the direct Capacitor Fabrication
+    dependency, on top of the whole semiconductor stack.
+  produces:
+  - item: RAM Module
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+- id: consumer_electronics_1
+  name: Consumer Electronics I
+  branch: unlock
+  category: consumer_goods
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - basic_circuit_assembly
+  - pcb_printing
+  - fabricator_tier2
+  resource_requirements:
+  - item: Printed Circuit Board (PCB)
+    quantity: 1
+  - item: Resistor
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft sellable consumer electronics — pre-microchip devices (Radio, Calculator).
+  effect: null
+  description: Radios and calculators don't need a CPU, but they DO need a real PCB, not just a loose
+    Circuit Board.
+  produces:
+  - item: Radio
+    is_machine: false
+    crafted_at: Fabricator II
+  - item: Pocket Calculator
+    is_machine: false
+    crafted_at: Fabricator II
+- id: consumer_electronics_2
+  name: Consumer Electronics II
+  branch: unlock
+  category: consumer_goods
+  era: advanced
+  study_hours: 46
+  prerequisites:
+  - consumer_electronics_1
+  - cpu_fabrication
+  - ram_fabrication
+  resource_requirements:
+  - item: CPU
+    quantity: 1
+  - item: RAM Module
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft advanced sellable consumer electronics — this is where the CPU/RAM chain finally pays
+    off.
+  effect: null
+  description: Everything from Silicon Refining through RAM Fabrication converges here.
+  produces:
+  - item: Portable Music Player
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+  - item: Basic Computer
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+- id: papermaking
+  name: Papermaking
+  branch: unlock
+  category: paper_goods
+  era: primitive
+  study_hours: 5
+  prerequisites:
+  - sawmill_1
+  resource_requirements:
+  - item: Planks
+    quantity: 4
+  tool_requirements: []
+  unlocks: Build a Paper Press; craft Paper from wood pulp — cheap and sellable.
+  effect: null
+  description: Wood pulp pressed and dried — a fittingly on-theme sellable good for a study app.
+  produces:
+  - item: Paper Press
+    is_machine: true
+    crafted_at: null
+  - item: Paper
+    is_machine: false
+    crafted_at: Paper Press
+- id: bookbinding
+  name: Bookbinding
+  branch: unlock
+  category: paper_goods
+  era: primitive
+  study_hours: 8
+  prerequisites:
+  - papermaking
+  - fabricator_tier1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Bind paper into sellable books and journals.
+  effect: null
+  description: Turning raw paper into a finished, higher-value good.
+  produces:
+  - item: Blank Book
+    is_machine: false
+    crafted_at: Fabricator I
+  - item: Bound Journal
+    is_machine: false
+    crafted_at: Fabricator I
+- id: wheel_fabrication
+  name: Wheel Fabrication
+  branch: unlock
+  category: vehicles
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - roller_1
+  - sawmill_1
+  resource_requirements:
+  - item: Metal Rod
+    quantity: 2
+  - item: Planks
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Wooden Cart Wheels — for non-motorized vehicles.
+  effect: null
+  description: Simple spoked wheels, metal-rimmed for durability.
+  produces:
+  - item: Wooden Cart Wheel
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+- id: rubber_synthesis
+  name: Synthetic Rubber Production
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 16
+  prerequisites:
+  - polymer_synthesis
+  resource_requirements:
+  - item: Polymer Resin
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft Synthetic Rubber.
+  effect: null
+  description: Petrochemical-derived rubber — Cultivar has no rubber-tree/latex chain, so this is the
+    sole rubber source.
+  produces:
+  - item: Synthetic Rubber
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+- id: tire_manufacturing
+  name: Tire Manufacturing (Vulcanization)
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 18
+  prerequisites:
+  - rubber_synthesis
+  - sulfur_refining
+  - roller_1
+  resource_requirements:
+  - item: Synthetic Rubber
+    quantity: 4
+  - item: Refined Sulfur
+    quantity: 2
+  - item: Metal Rod
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Vulcanized Tires — required for any motorized vehicle.
+  effect: null
+  description: Vulcanization needs Sulfur — real chemistry, not just 'rubber exists now'.
+  produces:
+  - item: Vulcanized Tire
+    is_machine: false
+    crafted_at: Basic Rolling Mill
+- id: automotive_glazing
+  name: Automotive Glazing
+  branch: unlock
+  category: vehicles
+  era: early_metallurgy
+  study_hours: 14
+  prerequisites:
+  - glassmaking
+  - precision_tooling
+  resource_requirements:
+  - item: Glass
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft Tempered Glass Windows.
+  effect: null
+  description: Automotive-grade tempered glass — a step beyond Glassmaking's raw Glass.
+  produces:
+  - item: Tempered Glass Window
+    is_machine: false
+    crafted_at: Glass Furnace
+- id: vehicle_wiring_harness
+  name: Vehicle Wiring Harness Assembly
+  branch: unlock
+  category: vehicles
+  era: industrial
+  study_hours: 12
+  prerequisites:
+  - copper_wire_production
+  - basic_circuit_assembly
+  resource_requirements:
+  - item: Copper Wire
+    quantity: 6
+  tool_requirements: []
+  unlocks: Craft Wiring Harnesses — required for any vehicle with onboard electrics.
+  effect: null
+  description: Bundling and routing a vehicle's full electrical system into one installable part.
+  produces:
+  - item: Wiring Harness
+    is_machine: false
+    crafted_at: Fabricator II
+- id: vehicle_upholstery
+  name: Seating & Upholstery
+  branch: unlock
+  category: vehicles
+  era: primitive
+  study_hours: 10
+  prerequisites:
+  - textile_weaving
+  resource_requirements:
+  - item: Cloth Bolt
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft Vehicle Seats.
+  effect: null
+  description: Cloth over a frame — simple, but every passenger vehicle needs somewhere to sit.
+  produces:
+  - item: Vehicle Seat
+    is_machine: false
+    crafted_at: Fabricator I
+- id: drivetrain_assembly
+  name: Drivetrain & Differential Assembly
+  branch: unlock
+  category: vehicles
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - mechanical_assemblies
+  - gear_shaft_fabrication
+  resource_requirements:
+  - item: Gearbox
+    quantity: 1
+  - item: Shaft
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Drivetrain Assemblies.
+  effect: null
+  description: Turning a Gearbox and raw Shafts into an installable drivetrain unit.
+  produces:
+  - item: Drivetrain Assembly
+    is_machine: false
+    crafted_at: Mechanical Assembly Workshop
+- id: hydraulic_systems_fabrication
+  name: Hydraulic Systems Fabrication
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 20
+  prerequisites:
+  - press_2
+  - roller_2
+  - mechanical_assemblies
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 3
+  - item: Steel Rod
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Hydraulic Cylinders — used in heavy vehicles, tank turret traverse, and gun elevation.
+  effect: null
+  description: Sealed steel cylinders precise enough to hold pressure.
+  produces:
+  - item: Hydraulic Cylinder
+    is_machine: false
+    crafted_at: Advanced Press
+- id: hardware_retail_1
+  name: Hardware & Tool Retail I
+  branch: unlock
+  category: consumer_goods
+  era: early_metallurgy
+  study_hours: 8
+  prerequisites:
+  - primitive_fasteners
+  - fabricator_tier1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft sellable finished hand tools for the consumer market (distinct from your own mining/wood
+    tools).
+  effect: null
+  description: Validates the Press/Roller/Fastener line economically well before Fabricator II/III come
+    online.
+  produces:
+  - item: Hammer
+    is_machine: false
+    crafted_at: Fabricator I
+  - item: Wrench
+    is_machine: false
+    crafted_at: Fabricator I
+  - item: Screwdriver Set
+    is_machine: false
+    crafted_at: Fabricator I
+- id: hardware_retail_2
+  name: Hardware & Tool Retail II
+  branch: unlock
+  category: consumer_goods
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - hardware_retail_1
+  - press_2
+  - fabricator_tier2
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: Craft sellable finished steel hardware and cookware.
+  effect: null
+  description: Higher-tier finished goods from the same fastener/plate supply chain.
+  produces:
+  - item: Toolbox Set
+    is_machine: false
+    crafted_at: Fabricator II
+  - item: Cookware Set
+    is_machine: false
+    crafted_at: Fabricator II
+- id: hardware_retail_3
+  name: Hardware & Tool Retail III (Power Tools & Instruments)
+  branch: unlock
+  category: consumer_goods
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - hardware_retail_2
+  - electric_tool_housing
+  - pcb_printing
+  - precision_microscopy
+  resource_requirements:
+  - item: Electric Tool Housing
+    quantity: 1
+  - item: Printed Circuit Board (PCB)
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft sellable consumer power tools and precision measuring instruments.
+  effect: null
+  description: This tier needed the electronics backbone as much as Consumer Electronics did — a digital
+    multimeter is, after all, a PCB in a plastic shell.
+  produces:
+  - item: Cordless Drill (Consumer)
+    is_machine: false
+    crafted_at: PCB Etching Station
+  - item: Digital Multimeter
+    is_machine: false
+    crafted_at: PCB Etching Station
+  - item: Precision Caliper Set
+    is_machine: false
+    crafted_at: PCB Etching Station
+- id: vehicle_assembly_plant_1
+  name: Vehicle Assembly Plant I
+  branch: unlock
+  category: vehicles
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - mechanical_assemblies
+  - sawmill_2
+  resource_requirements:
+  - item: Plywood
+    quantity: 6
+  - item: Gearbox
+    quantity: 1
+  tool_requirements: []
+  unlocks: Build Vehicle Assembly Plant I — the physical place carts and wagons are actually assembled.
+  effect: null
+  description: Everything downstream (Handcart, Wagon, and eventually every vehicle in the game) is crafted
+    AT this plant, not conjured by research alone.
+  produces:
+  - item: Vehicle Assembly Plant I
+    is_machine: true
+    crafted_at: null
+- id: vehicle_assembly_plant_2
+  name: Vehicle Assembly Plant II (Motorized)
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - vehicle_assembly_plant_1
+  - engine_factory_1
+  - tire_manufacturing
+  - vehicle_wiring_harness
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 6
+  - item: Vulcanized Tire
+    quantity: 4
+  tool_requirements: []
+  unlocks: Upgrade to Vehicle Assembly Plant II — required for any motorized vehicle.
+  effect: null
+  description: Needs its own Engine Factory, Tires, and Wiring Harness lines already running.
+  produces:
+  - item: Vehicle Assembly Plant II
+    is_machine: true
+    crafted_at: null
+- id: vehicle_assembly_plant_3
+  name: Vehicle Assembly Plant III (Automotive)
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 36
+  prerequisites:
+  - vehicle_assembly_plant_2
+  - automotive_glazing
+  - vehicle_upholstery
+  - drivetrain_assembly
+  resource_requirements:
+  - item: Tempered Glass Window
+    quantity: 4
+  - item: Vehicle Seat
+    quantity: 2
+  tool_requirements: []
+  unlocks: Upgrade to Vehicle Assembly Plant III — required for passenger automobiles.
+  effect: null
+  description: Windows, seats, and a proper drivetrain line, all required before this exists.
+  produces:
+  - item: Vehicle Assembly Plant III
+    is_machine: true
+    crafted_at: null
+- id: vehicle_manufacturing_1
+  name: Vehicle Manufacturing I
+  branch: unlock
+  category: vehicles
+  era: industrial
+  study_hours: 18
+  prerequisites:
+  - vehicle_assembly_plant_1
+  - wheel_fabrication
+  resource_requirements:
+  - item: Wooden Cart Wheel
+    quantity: 4
+  - item: Plywood
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft sellable non-motorized vehicles at Vehicle Assembly Plant I.
+  effect: null
+  description: Wheels plus the Plant itself — no more, no less.
+  produces:
+  - item: Handcart
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant I
+  - item: Wagon
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant I
+- id: vehicle_manufacturing_2
+  name: Vehicle Manufacturing II
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 32
+  prerequisites:
+  - vehicle_assembly_plant_2
+  resource_requirements:
+  - item: Basic Motor
+    quantity: 1
+  - item: Vulcanized Tire
+    quantity: 4
+  - item: Wiring Harness
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft sellable motorized vehicles at Vehicle Assembly Plant II.
+  effect: null
+  description: Genuinely large-ticket items to add price volatility variety.
+  produces:
+  - item: Motor Cart
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant II
+  - item: Delivery Truck
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant II
+- id: vehicle_manufacturing_3
+  name: Vehicle Manufacturing III (Advanced Automotive)
+  branch: unlock
+  category: vehicles
+  era: advanced
+  study_hours: 40
+  prerequisites:
+  - vehicle_assembly_plant_3
+  - consumer_electronics_2
+  resource_requirements:
+  - item: CPU
+    quantity: 1
+  - item: Tempered Glass Window
+    quantity: 4
+  - item: Vehicle Seat
+    quantity: 2
+  - item: Drivetrain Assembly
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft sellable automobiles with real onboard electronics at Vehicle Assembly Plant III — and
+    feeds directly into Tank Manufacturing.
+  effect: null
+  description: Needs a working CPU for basic engine/ignition control, tying the electronics backbone into
+    the vehicle line.
+  produces:
+  - item: Automobile
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant III
+  - item: Armored Transport Chassis
+    is_machine: false
+    crafted_at: Vehicle Assembly Plant III
+- id: explosives_chemistry
+  name: Basic Explosives Chemistry
+  branch: unlock
+  category: military
+  era: industrial
+  study_hours: 22
+  prerequisites:
+  - chemical_reactor_1
+  - coal_processing
+  resource_requirements:
+  - item: Sulfuric Acid
+    quantity: 3
+  - item: Coal (Processed)
+    quantity: 3
+  tool_requirements: []
+  unlocks: Synthesize Black Powder and Blasting Charges.
+  effect: null
+  description: The chemistry line finally pays off for mining efficiency (Blasting Techniques) and opens
+    the door to the whole military branch.
+  produces:
+  - item: Black Powder
+    is_machine: false
+    crafted_at: Basic Chemical Reactor
+  - item: Blasting Charge
+    is_machine: false
+    crafted_at: Basic Chemical Reactor
+- id: advanced_explosives
+  name: Advanced Explosives Chemistry
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - explosives_chemistry
+  - chemical_reactor_2
+  resource_requirements:
+  - item: Ethylene
+    quantity: 4
+  tool_requirements: []
+  unlocks: Synthesize High Explosive Compound and Propellant Charges.
+  effect: null
+  description: Petrochemical-derived explosives — far more powerful than Black Powder.
+  produces:
+  - item: High Explosive Compound
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+  - item: Propellant Charge
+    is_machine: false
+    crafted_at: Petrochemical Reactor
+- id: ordnance_factory_1
+  name: Ordnance Factory I
+  branch: unlock
+  category: military
+  era: industrial
+  study_hours: 16
+  prerequisites:
+  - explosives_chemistry
+  - press_1
+  - fabricator_tier1
+  resource_requirements:
+  - item: Metal Plate
+    quantity: 3
+  tool_requirements: []
+  unlocks: Build Ordnance Factory I — the actual place small-arms ammunition gets manufactured.
+  effect: null
+  description: Explosives Chemistry was the reagent; this is the physical loading/assembly line.
+  produces:
+  - item: Ordnance Factory I
+    is_machine: true
+    crafted_at: null
+- id: ordnance_factory_2
+  name: Ordnance Factory II
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 26
+  prerequisites:
+  - ordnance_factory_1
+  - advanced_explosives
+  - press_2
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 4
+  tool_requirements: []
+  unlocks: Build Ordnance Factory II — required for artillery-scale shells.
+  effect: null
+  description: Scaling the loading line up from rifle rounds to artillery shells.
+  produces:
+  - item: Ordnance Factory II
+    is_machine: true
+    crafted_at: null
+- id: ammunition_manufacturing
+  name: Ammunition Manufacturing
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - ordnance_factory_2
+  - brass_alloying
+  - roller_2
+  resource_requirements:
+  - item: Brass Ingot
+    quantity: 4
+  - item: Steel Rod
+    quantity: 2
+  - item: Propellant Charge
+    quantity: 3
+  tool_requirements: []
+  unlocks: Craft Rifle Ammunition and Artillery Shells at Ordnance Factory II.
+  effect: null
+  description: Brass casings, propellant, and a real ordnance line — the metallurgy and chemistry branches
+    converging on ammunition.
+  produces:
+  - item: Rifle Ammunition
+    is_machine: false
+    crafted_at: Ordnance Factory II
+  - item: Artillery Shell
+    is_machine: false
+    crafted_at: Ordnance Factory II
+- id: tank_tracks
+  name: Tank Track & Suspension Systems
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 34
+  prerequisites:
+  - mechanical_assemblies
+  - steel_production
+  - press_2
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 6
+  - item: Gearbox
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Tank Track Assemblies and Suspension Systems.
+  effect: null
+  description: Reuses Gearbox output from Mechanical Assemblies for the drive-train linkage.
+  produces:
+  - item: Tank Track Assembly
+    is_machine: false
+    crafted_at: Mechanical Assembly Workshop
+  - item: Suspension System
+    is_machine: false
+    crafted_at: Mechanical Assembly Workshop
+- id: armor_plating
+  name: Composite Armor Plating
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 36
+  prerequisites:
+  - stainless_steel
+  - carbide_metallurgy
+  resource_requirements:
+  - item: Stainless Steel Ingot
+    quantity: 6
+  - item: Tungsten Carbide
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft Composite Armor Plate.
+  effect: null
+  description: Layered stainless steel and tungsten carbide — the hand-tool era's hardest alloy finally
+    finds a late-game military use.
+  produces:
+  - item: Composite Armor Plate
+    is_machine: false
+    crafted_at: Advanced Refining Furnace
+- id: vehicle_frame_fabrication
+  name: Heavy Vehicle Frame Fabrication
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 28
+  prerequisites:
+  - press_2
+  - roller_2
+  - gear_shaft_fabrication
+  resource_requirements:
+  - item: Steel Plate
+    quantity: 8
+  - item: Steel Rod
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft Heavy Vehicle Frames — the structural chassis tanks and heavy trucks are built on.
+  effect: null
+  description: Pure mechanical-line output — no chemistry needed, just heavy-gauge steel.
+  produces:
+  - item: Heavy Vehicle Frame
+    is_machine: false
+    crafted_at: Advanced Press
+- id: radio_communications
+  name: Radio Communications
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 24
+  prerequisites:
+  - basic_circuit_assembly
+  - copper_wire_production
+  - capacitor_fabrication
+  resource_requirements:
+  - item: Circuit Board
+    quantity: 2
+  - item: Copper Wire
+    quantity: 4
+  tool_requirements: []
+  unlocks: Craft Radio Transceivers — sellable on their own, and required for Radar and Tanks.
+  effect: null
+  description: Doesn't need the full semiconductor backbone — vacuum-tube-era radio, one step below Radar.
+  produces:
+  - item: Radio Transceiver
+    is_machine: false
+    crafted_at: Fabricator II
+- id: radar_technology
+  name: Radar Technology
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 42
+  prerequisites:
+  - radio_communications
+  - semiconductor_fabrication
+  - precision_microscopy
+  resource_requirements:
+  - item: Microchip (Basic Logic)
+    quantity: 2
+  - item: Radio Transceiver
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Radar Units.
+  effect: null
+  description: Where the military branch and the electronics backbone finally converge.
+  produces:
+  - item: Radar Unit
+    is_machine: false
+    crafted_at: Semiconductor Fab Plant
+- id: military_engine_design
+  name: Military Engine Design
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 30
+  prerequisites:
+  - engine_factory_2
+  - gear_shaft_fabrication
+  - drivetrain_assembly
+  resource_requirements:
+  - item: Diesel
+    quantity: 6
+  - item: Drivetrain Assembly
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft Heavy Diesel Engines at Engine Factory II.
+  effect: null
+  description: Needs the actual heavy-engine factory built, plus fuel and a drivetrain, not just theory.
+  produces:
+  - item: Heavy Diesel Engine
+    is_machine: false
+    crafted_at: Engine Factory II
+- id: heavy_armor_assembly_plant
+  name: Heavy Armor Assembly Plant
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 40
+  prerequisites:
+  - vehicle_assembly_plant_3
+  - armor_plating
+  - tank_tracks
+  resource_requirements:
+  - item: Composite Armor Plate
+    quantity: 2
+  - item: Tank Track Assembly
+    quantity: 1
+  tool_requirements: []
+  unlocks: Build the Heavy Armor Assembly Plant — the actual place tanks get built. Required before Tank
+    Manufacturing.
+  effect: null
+  description: The convergence point of the whole Vehicle Assembly line and the Armor/Tracks components.
+  produces:
+  - item: Heavy Armor Assembly Plant
+    is_machine: true
+    crafted_at: null
+- id: tank_manufacturing
+  name: Tank Manufacturing
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 65
+  prerequisites:
+  - heavy_armor_assembly_plant
+  - vehicle_frame_fabrication
+  - military_engine_design
+  - ammunition_manufacturing
+  - radio_communications
+  - hydraulic_systems_fabrication
+  resource_requirements:
+  - item: Heavy Vehicle Frame
+    quantity: 1
+  - item: Composite Armor Plate
+    quantity: 4
+  - item: Tank Track Assembly
+    quantity: 2
+  - item: Heavy Diesel Engine
+    quantity: 1
+  - item: Artillery Shell
+    quantity: 10
+  - item: Hydraulic Cylinder
+    quantity: 2
+  tool_requirements: []
+  unlocks: Craft a Tank at the Heavy Armor Assembly Plant — the convergence point of Chemistry, Metallurgy,
+    Mechanical, Electrical, and Vehicle Manufacturing all at once.
+  effect: null
+  description: Eight separate prerequisite techs, each with their own chain behind them — this is deliberately
+    the single most demanding node in the tree. Hydraulics drive the turret traverse and gun elevation.
+  produces:
+  - item: Tank
+    is_machine: false
+    crafted_at: Heavy Armor Assembly Plant
+- id: advanced_tank_systems
+  name: Advanced Tank Systems (Radar-Guided)
+  branch: unlock
+  category: military
+  era: advanced
+  study_hours: 45
+  prerequisites:
+  - tank_manufacturing
+  - radar_technology
+  resource_requirements:
+  - item: Radar Unit
+    quantity: 1
+  - item: Tank
+    quantity: 1
+  tool_requirements: []
+  unlocks: Craft a Radar-Guided Tank — the top of the military line.
+  effect: null
+  description: The final convergence of the entire electronics backbone and the entire military branch.
+  produces:
+  - item: Radar-Guided Tank
+    is_machine: false
+    crafted_at: Heavy Armor Assembly Plant
+- id: eff_sharper_edges_1
+  name: Sharper Edges I
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 7
+  prerequisites:
+  - stone_tool_making
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +5% speed
+  effect:
+    type: speed
+    magnitude: 0.05
+    target_type: single_node
+    target: stone_tool_making
+  description: Better knapping technique — small speed boost to earliest tools.
+  produces: []
+- id: eff_smelting_yield_1
+  name: Smelting Yield I
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 9
+  prerequisites:
+  - basic_smelting
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +8% yield
+  effect:
+    type: yield
+    magnitude: 0.08
+    target_type: single_node
+    target: basic_smelting
+  description: Less material lost as slag per smelt.
+  produces: []
+- id: eff_alloy_purity_1
+  name: Alloy Purity I
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 16
+  prerequisites:
+  - bronze_alloying
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +6% yield
+  effect:
+    type: yield
+    magnitude: 0.06
+    target_type: category
+    target: alloys
+  description: Tighter ratio control across all alloying recipes.
+  produces: []
+- id: eff_coil_winding
+  name: Coil Winding Efficiency
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 14
+  prerequisites:
+  - wire_drawing
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +10% yield
+  effect:
+    type: yield
+    magnitude: 0.1
+    target_type: single_node
+    target: wire_drawing
+  description: Less scrap wire per draw.
+  produces: []
+- id: eff_motor_torque
+  name: Motor Torque Optimization
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 18
+  prerequisites:
+  - basic_motor_design
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +7% speed
+  effect:
+    type: speed
+    magnitude: 0.07
+    target_type: single_node
+    target: basic_motor_design
+  description: Improved winding geometry — faster-running motors.
+  produces: []
+- id: eff_ergonomic_handles
+  name: Ergonomic Handle Design
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 8
+  prerequisites:
+  - stone_pickaxe
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +5% speed
+  effect:
+    type: speed
+    magnitude: 0.05
+    target_type: category
+    target: mining_tools
+  description: Better grip and balance — applies to every hand-tool-era mining implement.
+  produces: []
+- id: eff_ergonomic_handles_wood
+  name: Ergonomic Handle Design (Forestry)
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 8
+  prerequisites:
+  - stone_axe
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +5% speed
+  effect:
+    type: speed
+    magnitude: 0.05
+    target_type: category
+    target: wood_tools
+  description: Same ergonomic principles applied to axes and saws.
+  produces: []
+- id: eff_standardized_fasteners
+  name: Standardized Fasteners
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 20
+  prerequisites:
+  - fabricator_tier1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: -10% resource cost
+  effect:
+    type: resource_cost_reduction
+    magnitude: 0.1
+    target_type: system_wide
+    target: fabricator_recipes
+  description: Interchangeable screws/bolts reduce material waste across every Fabricator recipe, game-wide.
+  produces: []
+- id: eff_lubrication_theory
+  name: Lubrication Theory
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 17
+  prerequisites:
+  - machining_basics
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +8% yield
+  effect:
+    type: yield
+    magnitude: 0.08
+    target_type: system_wide
+    target: moving_part_processors
+  description: Reduced friction losses across every processor with moving parts — furnaces unaffected.
+  produces: []
+- id: eff_bulk_material_handling
+  name: Bulk Material Handling
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 22
+  prerequisites:
+  - blast_furnace_design
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +1 buffer capacity tier
+  effect:
+    type: buffer_capacity
+    magnitude: 1.0
+    target_type: system_wide
+    target: pipes_and_filters
+  description: +1 buffer capacity tier to every pipe and filter simultaneously.
+  produces: []
+- id: eff_combustion_efficiency
+  name: Combustion Efficiency
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 24
+  prerequisites:
+  - coal_power_plant
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: -15% fuel consumption
+  effect:
+    type: fuel_consumption_reduction
+    magnitude: 0.15
+    target_type: system_wide
+    target: fossil_generators
+  description: Reduced fuel consumption across all fossil-fuel energy generators.
+  produces: []
+- id: eff_battery_chemistry_1
+  name: Battery Chemistry I
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 19
+  prerequisites:
+  - lead_acid_battery
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: -20% leak rate
+  effect:
+    type: leak_rate_reduction
+    magnitude: 0.2
+    target_type: category
+    target: energy_storage
+  description: Reduced self-discharge across all battery chemistries.
+  produces: []
+- id: eff_precision_gearing
+  name: Precision Gearing
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 26
+  prerequisites:
+  - electric_drill
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +6% speed
+  effect:
+    type: speed
+    magnitude: 0.06
+    target_type: category
+    target: mining_tools
+  description: Applies to all machine-era (post-Electric Drill) mining tools specifically.
+  produces: []
+- id: eff_circuit_miniaturization
+  name: Circuit Miniaturization
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 28
+  prerequisites:
+  - basic_circuit_assembly
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: -12% resource cost
+  effect:
+    type: resource_cost_reduction
+    magnitude: 0.12
+    target_type: system_wide
+    target: circuit_components
+  description: Smaller, more efficient circuit layouts reduce material cost across all circuit-based recipes.
+  produces: []
+- id: eff_refining_catalysts
+  name: Refining Catalysts
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 30
+  prerequisites:
+  - chemical_reactor_3
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +10% speed
+  effect:
+    type: speed
+    magnitude: 0.1
+    target_type: category
+    target: ore_precious_group
+  description: Catalytic acceleration applied to all precious/platinum-group refining chains.
+  produces: []
+- id: eff_hydraulic_systems
+  name: Hydraulic Systems
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 36
+  prerequisites:
+  - mining_rig
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +8% speed
+  effect:
+    type: speed
+    magnitude: 0.08
+    target_type: system_wide
+    target: heavy_machinery
+  description: Applies to all vehicle-scale mining and forestry machines (Mining Rig and beyond).
+  produces: []
+- id: eff_blasting_techniques
+  name: Blasting Techniques
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 22
+  prerequisites:
+  - explosives_chemistry
+  - stone_pickaxe
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +12% speed
+  effect:
+    type: speed
+    magnitude: 0.12
+    target_type: system_wide
+    target: mining_tools
+  description: Chemically-assisted rock fracturing — speeds up ALL mining tools, hand- and machine-era
+    alike, regardless of tier.
+  produces: []
+- id: eff_luxury_craftsmanship
+  name: Luxury Craftsmanship
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 20
+  prerequisites:
+  - jewelry_crafting_1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +10% yield
+  effect:
+    type: yield
+    magnitude: 0.1
+    target_type: category
+    target: luxury_goods
+  description: Less precious metal wasted per finished piece across the whole jewelry line.
+  produces: []
+- id: eff_assembly_line
+  name: Assembly Line Techniques
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 24
+  prerequisites:
+  - consumer_electronics_1
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +10% speed
+  effect:
+    type: speed
+    magnitude: 0.1
+    target_type: system_wide
+    target: consumer_goods
+  description: Speeds up every finished-consumer-good recipe game-wide, not just electronics.
+  produces: []
+- id: eff_ballistics_engineering
+  name: Ballistics Engineering
+  branch: efficiency
+  category: efficiency
+  era: null
+  study_hours: 32
+  prerequisites:
+  - ammunition_manufacturing
+  resource_requirements: []
+  tool_requirements: []
+  unlocks: +10% yield
+  effect:
+    type: yield
+    magnitude: 0.1
+    target_type: category
+    target: military
+  description: Improved propellant/casing design — less material wasted across the entire military production
+    line.
+  produces: []
